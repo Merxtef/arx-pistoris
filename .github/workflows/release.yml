@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            asset: arx-pistoris-windows-x64.zip
+          - os: ubuntu-24.04
+            asset: arx-pistoris-linux-x64.tar.gz
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        run: choco install llvm ninja -y
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang g++-13 ninja-build
+
+      - name: Tool versions
+        run: |
+          cmake --version
+          clang++ --version
+          ninja --version
+
+      - name: Check Linux std::format support
+        if: runner.os == 'Linux'
+        run: |
+          cat > /tmp/check_format.cpp <<'EOF'
+          #include <format>
+          #include <string>
+
+          int main() {
+            std::string s = std::format("{}", 1);
+            return s == "1" ? 0 : 1;
+          }
+          EOF
+          clang++ --gcc-toolchain=/usr -std=c++20 /tmp/check_format.cpp -o /tmp/check_format
+          /tmp/check_format
+
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        run: cmake --preset release
+
+      - name: Configure Linux
+        if: runner.os == 'Linux'
+        run: >
+          cmake --preset release
+          -DCMAKE_CXX_COMPILER=clang++
+          -DCMAKE_CXX_FLAGS=--gcc-toolchain=/usr
+          -DCMAKE_EXE_LINKER_FLAGS=--gcc-toolchain=/usr
+          -DCMAKE_SHARED_LINKER_FLAGS=--gcc-toolchain=/usr
+
+      - name: Build CLI
+        run: cmake --build --preset release --target arx_pistoris_cli
+
+      - name: Install CLI
+        run: cmake --install build-release --prefix package/arx-pistoris
+
+      - name: Smoke test package
+        run: |
+          $exe = "package/arx-pistoris/bin/arx-pistor.exe"
+          if (!(Test-Path $exe)) { throw "missing $exe" }
+          & $exe
+          if ($LASTEXITCODE -ne 1) { throw "unexpected exit code: $LASTEXITCODE" }
+          exit 0
+        if: runner.os == 'Windows'
+
+      - name: Smoke test package
+        run: |
+          test -x package/arx-pistoris/bin/arx-pistor
+          set +e
+          package/arx-pistoris/bin/arx-pistor
+          rc="$?"
+          set -e
+          test "$rc" -eq 1
+        if: runner.os == 'Linux'
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path package/arx-pistoris -DestinationPath ${{ matrix.asset }} -Force
+
+      - name: Package Linux archive
+        if: runner.os == 'Linux'
+        run: tar -czf ${{ matrix.asset }} -C package arx-pistoris
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*

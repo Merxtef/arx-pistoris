@@ -1,0 +1,63 @@
+# OBJ/MTL keywords
+"v "
+"vn "
+"vt "
+"f "
+"usemtl "
+"mtllib "
+
+# comment subkeywords
+"# "
+"# origin "
+"# arx_path "
+
+# MTL keywords
+"newmtl "
+"map_Kd "
+"d "
+
+# face index separator
+"/"
+"//"
+
+# special material name for untextured faces
+"no_tex"
+
+# flag separator and flag names used in material names
+"__"
+"__NO_SHADOW"
+"__DOUBLESIDED"
+"__TRANS"
+"__WATER"
+"__GLOW"
+"__IGNORE"
+"__QUAD"
+"__TILED"
+"__METAL"
+"__HIDE"
+"__STONE"
+"__WOOD"
+"__GRAVEL"
+"__EARTH"
+"__NOCOL"
+"__LAVA"
+"__CLIMB"
+"__FALL"
+"__NOPATH"
+"__NODRAW"
+"__PRECISE_PATH"
+"__NO_CLIMB"
+"__ANGULAR"
+"__ANGULAR_IDX0"
+"__ANGULAR_IDX1"
+"__ANGULAR_IDX2"
+"__ANGULAR_IDX3"
+"__LATE_MIP"
+
+# numeric tokens: negative OBJ indices, common floats
+"-1"
+"-1/-1/-1"
+"0.0"
+"1.0"
+"-1.0"
+"\x0a"

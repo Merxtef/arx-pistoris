@@ -1,0 +1,90 @@
+---
+# Applies to C++ internals. The public C API headers in include/arx_pistoris/
+# have a nested .clang-tidy that disables readability-identifier-naming,
+# and the C API function definitions in src/arx_pistoris.cpp are wrapped in
+# NOLINTBEGIN/NOLINTEND(readability-identifier-naming).
+
+Checks: >
+  -*,
+  readability-identifier-naming,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-implicit-widening-of-multiplication-result,
+  performance-*,
+  portability-*,
+  -portability-avoid-pragma-once,
+  misc-*,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -misc-non-private-member-variables-in-classes,
+  -misc-use-anonymous-namespace,
+  -misc-const-correctness,
+  -misc-use-internal-linkage
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*[/\\](src|include|tests|cli|fuzz)[/\\].*\.(h|hpp)$'
+FormatStyle: file
+
+CheckOptions:
+  # --- Types ---
+  - { key: readability-identifier-naming.NamespaceCase,             value: lower_case }
+  - { key: readability-identifier-naming.ClassCase,                 value: CamelCase }
+  - { key: readability-identifier-naming.StructCase,                value: CamelCase }
+  - { key: readability-identifier-naming.UnionCase,                 value: CamelCase }
+  - { key: readability-identifier-naming.EnumCase,                  value: CamelCase }
+  - { key: readability-identifier-naming.TypeAliasCase,             value: CamelCase }
+  - { key: readability-identifier-naming.TypedefCase,               value: CamelCase }
+  - { key: readability-identifier-naming.TemplateParameterCase,     value: CamelCase }
+
+  # --- Functions / methods (the whole reason we are doing this) ---
+  - { key: readability-identifier-naming.FunctionCase,              value: camelBack }
+  - { key: readability-identifier-naming.MethodCase,                value: camelBack }
+  - { key: readability-identifier-naming.ClassMethodCase,           value: camelBack }
+  - { key: readability-identifier-naming.VirtualMethodCase,         value: camelBack }
+  - { key: readability-identifier-naming.PrivateMethodCase,         value: camelBack }
+  - { key: readability-identifier-naming.ProtectedMethodCase,       value: camelBack }
+  - { key: readability-identifier-naming.PublicMethodCase,          value: camelBack }
+
+  # --- Enum values ---
+  # Scoped enum constants use kCamelCase, e.g. kOk, kUnexpectedEof (already in code).
+  - { key: readability-identifier-naming.ScopedEnumConstantCase,    value: CamelCase }
+  - { key: readability-identifier-naming.ScopedEnumConstantPrefix,  value: k }
+  # Unscoped enum constants: same rule for internal C++. The C API enum
+  # (ARX_OK etc.) is exempt via the nested .clang-tidy and NOLINT guards.
+  - { key: readability-identifier-naming.EnumConstantCase,          value: CamelCase }
+  - { key: readability-identifier-naming.EnumConstantPrefix,        value: k }
+
+  # --- Variables ---
+  - { key: readability-identifier-naming.VariableCase,              value: lower_case }
+  - { key: readability-identifier-naming.LocalVariableCase,         value: lower_case }
+  - { key: readability-identifier-naming.ParameterCase,             value: lower_case }
+  - { key: readability-identifier-naming.StaticVariableCase,        value: lower_case }
+  - { key: readability-identifier-naming.GlobalVariableCase,        value: lower_case }
+
+  # --- Members ---
+  # Private members: lower_case with trailing underscore (matches buf_, off_, ok_, err_).
+  - { key: readability-identifier-naming.PublicMemberCase,          value: lower_case }
+  - { key: readability-identifier-naming.ProtectedMemberCase,       value: lower_case }
+  - { key: readability-identifier-naming.PrivateMemberCase,         value: lower_case }
+  - { key: readability-identifier-naming.PrivateMemberSuffix,       value: _ }
+
+  # --- Constants (Google style: kCamelCase) ---
+  - { key: readability-identifier-naming.ConstexprVariableCase,     value: CamelCase }
+  - { key: readability-identifier-naming.ConstexprVariablePrefix,   value: k }
+  - { key: readability-identifier-naming.GlobalConstantCase,        value: CamelCase }
+  - { key: readability-identifier-naming.GlobalConstantPrefix,      value: k }
+  - { key: readability-identifier-naming.StaticConstantCase,        value: CamelCase }
+  - { key: readability-identifier-naming.StaticConstantPrefix,      value: k }
+  - { key: readability-identifier-naming.ClassConstantCase,         value: CamelCase }
+  - { key: readability-identifier-naming.ClassConstantPrefix,       value: k }
+
+  # --- Macros ---
+  - { key: readability-identifier-naming.MacroDefinitionCase,       value: UPPER_CASE }
+
+  # --- Other checks, tuned for this codebase ---
+  # Public data members are intentional on plain-data structs (ftl::Vertex, tea::Sample, etc).
+  - { key: misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic, value: true }
+  # Integer-to-float narrowing is noise here (all values are format-bounded well under 2^24).
+  # Keep integer-to-integer and float-to-float narrowing enabled — those catch real truncation/precision bugs.
+  - { key: bugprone-narrowing-conversions.WarnOnIntegerToFloatingPointNarrowingConversion, value: false }
+...

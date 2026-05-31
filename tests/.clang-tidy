@@ -1,0 +1,7 @@
+---
+# Tests use doctest's REQUIRE + deref pattern that clang-tidy can't trace through,
+# producing false positives. Production optional access remains checked via the
+# root .clang-tidy.
+InheritParentConfig: true
+Checks: '-bugprone-unchecked-optional-access'
+...

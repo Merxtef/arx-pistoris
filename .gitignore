@@ -1,0 +1,45 @@
+# Build directories
+/build*/
+
+# Compiler/linker artifacts
+*.obj
+*.o
+*.pdb
+*.ilk
+*.exp
+*.dll
+*.lib
+*.exe
+*.pyd
+
+# Test related rules
+/data/arx/*
+!data/**/*.obj
+
+# Fuzz corpus
+/fuzz-corpus/**
+!/fuzz-corpus/**/
+!/fuzz-corpus/**/.gitkeep
+
+# Coverage artifacts
+*.profraw
+*.profdata
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# clangd
+/.cache/
+
+# VS Code
+/.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

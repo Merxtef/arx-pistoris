@@ -1,0 +1,9 @@
+# TEA magic
+"Theo Animation File"
+
+# Version
+"\xde\x07\x00\x00"
+"\xdf\x07\x00\x00"
+
+# Sample sentinel
+"\xff\xff\xff\xff"

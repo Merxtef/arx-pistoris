@@ -1,0 +1,146 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Dev (Debug, Ninja, Clang)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release (Ninja, Clang)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+      }
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Sanitize (RelWithDebInfo + ASan)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-sanitize",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+      }
+    },
+    {
+      "name": "fuzz",
+      "displayName": "Fuzz (RelWithDebInfo + libFuzzer + ASan)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-fuzz",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "ARX_FUZZING": "ON",
+        "ARX_BUILD_INFO_LIVE": "OFF"
+      }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Coverage (Debug + llvm-cov)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-coverage",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "ARX_COVERAGE": "ON",
+        "ARX_BUILD_INFO_LIVE": "OFF"
+      }
+    },
+    {
+      "name": "tidy",
+      "displayName": "Clang-Tidy",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-tidy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--warnings-as-errors=*",
+        "ARX_BUILD_INFO_LIVE": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize"
+    },
+    {
+      "name": "fuzz",
+      "configurePreset": "fuzz"
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage"
+    },
+    {
+      "name": "tidy",
+      "configurePreset": "tidy"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "dev",
+      "configurePreset": "dev",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "sanitize",
+      "configurePreset": "sanitize",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "LLVM_PROFILE_FILE": "${sourceDir}/build-coverage/profraw/cov_%m_%p.profraw"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "dev",
+      "displayName": "Configure, build, test (dev)",
+      "steps": [
+        { "type": "configure", "name": "dev" },
+        { "type": "build",     "name": "dev" },
+        { "type": "test",      "name": "dev" }
+      ]
+    },
+    {
+      "name": "sanitize",
+      "displayName": "Configure, build, test (sanitizers)",
+      "steps": [
+        { "type": "configure", "name": "sanitize" },
+        { "type": "build",     "name": "sanitize" },
+        { "type": "test",      "name": "sanitize" }
+      ]
+    }
+  ]
+}

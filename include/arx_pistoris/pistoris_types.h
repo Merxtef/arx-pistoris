@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Merxtef
+
+#ifndef ARX_PISTORIS_TYPES_H
+#define ARX_PISTORIS_TYPES_H
+
+// NOLINTBEGIN(readability-identifier-naming, performance-enum-size)
+
+#include <stdint.h>
+
+// 0-79 general
+// 80-99 internal
+// internal formats (FTL=100+, TEA=200+, ...)
+// external formats (OBJ=1000+, GLB=1100+, JSON=1200+, ...)
+typedef enum {
+  ARX_OK = 0,
+  ARX_INVALID_IDENTIFIER,
+  ARX_INVALID_DATA_POINTER,
+  ARX_INVALID_HANDLE,
+  ARX_INVALID_XFORM,  // det(M) <= 0
+
+  ARX_BAD_ALLOC = 80,
+  ARX_UNEXPECTED_EOF,
+  ARX_UNKNOWN_ERROR,
+
+  // FTL
+  ARX_FTL_BAD_VERSION = 100,
+  ARX_FTL_BAD_OFFSET,
+  ARX_FTL_BAD_VERT_N,
+  ARX_FTL_BAD_ORIGIN,
+  ARX_FTL_BAD_FACE_N,
+  ARX_FTL_BAD_FACE_TYPE,
+  ARX_FTL_BAD_FACE_VERT_IDX,
+  ARX_FTL_BAD_FACE_TEX,
+  ARX_FTL_BAD_TEX_N,
+  ARX_FTL_BAD_GROUP_N,
+  ARX_FTL_BAD_GROUP_IDX_N,
+  ARX_FTL_BAD_GROUP_IDX,
+  ARX_FTL_BAD_GROUP_ORIGIN,
+  ARX_FTL_BAD_ACTION_N,
+  ARX_FTL_BAD_ACTION_VERT_IDX,
+  ARX_FTL_BAD_SEL_N,
+  ARX_FTL_BAD_SEL_IDX_N,
+  ARX_FTL_BAD_SEL_IDX,
+  ARX_FTL_ORPHAN_BONE,
+  ARX_FTL_MULTIPLE_ROOTS,
+
+  // TEA
+  ARX_TEA_BAD_VERSION = 200,
+  ARX_TEA_BAD_FRAMES_N,
+  ARX_TEA_BAD_GROUPS_N,
+  ARX_TEA_BAD_KEYFRAMES_N,
+  ARX_TEA_BAD_FLAG_FRAME,
+  ARX_TEA_BAD_SAMPLE_SIZE,
+  ARX_TEA_NON_MONOTONIC_FRAMES,
+
+  // OBJ
+  ARX_OBJ_BAD_FORMAT = 1000,
+  ARX_OBJ_BAD_VERTEX_IDX,
+  ARX_OBJ_TOO_MANY_VERTICES,
+  ARX_OBJ_TOO_MANY_NORMALS,
+  ARX_OBJ_TOO_MANY_TEXCOORDS,
+  ARX_OBJ_TOO_MANY_TEXTURES,
+  ARX_OBJ_TOO_MANY_MATERIALS,
+  ARX_OBJ_TOO_MANY_FACES,
+  ARX_OBJ_NO_GEOMETRY,
+
+  // GLB
+  ARX_GLB_TEA_GROUP_MISMATCH = 1100,
+  ARX_GLB_TOO_MANY_VERTICES,
+  ARX_GLB_NO_GROUPS_FOR_TEA,
+  ARX_GLB_BAD_FORMAT,
+  ARX_GLB_UNSUPPORTED_FEATURE,  // sparse accessors, external buffers
+  ARX_GLB_NON_UNIFORM_SCALE,    // or shear
+  ARX_GLB_MULTIPLE_SKINS,       // disconnected armatures
+
+  // JSON
+  ARX_JSON_BAD_FORMAT = 1200,
+  ARX_JSON_BAD_SCHEMA,
+  ARX_JSON_LIMIT_EXCEEDED,
+
+  ARX_RETURN_CODE_MAX = 0x7FFFFFFF
+} ArxReturnCode;
+
+typedef enum {
+  ARX_LOG_DEBUG = 0,
+  ARX_LOG_INFO  = 1,
+  ARX_LOG_WARN  = 2,
+  ARX_LOG_ERROR = 3,
+} ArxLogLevel;
+
+// fn = NULL disables logging (default)
+typedef void (*ArxLogFn)(ArxLogLevel level, const char* msg, void* userdata);
+
+// NOLINTEND(readability-identifier-naming, performance-enum-size)
+
+#endif /*ARX_PISTORIS_TYPES_H*/

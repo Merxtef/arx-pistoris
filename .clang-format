@@ -1,0 +1,22 @@
+---
+Language: Cpp
+Standard: c++20
+BasedOnStyle: Google
+
+ColumnLimit: 120
+
+AlignConsecutiveMacros: Consecutive
+AlignConsecutiveAssignments: Consecutive
+
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"doctest/'
+    Priority: 1
+  - Regex: '^"arx_pistoris/'
+    Priority: 2
+  - Regex: '^"'
+    Priority: 3
+  - Regex: '^<'
+    Priority: 4
+...
