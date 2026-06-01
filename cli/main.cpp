@@ -57,7 +57,11 @@ static bool consumeFloats(int n, int argc, char* argv[], int& i, float* out, con
 static bool parseArgs(int argc, char* argv[], CliArgs& args) {
   for (int i = 1; i < argc; ++i) {
     if (argv[i][0] == '-' && argv[i][1] != '\0') {
-      if (std::strcmp(argv[i], "--pretty") == 0) {
+      if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
+        args.help = true;
+      } else if (std::strcmp(argv[i], "-v") == 0 || std::strcmp(argv[i], "--version") == 0) {
+        args.version = true;
+      } else if (std::strcmp(argv[i], "--pretty") == 0) {
         args.pretty = true;
       } else if (std::strcmp(argv[i], "--overwrite") == 0) {
         args.overwrite = cli::OverwriteMode::kAlwaysYes;
@@ -147,7 +151,7 @@ static bool parseArgs(int argc, char* argv[], CliArgs& args) {
     }
   }
 
-  return !args.positionals.empty();
+  return args.help || args.version || !args.positionals.empty();
 }
 
 // --- Logger ---
@@ -184,6 +188,8 @@ static void printUsage(const char* argv0) {
   std::fprintf(stderr, "  %s anim.json out.tea                import TEA JSON\n", argv0);
   std::fprintf(stderr, "\nOptions:\n");
   std::fprintf(stderr, "  Options are global and may appear before, between, or after file paths.\n");
+  std::fprintf(stderr, "  -h, --help                          print this help\n");
+  std::fprintf(stderr, "  -v, --version                       print version\n");
   std::fprintf(stderr, "  --pretty                            pretty-print JSON output\n");
   std::fprintf(stderr, "  --overwrite                         overwrite existing outputs without asking\n");
   std::fprintf(stderr, "  --no-overwrite                      skip existing outputs without asking\n");
@@ -239,6 +245,16 @@ int main(int argc, char* argv[]) {
     if (!parseArgs(argc, argv, args)) {
       printUsage(argv[0]);
       return 1;
+    }
+
+    if (args.help) {
+      printUsage(argv[0]);
+      return 0;
+    }
+
+    if (args.version) {
+      std::printf("arx-pistor %s\n", pistoris::version());
+      return 0;
     }
 
     return dispatch(args);

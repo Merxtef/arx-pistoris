@@ -18,6 +18,8 @@ enum class BoneOriginReferenceMode {
 
 struct CliArgs {
   std::vector<const char*> positionals;
+  bool help    = false;
+  bool version = false;
   bool pretty = false;
 
   // Transform

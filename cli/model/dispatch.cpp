@@ -103,6 +103,8 @@ int dispatch(const CliArgs& args, cli::State& state, const std::vector<std::uint
 
   if (!loadExtras(inv, ctx)) return 1;
 
+  if (!validateTeaCompatibility(ctx)) return 1;
+
   if (args.reference_ftl) {
     if (!loadReferenceFtl(args.reference_ftl, ctx)) return 1;
   }

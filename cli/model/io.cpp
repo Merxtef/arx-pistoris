@@ -5,6 +5,7 @@
 
 #include "../io.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <span>
@@ -127,10 +128,31 @@ bool loadExtras(const Invocation& inv, Context& ctx) {
   return true;
 }
 
-static bool writeTea(cli::State& state, const Context& ctx, const char* output) {
+bool validateTeaCompatibility(const Context& ctx) {
+  std::size_t group_count = ctx.ftl.groups.size();
+  for (std::size_t i = 0; i < ctx.teas.size(); ++i) {
+    const pistoris::Tea& tea = ctx.teas[i];
+    if (tea.num_groups == static_cast<int32_t>(group_count)) continue;
+
+    const char* name = tea.name[0] != '\0' ? tea.name : "<unnamed>";
+    std::fprintf(stderr, "TEA group count mismatch (%s, index %zu): animation=%d FTL=%zu\n", name, i,
+                 tea.num_groups, group_count);
+    return false;
+  }
+  return true;
+}
+
+enum class TeaOutputFormat {
+  kNative,
+  kJson,
+};
+
+static bool writeTeas(cli::State& state, const Context& ctx, const CliArgs& args, const char* output,
+                      TeaOutputFormat format) {
   std::string_view out_sv(output);
   auto sep        = out_sv.find_last_of("/\\");
   std::string dir = (sep == std::string_view::npos) ? "" : std::string(out_sv.substr(0, sep + 1));
+  const char* ext = format == TeaOutputFormat::kNative ? ".tea" : ".json";
 
   bool ok = true;
   for (std::size_t i = 0; i < ctx.teas.size(); ++i) {
@@ -142,19 +164,34 @@ static bool writeTea(cli::State& state, const Context& ctx, const char* output) 
         std::fprintf(stderr, "Note: anim name '%s' sanitized to '%s' for filesystem\n", name, stem.c_str());
     }
     if (stem.empty()) stem = "animation_" + std::to_string(i);
-    std::string tea_path = dir + stem + ".tea";
+    std::string tea_path = dir + stem + ext;
 
-    std::vector<std::uint8_t> tea_data;
-    ArxReturnCode rc = pistoris::writeTea(ctx.teas[i], tea_data);
-    if (rc != ARX_OK) {
-      std::fprintf(stderr, "TEA write failed (%s): %s (code %d)\n", tea_path.c_str(), pistoris::errorString(rc),
-                   static_cast<int>(rc));
-      ok = false;
-      continue;
-    }
-    if (!writeFile(state, tea_path.c_str(), tea_data.data(), tea_data.size())) {
-      ok = false;
-      continue;
+    if (format == TeaOutputFormat::kNative) {
+      std::vector<std::uint8_t> tea_data;
+      ArxReturnCode rc = pistoris::writeTea(ctx.teas[i], tea_data);
+      if (rc != ARX_OK) {
+        std::fprintf(stderr, "TEA write failed (%s): %s (code %d)\n", tea_path.c_str(), pistoris::errorString(rc),
+                     static_cast<int>(rc));
+        ok = false;
+        continue;
+      }
+      if (!writeFile(state, tea_path.c_str(), tea_data.data(), tea_data.size())) {
+        ok = false;
+        continue;
+      }
+    } else {
+      std::string tea_json;
+      ArxReturnCode rc = pistoris::exportJson(ctx.teas[i], tea_json, args.pretty);
+      if (rc != ARX_OK) {
+        std::fprintf(stderr, "TEA JSON output failed (%s): %s (code %d)\n", tea_path.c_str(), pistoris::errorString(rc),
+                     static_cast<int>(rc));
+        ok = false;
+        continue;
+      }
+      if (!writeFile(state, tea_path.c_str(), tea_json.data(), tea_json.size())) {
+        ok = false;
+        continue;
+      }
     }
   }
   return ok;
@@ -174,7 +211,7 @@ bool saveOutput(const Context& ctx, const CliArgs& args, cli::State& state, cons
       if (rc != ARX_OK) return outputFailure("FTL output", rc);
       if (!writeFile(state, inv.output, out.data(), out.size())) return false;
 
-      if (!ctx.teas.empty() && !writeTea(state, ctx, inv.output)) return false;
+      if (!ctx.teas.empty() && !writeTeas(state, ctx, args, inv.output, TeaOutputFormat::kNative)) return false;
       return true;
     }
 
@@ -200,12 +237,11 @@ bool saveOutput(const Context& ctx, const CliArgs& args, cli::State& state, cons
     }
 
     case cli::Format::kJson: {
-      warnTeasIgnored(ctx, "JSON");
-
       std::string out;
       ArxReturnCode rc = pistoris::exportJson(ctx.ftl, out, args.pretty);
       if (rc != ARX_OK) return outputFailure("JSON output", rc);
       if (!writeFile(state, inv.output, out.data(), out.size())) return false;
+      if (!ctx.teas.empty() && !writeTeas(state, ctx, args, inv.output, TeaOutputFormat::kJson)) return false;
       return true;
     }
 

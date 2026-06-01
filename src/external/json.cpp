@@ -42,7 +42,8 @@ ArxReturnCode exportFtlToJson(const ftl::Data& d, bool pretty, std::string& out)
   ARX_RETURN_IF_ERR(validateFtl(&d));
 
   Json j;
-  j["header"] = {{"origin", d.header.origin}, {"name", std::string(d.header.name)}};
+  j["$schema"] = "https://arx-tools.github.io/schemas/ftl.schema.json";
+  j["header"]  = {{"origin", d.header.origin}, {"name", std::string(d.header.name)}};
 
   j["vertices"] = Json::array();
   for (const auto& v : d.vertices)

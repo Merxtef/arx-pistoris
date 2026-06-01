@@ -43,8 +43,11 @@ The tool is context-aware and switches modes based on the primary input:
 ### Bundle Logic
 The tool effectively handles file bundles. For example:
 *   **Export**: `arx-pistor model.ftl anim1.tea anim2.tea out.glb` — Creates one GLB with a mesh, skeleton, and two animation tracks.
+*   **JSON export**: `arx-pistor model.ftl anim1.tea out.json` — Writes the model JSON plus sibling animation JSON files.
 *   **Import**: `arx-pistor in.glb out.ftl` — Generates `out.ftl` for the mesh and sibling `*.tea` files for each track.
     *   Sibling files are named using the animation name (sanitized with `_` for filesystem safety), e.g., `out_Run_Cycle.tea`.
+
+Animations bundled with a model must have `num_groups` equal to the FTL group count.
 
 ## Advanced Usage
 

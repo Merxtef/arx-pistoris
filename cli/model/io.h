@@ -19,6 +19,7 @@ bool loadTeaFile(const char* path, pistoris::Tea& out);
 bool loadReferenceFtl(const char* path, Context& ctx);
 bool loadInput(const std::vector<std::uint8_t>& buf, const Invocation& inv, cli::Route route, Context& ctx);
 bool loadExtras(const Invocation& inv, Context& ctx);
+bool validateTeaCompatibility(const Context& ctx);
 bool saveOutput(const Context& ctx, const CliArgs& args, cli::State& state, const Invocation& inv, cli::Route route);
 
 }  // namespace cli::model
