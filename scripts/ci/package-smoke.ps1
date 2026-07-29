@@ -50,3 +50,5 @@ foreach ($Name in @(
 }
 
 [scriptblock]::Create((Get-Content -LiteralPath scripts/install.ps1 -Raw)) | Out-Null
+
+exit 0
