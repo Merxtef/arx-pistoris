@@ -1,0 +1,5 @@
+stb_image: 2.30
+stb_image_write: 1.16
+stb_image_resize2: 2.18
+commit: 904aa67e1e2d1dec92959df63e700b166d5c1022
+source: https://github.com/nothings/stb/tree/904aa67e1e2d1dec92959df63e700b166d5c1022

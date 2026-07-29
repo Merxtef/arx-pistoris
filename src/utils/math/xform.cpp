@@ -3,15 +3,15 @@
 
 #include "utils/math/xform.h"
 
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/ftl.h"
 #include "arx/tea.h"
 #include "utils/math/mat3.h"
 #include "utils/math/quat.h"
-#include "utils/math/vec3.h"
 
 #include <cstddef>
 #include <numbers>
@@ -22,9 +22,9 @@ static constexpr float kPi = std::numbers::pi_v<float>;
 
 AffineXform makeAffineXform(float rx_deg, float ry_deg, float rz_deg, float sx, float sy, float sz, float tx, float ty,
                             float tz) {
-  float ax  = rx_deg * kPi / 180.0f;
-  float ay  = ry_deg * kPi / 180.0f;
-  float az  = rz_deg * kPi / 180.0f;
+  float ax = rx_deg * kPi / 180.0f;
+  float ay = ry_deg * kPi / 180.0f;
+  float az = rz_deg * kPi / 180.0f;
   ArxMat3 r = math::fromEulerXYZ(ax, ay, az);
   return AffineXform{math::scaleColumns(r, {sx, sy, sz}), {tx, ty, tz}};
 }
@@ -58,13 +58,15 @@ ArxReturnCode applyXformTea(tea::Data& d, const AffineXform& x) {
   if (math::determinant(x.linear) <= 0.0f) return ARX_INVALID_XFORM;
 
   ArxQuat r_quat = math::extractRotation(x.linear);
-  ArxQuat r_inv  = math::conjugate(r_quat);
+  ArxQuat r_inv = math::conjugate(r_quat);
 
   for (auto& kf : d.keyframes) {
-    if (kf.translate) *kf.translate = x.linear * *kf.translate + x.translation;
-    if (kf.quat) *kf.quat = math::normalize(r_quat * *kf.quat * r_inv);
+    auto& translate = kf.translate;
+    if (translate) *translate = x.linear * *translate + x.translation;
+    auto& quat = kf.quat;
+    if (quat) *quat = math::normalize(r_quat * *quat * r_inv);
     for (auto& ga : kf.groups) {
-      ga.quat      = math::normalize(r_quat * ga.quat * r_inv);
+      ga.quat = math::normalize(r_quat * ga.quat * r_inv);
       ga.translate = x.linear * ga.translate;
     }
   }

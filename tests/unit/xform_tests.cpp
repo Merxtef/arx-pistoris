@@ -3,14 +3,13 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "helpers.h"
 #include "utils/math/xform.h"
 
-#include <cstdlib>
 #include <vector>
 
 using pistoris::makeAffineXform;
@@ -21,7 +20,7 @@ static pistoris::ftl::Data makeFtlForXform() {
 
   pistoris::ftl::Vertex origin_v;
   origin_v.position = {0.0f, 0.0f, 0.0f};
-  origin_v.normal   = {0.0f, 0.0f, 1.0f};
+  origin_v.normal = {0.0f, 0.0f, 1.0f};
   d.vertices.push_back(origin_v);
   d.header.origin = 3;
   return d;
@@ -71,7 +70,7 @@ TEST_SUITE("xform") {
   }
 
   TEST_CASE("XformHeaderOriginGetsLinearNotOffset") {
-    auto d                 = makeData(3);
+    auto d = makeData(3);
     d.vertices[0].position = {2.0f, 0.0f, 0.0f};
     d.faces.push_back(makeFace(0, 1, 2));
     d.header.origin = 0;
@@ -90,8 +89,8 @@ TEST_SUITE("xform") {
   }
 
   TEST_CASE("XformNonUniformScaleAdjustsNormal") {
-    auto x               = makeAffineXform(0, 0, 0, 2, 1, 1, 0, 0, 0);
-    auto d               = makeFtlForXform();
+    auto x = makeAffineXform(0, 0, 0, 2, 1, 1, 0, 0, 0);
+    auto d = makeFtlForXform();
     d.vertices[1].normal = {1.0f, 0.0f, 0.0f};
     REQUIRE(pistoris::applyXformFtl(d, x) == ARX_OK);
     CHECK(d.vertices[1].normal.x == doctest::Approx(1.0f));
@@ -105,9 +104,9 @@ TEST_SUITE("xform") {
     pistoris::tea::Keyframe kf;
     kf.num_frame = 5;
     pistoris::tea::GroupAnim ga;
-    ga.quat      = {1.0f, 0.0f, 0.0f, 0.0f};
+    ga.quat = {1.0f, 0.0f, 0.0f, 0.0f};
     ga.translate = {1.0f, 0.0f, 0.0f};
-    ga.zoom      = {0.0f, 0.0f, 0.0f};
+    ga.zoom = {0.0f, 0.0f, 0.0f};
     kf.groups.push_back(ga);
     t.keyframes.push_back(kf);
 
@@ -138,7 +137,7 @@ TEST_SUITE("xform") {
     t.num_groups = 1;
     pistoris::tea::Keyframe kf;
     kf.num_frame = 5;
-    kf.quat      = pistoris::ArxQuat{1.0f, 0.0f, 0.0f, 0.0f};  // identity (w first)
+    kf.quat = pistoris::ArxQuat{1.0f, 0.0f, 0.0f, 0.0f};  // identity (w first)
     pistoris::tea::GroupAnim ga;
     ga.quat = {1.0f, 0.0f, 0.0f, 0.0f};
     kf.groups.push_back(ga);

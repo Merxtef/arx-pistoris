@@ -12,8 +12,15 @@ namespace pistoris {
 extern ArxLogFn log_fn;
 extern void* log_ud;
 
-inline void log(ArxLogLevel level, const std::string& msg) {
-  if (log_fn) log_fn(level, msg.c_str(), log_ud);
+inline void log(ArxLogLevel level, const char* msg) noexcept {
+  try {
+    if (log_fn) log_fn(level, msg, log_ud);
+  } catch (...) {
+    // User callbacks cannot propagate through the public ABI
+    return;
+  }
 }
+
+inline void log(ArxLogLevel level, const std::string& msg) noexcept { log(level, msg.c_str()); }
 
 }  // namespace pistoris

@@ -4,7 +4,7 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/arx_pistoris.h"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -36,19 +36,24 @@ TEST_SUITE("obj") {
 
       std::string obj_text = readText(obj_path);
       std::string mtl_text = fs::exists(mtl_path) ? readText(mtl_path) : "";
-      std::string stem     = e.path().stem().string();
+      std::string stem = e.path().stem().string();
 
-      auto import_and_export = [&](const std::string& obj_in, const std::string& mtl_in, std::string& obj_out,
+      auto import_and_export = [&](const std::string& obj_in,
+                                   const std::string& mtl_in,
+                                   std::string& obj_out,
                                    std::string& mtl_out) -> bool {
         ArxFtlHandle h = nullptr;
-        if (arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj_in.data()), obj_in.size(),
+        if (arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj_in.data()),
+                                   obj_in.size(),
                                    mtl_in.empty() ? nullptr : reinterpret_cast<const uint8_t*>(mtl_in.data()),
-                                   mtl_in.size(), stem.c_str(), &h) != ARX_OK)
+                                   mtl_in.size(),
+                                   stem.c_str(),
+                                   &h) != ARX_OK)
           return false;
         char* obj_raw = nullptr;
         char* mtl_raw = nullptr;
-        bool ok       = arx_pistoris_ftl_to_obj(h, stem.c_str(), &obj_raw) == ARX_OK;
-        ok            = ok && arx_pistoris_ftl_to_mtl(h, &mtl_raw) == ARX_OK;
+        bool ok = arx_pistoris_ftl_to_obj(h, stem.c_str(), &obj_raw) == ARX_OK;
+        ok = ok && arx_pistoris_ftl_to_mtl(h, &mtl_raw) == ARX_OK;
         arx_pistoris_ftl_free(h);
         if (obj_raw) {
           obj_out = obj_raw;

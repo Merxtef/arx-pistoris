@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_pistoris.h"
+#include "native_fuzz_common.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -9,28 +9,26 @@
 #include <cstring>
 
 // NOLINTNEXTLINE(readability-identifier-naming) -- libFuzzer entry point
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, std::size_t size) {
-  ArxTeaHandle h1 = nullptr;
-  if (arx_pistoris_tea_parse(data, size, &h1) != ARX_OK) return 0;
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
+  arx_fuzz::silenceLogs();
+  ArxTeaHandle raw_source = nullptr;
+  if (arx_pistoris_tea_parse(data, size, &raw_source) != ARX_OK) return 0;
+  arx_fuzz::TeaHandle source(raw_source);
+  if (!source.get()) std::abort();
 
-  uint8_t* buf1    = nullptr;
-  std::size_t len1 = 0;
-  if (arx_pistoris_tea_write(h1, &buf1, &len1) != ARX_OK) {
-    arx_pistoris_tea_free(h1);
-    return 0;
-  }
+  arx_fuzz::ByteBuffer bytes1;
+  if (arx_pistoris_tea_write(source.get(), &bytes1.value, &bytes1.byte_count) != ARX_OK) return 0;
 
-  ArxTeaHandle h2 = nullptr;
-  if (arx_pistoris_tea_parse(buf1, len1, &h2) != ARX_OK) abort();
+  ArxTeaHandle raw_roundtrip = nullptr;
+  const ArxReturnCode reparse_rc = arx_pistoris_tea_parse(bytes1.get(), bytes1.size(), &raw_roundtrip);
+  if (reparse_rc != ARX_OK) std::abort();
+  arx_fuzz::TeaHandle roundtrip(raw_roundtrip);
+  if (!roundtrip.get()) std::abort();
 
-  uint8_t* buf2    = nullptr;
-  std::size_t len2 = 0;
-  if (arx_pistoris_tea_write(h2, &buf2, &len2) != ARX_OK) abort();
-  if (len1 != len2 || std::memcmp(buf1, buf2, len1) != 0) abort();
+  arx_fuzz::ByteBuffer bytes2;
+  if (arx_pistoris_tea_write(roundtrip.get(), &bytes2.value, &bytes2.byte_count) != ARX_OK) std::abort();
+  if (bytes1.size() != bytes2.size()) std::abort();
+  if (bytes1.size() != 0 && std::memcmp(bytes1.get(), bytes2.get(), bytes1.size()) != 0) std::abort();
 
-  arx_pistoris_free_bytes(buf2);
-  arx_pistoris_free_bytes(buf1);
-  arx_pistoris_tea_free(h2);
-  arx_pistoris_tea_free(h1);
   return 0;
 }

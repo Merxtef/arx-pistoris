@@ -11,6 +11,17 @@
 
 using namespace pistoris;
 
+namespace {
+
+void checkSameRotation(const ArxQuat& lhs, const ArxQuat& rhs) {
+  ArxQuat a = math::normalize(lhs);
+  ArxQuat b = math::normalize(rhs);
+  float dot = a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z;
+  CHECK(std::abs(dot) == doctest::Approx(1.0f).epsilon(1.0e-5));
+}
+
+}  // namespace
+
 TEST_SUITE("math::quat") {
   TEST_CASE("Identity") {
     ArxQuat id = math::kIdentityQuat;
@@ -80,5 +91,25 @@ TEST_SUITE("math::quat") {
   TEST_CASE("Equality") {
     CHECK(ArxQuat{1, 2, 3, 4} == ArxQuat{1, 2, 3, 4});
     CHECK_FALSE(ArxQuat{1, 2, 3, 4} == ArxQuat{1, 2, 3, 5});
+  }
+
+  TEST_CASE("AngleRoundtripPreservesArxConvention") {
+    ArxAngle angle{10.0f, 20.0f, 30.0f};
+    ArxAngle out = math::quatToAngle(math::angleToQuat(angle));
+    CHECK(out.pitch == doctest::Approx(angle.pitch).epsilon(1.0e-4));
+    CHECK(out.yaw == doctest::Approx(angle.yaw).epsilon(1.0e-4));
+    CHECK(out.roll == doctest::Approx(angle.roll).epsilon(1.0e-4));
+  }
+
+  TEST_CASE("RotationMatrixRoundtripPreservesQuaternion") {
+    ArxQuat rotation = math::angleToQuat({-15.0f, 70.0f, 12.0f});
+    checkSameRotation(math::rotationToQuat(math::quatToRotation(rotation)), rotation);
+  }
+
+  TEST_CASE("RotateAppliesQuaternion") {
+    ArxVector3 out = math::rotate(math::angleToQuat({0.0f, 90.0f, 0.0f}), {0.0f, 0.0f, 1.0f});
+    CHECK(out.x == doctest::Approx(1.0f).epsilon(1.0e-5));
+    CHECK(out.y == doctest::Approx(0.0f).epsilon(1.0e-5));
+    CHECK(out.z == doctest::Approx(0.0f).epsilon(1.0e-5));
   }
 }

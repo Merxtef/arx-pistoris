@@ -3,10 +3,10 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/ftl.h"
 #include "arx/tea.h"
@@ -26,9 +26,9 @@
 
 namespace {
 
-constexpr uint32_t kGlbMagic      = 0x46546C67u;
+constexpr uint32_t kGlbMagic = 0x46546C67u;
 constexpr uint32_t kChunkTypeJson = 0x4E4F534Au;
-constexpr uint32_t kChunkTypeBin  = 0x004E4942u;
+constexpr uint32_t kChunkTypeBin = 0x004E4942u;
 
 struct GlbImportLogCapture {
   ArxLogLevel last_level = ARX_LOG_DEBUG;
@@ -37,9 +37,9 @@ struct GlbImportLogCapture {
 
   GlbImportLogCapture() {
     pistoris::log_fn = [](ArxLogLevel level, const char* msg, void* ud) {
-      auto* self       = static_cast<GlbImportLogCapture*>(ud);
+      auto* self = static_cast<GlbImportLogCapture*>(ud);
       self->last_level = level;
-      self->last_msg   = msg;
+      self->last_msg = msg;
       self->messages.emplace_back(msg);
     };
     pistoris::log_ud = this;
@@ -51,7 +51,6 @@ struct GlbImportLogCapture {
   }
 };
 
-// hand-assemble a tiny GLB from explicit JSON + BIN
 std::vector<uint8_t> assembleGlb(const std::string& gltf_json, const std::vector<uint8_t>& bin) {
   std::string json_padded = gltf_json;
   while (json_padded.size() % 4 != 0) json_padded.push_back(' ');
@@ -101,7 +100,6 @@ std::vector<uint8_t> extractGlbBin(const std::vector<uint8_t>& glb) {
   return std::vector<uint8_t>(glb.data() + bin_off + 8, glb.data() + bin_off + 8 + bin_len);
 }
 
-// append little-endian to BIN buffer
 void appendF32(std::vector<uint8_t>& bin, float v) {
   const uint8_t* p = reinterpret_cast<const uint8_t*>(&v);
   bin.insert(bin.end(), p, p + 4);
@@ -113,7 +111,7 @@ void appendU16(std::vector<uint8_t>& bin, uint16_t v) {
 
 // makeData(3) is collinear; override positions so per-face normal recompute doesn't skip
 inline pistoris::ftl::Data makeTriData() {
-  auto d                 = makeData(3);
+  auto d = makeData(3);
   d.vertices[0].position = {0.0f, 0.0f, 0.0f};
   d.vertices[1].position = {1.0f, 0.0f, 0.0f};
   d.vertices[2].position = {0.0f, 1.0f, 0.0f};
@@ -135,11 +133,9 @@ TEST_SUITE("glb_import") {
     GlbImportLogCapture logs;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "model.glb", imp, teas) == ARX_OK);
 
-    // 3 mesh verts + 1 synthetic origin
     CHECK(imp.vertices.size() == 4);
     CHECK(imp.faces.size() == 1);
     CHECK(std::string(imp.header.name) == "arx_pistoris\\model.glb");
-    // synthetic origin at (0,0,0) is the last vertex
     CHECK(imp.header.origin == 3);
     CHECK(imp.vertices[3].position.x == 0.0f);
     CHECK(imp.vertices[3].position.y == 0.0f);
@@ -151,8 +147,7 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportShiftsByHeaderOrigin") {
-    // export shifts world by -origin; import synthesizes origin at (0,0,0). Relative geometry preserved.
-    auto d                 = makeTriData();
+    auto d = makeTriData();
     d.vertices[0].position = {1.0f, 2.0f, 3.0f};  // header.origin = 0 -> shift (1,2,3)
     d.vertices[1].position = {4.0f, -1.0f, 0.0f};
     d.vertices[2].position = {0.0f, 0.0f, -5.0f};
@@ -165,7 +160,6 @@ TEST_SUITE("glb_import") {
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
 
-    // v0 at pivot -> (0,0,0); others shifted by -(1,2,3)
     bool found_p0 = false, found_p1 = false, found_p2 = false;
     for (size_t i = 0; i < 3; ++i) {
       auto& p = imp.vertices[i].position;
@@ -183,8 +177,8 @@ TEST_SUITE("glb_import") {
     pistoris::ftl::TextureContainer tc{};
     std::memcpy(tc.filename, "BODY.BMP", 9);
     d.texture_containers.push_back(tc);
-    auto face     = makeFace(0, 1, 2, 0);
-    face.type     = pistoris::kFaceBitTrans;
+    auto face = makeFace(0, 1, 2, 0);
+    face.type = pistoris::kFaceBitTrans;
     face.transval = 0.25f;
     d.faces.push_back(face);
 
@@ -198,7 +192,6 @@ TEST_SUITE("glb_import") {
     CHECK((imp.faces[0].type & pistoris::kFaceBitTrans) != 0);
     CHECK(imp.faces[0].transval == doctest::Approx(0.25f).epsilon(0.01));
     REQUIRE_FALSE(imp.texture_containers.empty());
-    // material name is GLB material name: "BODY" (pathStem of "BODY.BMP")
     CHECK(std::string_view(imp.texture_containers[0].filename).find("BODY") != std::string_view::npos);
   }
 
@@ -247,7 +240,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
 
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
@@ -314,7 +307,6 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportRejectsDeclaredLengthExceedsBuffer") {
-    // Use a minimal valid GLB and overwrite total_len with a value beyond the buffer
     std::vector<uint8_t> bin;
     for (int i = 0; i < 9; ++i) appendF32(bin, 0.0f);
     appendU16(bin, 0);
@@ -336,7 +328,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
 
     uint32_t inflated = static_cast<uint32_t>(glb.size()) + 100;
     std::memcpy(glb.data() + 8, &inflated, 4);
@@ -368,7 +360,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
 
     uint32_t shortened = static_cast<uint32_t>(glb.size()) - 4;
     std::memcpy(glb.data() + 8, &shortened, 4);
@@ -379,7 +371,6 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportRejectsFirstChunkNotJson") {
-    // Same baseline as above; overwrite the first chunk's type field
     std::vector<uint8_t> bin;
     for (int i = 0; i < 9; ++i) appendF32(bin, 0.0f);
     appendU16(bin, 0);
@@ -401,7 +392,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
 
     // 12-byte header + 4-byte json_len = 16: chunk type field
     std::memcpy(glb.data() + 16, &kChunkTypeBin, 4);
@@ -427,23 +418,37 @@ TEST_SUITE("glb_import") {
         {"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
   }
 
-  TEST_CASE("ImportCatchesJsonShapeExceptions") {
-    std::string j = R"({
-      "asset":{"version":"2.0"},
-      "scene":0,
-      "scenes":[{"nodes":[0]}],
-      "nodes":[{"translation":[1]}]
-    })";
-    auto glb      = assembleGlb(j, {});
-    pistoris::ftl::Data imp;
-    std::vector<pistoris::tea::Data> teas;
-    CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
+  TEST_CASE("ImportRejectsMalformedNodeTransforms") {
+    const std::vector<nlohmann::json> malformed_nodes = {
+        {{"translation", nlohmann::json::array({1})}},
+        {{"translation", nlohmann::json::array({0, "bad", 0})}},
+        {{"rotation", nlohmann::json::array({0, 0, 1})}},
+        {{"rotation", nlohmann::json::array({0, 0, 0, 0})}},
+        {{"scale", nlohmann::json::array({1, 1, 1, 1})}},
+        {{"matrix", nlohmann::json::array({1, 0, 0, 0})}},
+        {{"matrix", nlohmann::json::array({1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})},
+         {"translation", nlohmann::json::array({0, 0, 0})}},
+    };
+
+    for (const nlohmann::json& node : malformed_nodes) {
+      CAPTURE(node.dump());
+      const nlohmann::json gltf = {
+          {"asset", {{"version", "2.0"}}},
+          {"scene", 0},
+          {"scenes", nlohmann::json::array({{{"nodes", nlohmann::json::array({0})}}})},
+          {"nodes", nlohmann::json::array({node})},
+      };
+      auto glb = assembleGlb(gltf.dump(), {});
+      pistoris::ftl::Data imp;
+      std::vector<pistoris::tea::Data> teas;
+      CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
+    }
   }
 
   TEST_CASE("ImportRejectsMissingAccessor") {
@@ -469,7 +474,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
@@ -497,7 +502,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5126,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
@@ -526,7 +531,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
@@ -555,13 +560,12 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_BAD_FORMAT);
   }
 
-  // 4-vertex quad with mode=5 (TRIANGLE_STRIP); triangulator emits 2 triangles with alternating winding
   TEST_CASE("ImportTriangulatesStrip") {
     std::vector<uint8_t> bin;
     // 4 vec3 positions = 48 bytes
@@ -602,14 +606,13 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":4,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
     CHECK(imp.faces.size() == 2);
   }
 
-  // 4-vertex fan with mode=6 (TRIANGLE_FAN); triangulator emits 2 triangles sharing vertex 0
   TEST_CASE("ImportTriangulatesFan") {
     std::vector<uint8_t> bin;
     appendF32(bin, 0.0f);
@@ -649,14 +652,13 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":4,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
     CHECK(imp.faces.size() == 2);
   }
 
-  // Indices accessor with componentType=5121 (UBYTE); covers decodeIndex byte arm + compSize byte arm
   TEST_CASE("ImportUByteIndices") {
     std::vector<uint8_t> bin;
     appendF32(bin, 0.0f);
@@ -693,14 +695,13 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5121,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
     CHECK(imp.faces.size() == 1);
   }
 
-  // TEXCOORD_0 with normalized UBYTE; covers decodeFloats UBYTE-normalized arm
   TEST_CASE("ImportTexcoordNormalizedUByte") {
     std::vector<uint8_t> bin;
     // 3 vec3 positions = 36 bytes
@@ -755,7 +756,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":2,"componentType":5121,"count":3,"type":"VEC2","normalized":true}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
@@ -770,7 +771,6 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportRejectsDisconnectedMultipleSkins") {
-    // two skins under different scene roots -> merged skeleton has 2 roots -> MULTIPLE_SKINS
     // Layout:
     //   IBMs (skin 0): 64 bytes (1 identity mat4)
     //   IBMs (skin 1): 64 bytes (1 identity mat4)
@@ -787,10 +787,9 @@ TEST_SUITE("glb_import") {
       float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
       for (int i = 0; i < 16; ++i) appendF32(bin, m[i]);
     };
-    mat4_identity();  // skin 0 IBM
-    mat4_identity();  // skin 1 IBM
+    mat4_identity();
+    mat4_identity();
     auto tri_attrs = [&]() {
-      // Non-collinear positions
       appendF32(bin, 0);
       appendF32(bin, 0);
       appendF32(bin, 0);
@@ -800,13 +799,10 @@ TEST_SUITE("glb_import") {
       appendF32(bin, 0);
       appendF32(bin, 1);
       appendF32(bin, 0);
-      // 3 indices
       appendU16(bin, 0);
       appendU16(bin, 1);
       appendU16(bin, 2);
-      // 3 joint vec4 (only first component used, rest 0)
       for (int i = 0; i < 12; ++i) appendU16(bin, 0);
-      // 3 weight vec4 ([0]=1.0)
       for (int v = 0; v < 3; ++v) {
         appendF32(bin, 1.0f);
         appendF32(bin, 0);
@@ -814,8 +810,8 @@ TEST_SUITE("glb_import") {
         appendF32(bin, 0);
       }
     };
-    tri_attrs();  // mesh 0
-    tri_attrs();  // mesh 1
+    tri_attrs();
+    tri_attrs();
 
     std::string j = R"({
       "asset":{"version":"2.0"},
@@ -861,28 +857,23 @@ TEST_SUITE("glb_import") {
         {"bufferView":9,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
-    CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_MULTIPLE_SKINS);
+    CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_MODEL_MULTIPLE_SKINS);
   }
 
   TEST_CASE("ImportMergesConnectedMultipleSkins") {
-    // two skins sharing a common parent merge into one armature.
     // tree: root(2) -> child1(3), child2(4); skin0=[root,child1], skin1=[root,child2]
-    // after merge: 3 joints, single root
     std::vector<uint8_t> bin;
     auto mat4_identity = [&]() {
       float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
       for (int i = 0; i < 16; ++i) appendF32(bin, m[i]);
     };
-    // Skin 0 IBMs: 2 identity mat4
     mat4_identity();
     mat4_identity();
-    // Skin 1 IBMs: 2 identity mat4
     mat4_identity();
     mat4_identity();
-    // Mesh 0 attribs (skin 0)
     appendF32(bin, 0);
     appendF32(bin, 0);
     appendF32(bin, 0);
@@ -902,7 +893,6 @@ TEST_SUITE("glb_import") {
       appendF32(bin, 0);
       appendF32(bin, 0);
     }
-    // Mesh 1 attribs (skin 1) - identical layout
     appendF32(bin, 0);
     appendF32(bin, 0);
     appendF32(bin, 0);
@@ -975,29 +965,26 @@ TEST_SUITE("glb_import") {
         {"bufferView":10,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
-    // Unified joint set: [root, child1, child2] -> 3 groups
     CHECK(imp.groups.size() == 3);
   }
 
   TEST_CASE("ImportAcceptsIbmDisagreement") {
-    // bind position comes from joint worldTransform, not IBMs, so per-skin IBM disagreement
-    // no longer blocks import (DEBUG diagnostic only)
+    // Bind position comes from the joint world transform; differing IBMs are diagnostic only
     std::vector<uint8_t> bin;
     auto mat4_identity = [&]() {
       float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
       for (int i = 0; i < 16; ++i) appendF32(bin, m[i]);
     };
     auto mat4_translated = [&]() {
-      // Identity but translation = (5,0,0) -> last column [12]=5
       float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 5, 0, 0, 1};
       for (int i = 0; i < 16; ++i) appendF32(bin, m[i]);
     };
-    mat4_identity();    // skin 0 IBM (joint 2)
-    mat4_translated();  // skin 1 IBM (joint 2) - disagrees
+    mat4_identity();
+    mat4_translated();
     auto tri = [&]() {
       appendF32(bin, 0);
       appendF32(bin, 0);
@@ -1068,7 +1055,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":10,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
@@ -1079,7 +1066,7 @@ TEST_SUITE("glb_import") {
     // per glTF spec, a skinned mesh node's transform is ignored (skin owns vertex placement)
     std::vector<uint8_t> bin;
     float m[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    for (int i = 0; i < 16; ++i) appendF32(bin, m[i]);  // 1 identity IBM
+    for (int i = 0; i < 16; ++i) appendF32(bin, m[i]);
     appendF32(bin, 0);
     appendF32(bin, 0);
     appendF32(bin, 0);
@@ -1129,7 +1116,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":4,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
@@ -1137,10 +1124,9 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportActionPointFromArxActionEmpty") {
-    // child empty "arx_action__weapon" -> FTL Action "weapon" attached to its joint
     std::vector<uint8_t> bin;
     float ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-    for (int i = 0; i < 16; ++i) appendF32(bin, ident[i]);  // 1 IBM (identity)
+    for (int i = 0; i < 16; ++i) appendF32(bin, ident[i]);
     appendF32(bin, 0);
     appendF32(bin, 0);
     appendF32(bin, 0);
@@ -1191,7 +1177,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":4,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
@@ -1214,7 +1200,6 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportIgnoresUnnamedEmpty") {
-    // empty without arx_action__ prefix is discarded silently
     std::vector<uint8_t> bin;
     float ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
     for (int i = 0; i < 16; ++i) appendF32(bin, ident[i]);
@@ -1267,7 +1252,7 @@ TEST_SUITE("glb_import") {
         {"bufferView":4,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_OK);
@@ -1275,7 +1260,6 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportRejectsSparseAccessor") {
-    // Build a minimal GLB whose POSITION accessor declares "sparse"
     std::vector<uint8_t> bin;
     for (int i = 0; i < 9; ++i) appendF32(bin, 0.0f);  // 3 vec3 positions
     appendU16(bin, 0);
@@ -1299,14 +1283,13 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_UNSUPPORTED_FEATURE);
   }
 
   TEST_CASE("ImportRejectsExternalBuffer") {
-    // Single accessor referencing a buffer with a uri (external)
     std::vector<uint8_t> bin;
     for (int i = 0; i < 9; ++i) appendF32(bin, 0.0f);
 
@@ -1320,14 +1303,13 @@ TEST_SUITE("glb_import") {
       "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36}],
       "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"}]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_UNSUPPORTED_FEATURE);
   }
 
   TEST_CASE("ImportRejectsNonUniformScale") {
-    // Mesh node with non-uniform scale
     std::vector<uint8_t> bin;
     for (int i = 0; i < 9; ++i) appendF32(bin, 0.0f);
     appendU16(bin, 0);
@@ -1350,30 +1332,26 @@ TEST_SUITE("glb_import") {
         {"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
-    CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_NON_UNIFORM_SCALE);
+    CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_GLB_MODEL_NON_UNIFORM_SCALE);
   }
 
   TEST_CASE("ImportRejectsMultipleSkeletonRoots") {
-    // Two unparented joints under a skin -> ARX_FTL_MULTIPLE_ROOTS.
     // 16 IBM floats = 64 bytes for one joint (identity matrix). Two joints = 128 bytes.
     std::vector<uint8_t> bin;
     auto append_identity_mat4 = [&](std::vector<uint8_t>& b) {
       float ident[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
       for (int i = 0; i < 16; ++i) appendF32(b, ident[i]);
     };
-    append_identity_mat4(bin);  // joint 0 IBM
-    append_identity_mat4(bin);  // joint 1 IBM
-    // 3 vec3 positions
+    append_identity_mat4(bin);
+    append_identity_mat4(bin);
     for (int i = 0; i < 9; ++i) appendF32(bin, 0.0f);
     appendU16(bin, 0);
     appendU16(bin, 1);
     appendU16(bin, 2);
-    // 3 vec4 joints (uint16)
     for (int i = 0; i < 12; ++i) appendU16(bin, 0);
-    // 3 vec4 weights (float)
     for (int i = 0; i < 12; ++i) appendF32(bin, 0.0f);
 
     // Layout offsets:
@@ -1409,22 +1387,22 @@ TEST_SUITE("glb_import") {
         {"bufferView":4,"componentType":5126,"count":3,"type":"VEC4"}
       ]
     })";
-    auto glb      = assembleGlb(j, bin);
+    auto glb = assembleGlb(j, bin);
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
     CHECK(pistoris::importGlbToFtlTea(std::span(glb), "", imp, teas) == ARX_FTL_MULTIPLE_ROOTS);
   }
 
   TEST_CASE("ImportSkinnedRoundtripGroups") {
-    auto d                 = makeData(4);
+    auto d = makeData(4);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
     d.faces.push_back(makeFace(0, 1, 2));
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "chest", 6);
-    g0.origin           = 0;
-    g0.indices          = {0, 1, 2, 3};
+    g0.origin = 0;
+    g0.indices = {0, 1, 2, 3};
     g0.blob_shadow_size = 0.0f;
     d.groups.push_back(g0);
     // seal so extras gets populated, matching production flow
@@ -1450,8 +1428,8 @@ TEST_SUITE("glb_import") {
 
   TEST_CASE("ImportPreservesBoneOrder") {
     // 4-bone tree root -> A -> A1, B as sibling of A. DFS order [root,A,A1,B] differs from
-    // BFS [root,A,B,A1]; import must preserve DFS so TEA keyframe indices stay aligned.
-    auto d                 = makeData(8);
+    // BFS [root,A,B,A1]; import must preserve DFS so TEA keyframe indices stay aligned
+    auto d = makeData(8);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
@@ -1463,17 +1441,17 @@ TEST_SUITE("glb_import") {
     // root includes A.origin (=3) and B.origin (=5) so BuildFtlExtras finds root as parent
     pistoris::ftl::Group root{}, a{}, a1{}, b{};
     std::memcpy(root.name, "root", 4);
-    root.origin  = 0;
+    root.origin = 0;
     root.indices = {0, 1, 2, 3, 5, 6, 7};
     std::memcpy(a.name, "a", 1);
     a.origin = 3;
     // A includes A1.origin (=4) so A is A1's parent
     a.indices = {3, 4};
     std::memcpy(a1.name, "a1", 2);
-    a1.origin  = 4;
+    a1.origin = 4;
     a1.indices = {4};
     std::memcpy(b.name, "b", 1);
-    b.origin  = 5;
+    b.origin = 5;
     b.indices = {5};
     d.groups.push_back(root);
     d.groups.push_back(a);
@@ -1487,7 +1465,6 @@ TEST_SUITE("glb_import") {
     pistoris::ftl::Data sealed;
     REQUIRE(pistoris::loadFtl(&sealed, rc) == ARX_OK);
 
-    // Confirm the sealed FTL is in DFS order (not BFS) so the test actually exercises the fix.
     REQUIRE(sealed.groups.size() == 4);
     CHECK(std::string(sealed.groups[0].name) == "root");
     CHECK(std::string(sealed.groups[1].name) == "a");
@@ -1509,7 +1486,7 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportUsesBoneOrdinalPrefixesWhenJointOrderChanges") {
-    auto d                 = makeData(8);
+    auto d = makeData(8);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
@@ -1520,16 +1497,16 @@ TEST_SUITE("glb_import") {
 
     pistoris::ftl::Group root{}, a{}, a1{}, b{};
     std::memcpy(root.name, "root", 5);
-    root.origin  = 0;
+    root.origin = 0;
     root.indices = {0, 1, 2, 3, 5, 6, 7};
     std::memcpy(a.name, "a", 2);
-    a.origin  = 3;
+    a.origin = 3;
     a.indices = {3, 4};
     std::memcpy(a1.name, "a1", 3);
-    a1.origin  = 4;
+    a1.origin = 4;
     a1.indices = {4};
     std::memcpy(b.name, "b", 2);
-    b.origin  = 5;
+    b.origin = 5;
     b.indices = {5};
     d.groups.push_back(root);
     d.groups.push_back(a);
@@ -1548,10 +1525,9 @@ TEST_SUITE("glb_import") {
 
     auto gltf = nlohmann::json::parse(extractGlbJson(glb));
     REQUIRE(gltf["skins"].size() == 1);
-    // Simulate a DCC changing skin joint order from [root,a,a1,b] to [root,a,b,a1].
     gltf["skins"][0]["joints"] = nlohmann::json::array({2, 3, 5, 4});
-    auto bin                   = extractGlbBin(glb);
-    auto reordered_glb         = assembleGlb(gltf.dump(), bin);
+    auto bin = extractGlbBin(glb);
+    auto reordered_glb = assembleGlb(gltf.dump(), bin);
 
     pistoris::ftl::Data imp;
     std::vector<pistoris::tea::Data> teas;
@@ -1568,15 +1544,15 @@ TEST_SUITE("glb_import") {
 
   // single-bone FTL via save/load round so extras gets populated, matching production flow
   inline pistoris::ftl::Data makeSealedSingleBoneFtl() {
-    auto d                 = makeData(4);
+    auto d = makeData(4);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
     d.faces.push_back(makeFace(0, 1, 2));
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "chest", 6);
-    g0.origin           = 0;
-    g0.indices          = {0, 1, 2, 3};
+    g0.origin = 0;
+    g0.indices = {0, 1, 2, 3};
     g0.blob_shadow_size = 0.0f;
     d.groups.push_back(g0);
 
@@ -1597,12 +1573,12 @@ TEST_SUITE("glb_import") {
     std::memcpy(t.name, "test_walk", 9);
     for (int32_t i = 0; i < nkf; ++i) {
       pistoris::tea::Keyframe kf;
-      kf.num_frame  = (i + 1) * (num_frames / nkf);
+      kf.num_frame = (i + 1) * (num_frames / nkf);
       kf.flag_frame = pistoris::kTeaFlagFrameNone;
       pistoris::tea::GroupAnim ga;
       ga.translate = {0.1f * i, 0.0f, 0.0f};
-      ga.quat      = {1.0f, 0.0f, 0.0f, 0.0f};  // identity (w,x,y,z)
-      ga.zoom      = {0.0f, 0.0f, 0.0f};
+      ga.quat = {1.0f, 0.0f, 0.0f, 0.0f};  // identity (w,x,y,z)
+      ga.zoom = {0.0f, 0.0f, 0.0f};
       kf.groups.push_back(ga);
       t.keyframes.push_back(std::move(kf));
     }
@@ -1641,10 +1617,9 @@ TEST_SUITE("glb_import") {
   TEST_CASE("ImportAnimationStripsHoldSuffix") {
     auto ftl = makeSealedSingleBoneFtl();
     auto tea = makeAnimTea(2, 24);
-    // force a hold: last keyframe at 8 but num_frames = 24
     tea.keyframes[0].num_frame = 4;
     tea.keyframes[1].num_frame = 8;
-    tea.num_frames             = 24;
+    tea.num_frames = 24;
     REQUIRE(pistoris::validateTea(&tea) == ARX_OK);
 
     const pistoris::tea::Data* tea_ptrs[1] = {&tea};
@@ -1656,7 +1631,6 @@ TEST_SUITE("glb_import") {
     REQUIRE(pistoris::importGlbToFtlTea(std::span(glb), "", imp_ftl, imp_teas) == ARX_OK);
 
     REQUIRE(imp_teas.size() == 1);
-    // hold marker stripped: no "__h" suffix, num_frames recovered, hold keyframe popped
     CHECK(std::string(imp_teas[0].name) == "test_walk");
     CHECK(imp_teas[0].num_frames == 24);
     REQUIRE(imp_teas[0].keyframes.size() == 2);
@@ -1664,8 +1638,8 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportAnimationRecoversFootstepAndAudio") {
-    auto ftl                    = makeSealedSingleBoneFtl();
-    auto tea                    = makeAnimTea(2, 24);
+    auto ftl = makeSealedSingleBoneFtl();
+    auto tea = makeAnimTea(2, 24);
     tea.keyframes[0].flag_frame = pistoris::kTeaFlagFrameStep;
     pistoris::tea::Sample s{};
     std::memcpy(s.name, "step.wav", 8);
@@ -1690,7 +1664,6 @@ TEST_SUITE("glb_import") {
   TEST_CASE("ImportAnimationSamplesMovingRootTranslationOnEveryKeyframe") {
     auto ftl = makeSealedSingleBoneFtl();
     auto tea = makeAnimTea(3, 24);
-    // Sparse authored root translation becomes a sampled key_move on every imported keyframe.
     tea.keyframes[0].translate = pistoris::ArxVector3{0.0f, 0.0f, 0.0f};
     tea.keyframes[2].translate = pistoris::ArxVector3{24.0f, 0.0f, 0.0f};
     REQUIRE(pistoris::validateTea(&tea) == ARX_OK);
@@ -1716,8 +1689,7 @@ TEST_SUITE("glb_import") {
   }
 
   TEST_CASE("ImportAnimationUnanimatedBoneIsIdentity") {
-    // 2-bone FTL with only bone 0 animated -> bone 1 yields identity GroupAnims
-    auto d                 = makeData(5);
+    auto d = makeData(5);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
@@ -1729,7 +1701,7 @@ TEST_SUITE("glb_import") {
     // include vertex 3 so g1 (origin=3) finds g0 as its parent via FTL extras rule
     g0.indices = {0, 1, 2, 3, 4};
     std::memcpy(g1.name, "child", 5);
-    g1.origin  = 3;
+    g1.origin = 3;
     g1.indices = {3};
     d.groups.push_back(g0);
     d.groups.push_back(g1);
@@ -1748,12 +1720,12 @@ TEST_SUITE("glb_import") {
     kf.num_frame = 12;
     pistoris::tea::GroupAnim ga0;
     ga0.translate = {0.5f, 0.0f, 0.0f};
-    ga0.quat      = {1.0f, 0.0f, 0.0f, 0.0f};
-    ga0.zoom      = {0.0f, 0.0f, 0.0f};
-    pistoris::tea::GroupAnim ga1;  // identity
+    ga0.quat = {1.0f, 0.0f, 0.0f, 0.0f};
+    ga0.zoom = {0.0f, 0.0f, 0.0f};
+    pistoris::tea::GroupAnim ga1;
     ga1.translate = {0.0f, 0.0f, 0.0f};
-    ga1.quat      = {1.0f, 0.0f, 0.0f, 0.0f};
-    ga1.zoom      = {0.0f, 0.0f, 0.0f};
+    ga1.quat = {1.0f, 0.0f, 0.0f, 0.0f};
+    ga1.zoom = {0.0f, 0.0f, 0.0f};
     kf.groups.push_back(ga0);
     kf.groups.push_back(ga1);
     tea.keyframes.push_back(std::move(kf));
@@ -1869,7 +1841,7 @@ TEST_SUITE("glb_import") {
 
     pistoris::ftl::Group group{};
     std::memcpy(group.name, "chest", 6);
-    group.origin  = 0;
+    group.origin = 0;
     group.indices = {0, 1, 2};
     d.groups.push_back(group);
 
@@ -1912,7 +1884,7 @@ TEST_SUITE("glb_import") {
 
     REQUIRE(imp.groups.size() == 1);
     REQUIRE(imp.actions.size() == 1);
-    int32_t group_origin  = static_cast<int32_t>(imp.groups[0].origin);
+    int32_t group_origin = static_cast<int32_t>(imp.groups[0].origin);
     int32_t action_vertex = imp.actions[0].vertex_idx;
     int32_t header_origin = static_cast<int32_t>(imp.header.origin);
 

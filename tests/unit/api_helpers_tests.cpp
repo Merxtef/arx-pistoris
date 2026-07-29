@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/pistoris_types.h"
 
 #include "api/api_helpers.h"

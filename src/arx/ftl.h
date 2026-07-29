@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #pragma once
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/pistoris_types.h"
 
 #include "utils/cursor.h"

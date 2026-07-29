@@ -3,10 +3,11 @@
 
 #include "utils/math/mat4.h"
 
-#include "utils/math/vec3.h"
+#include "arx_pistoris/arx_math.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace pistoris::math {
 
@@ -28,7 +29,8 @@ ArxVector3 xformPoint(const Mat4& m, const ArxVector3& p) {
 }
 
 ArxVector3 xformDir(const Mat4& m, const ArxVector3& v) {
-  return {m(0, 0) * v.x + m(0, 1) * v.y + m(0, 2) * v.z, m(1, 0) * v.x + m(1, 1) * v.y + m(1, 2) * v.z,
+  return {m(0, 0) * v.x + m(0, 1) * v.y + m(0, 2) * v.z,
+          m(1, 0) * v.x + m(1, 1) * v.y + m(1, 2) * v.z,
           m(2, 0) * v.x + m(2, 1) * v.y + m(2, 2) * v.z};
 }
 
@@ -36,7 +38,7 @@ Mat4 fromQuat(const ArxQuat& q) {
   float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
   float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
   float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
-  Mat4 r  = kIdentityMat4;
+  Mat4 r = kIdentityMat4;
   r(0, 0) = 1.0f - 2.0f * (yy + zz);
   r(1, 0) = 2.0f * (xy + wz);
   r(2, 0) = 2.0f * (xz - wy);
@@ -71,7 +73,7 @@ std::optional<Mat4> inverseAffine(const Mat4& m) {
   if (std::abs(det) < 1e-30f) return std::nullopt;
   float id = 1.0f / det;
 
-  Mat4 out  = kIdentityMat4;
+  Mat4 out = kIdentityMat4;
   out(0, 0) = (a11 * a22 - a12 * a21) * id;
   out(0, 1) = -(a01 * a22 - a02 * a21) * id;
   out(0, 2) = (a01 * a12 - a02 * a11) * id;
@@ -93,13 +95,13 @@ bool isRotationUniformScale(const Mat4& m, float tol) {
   ArxVector3 c0{m(0, 0), m(1, 0), m(2, 0)};
   ArxVector3 c1{m(0, 1), m(1, 1), m(2, 1)};
   ArxVector3 c2{m(0, 2), m(1, 2), m(2, 2)};
-  float l0 = length(c0), l1 = length(c1), l2 = length(c2);
+  float l0 = lengthf(c0), l1 = lengthf(c1), l2 = lengthf(c2);
   if (l0 == 0.0f || l1 == 0.0f || l2 == 0.0f) return false;
   float ref = std::max({l0, l1, l2});
   if (std::abs(l0 - l1) > tol * ref || std::abs(l0 - l2) > tol * ref) return false;
-  if (std::abs(dot(c0, c1)) > tol * l0 * l1) return false;
-  if (std::abs(dot(c0, c2)) > tol * l0 * l2) return false;
-  if (std::abs(dot(c1, c2)) > tol * l1 * l2) return false;
+  if (std::abs(dotf(c0, c1)) > tol * l0 * l1) return false;
+  if (std::abs(dotf(c0, c2)) > tol * l0 * l2) return false;
+  if (std::abs(dotf(c1, c2)) > tol * l1 * l2) return false;
   return true;
 }
 

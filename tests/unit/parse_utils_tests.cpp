@@ -13,16 +13,15 @@
 
 using namespace pistoris;
 
-// RAII log capture; sets log callback for its lifetime
 struct LogCapture {
   ArxLogLevel last_level = ARX_LOG_DEBUG;
   std::string last_msg;
 
   LogCapture() {
     log_fn = [](ArxLogLevel level, const char* msg, void* ud) {
-      auto* self       = static_cast<LogCapture*>(ud);
+      auto* self = static_cast<LogCapture*>(ud);
       self->last_level = level;
-      self->last_msg   = msg;
+      self->last_msg = msg;
     };
     log_ud = this;
   }
@@ -33,7 +32,6 @@ struct LogCapture {
 };
 
 TEST_SUITE("parse_utils") {
-  // already null-terminated -- no modification, no log emitted
   TEST_CASE("ClampStrNoop") {
     char arr[8] = "hello";
     clampStr(arr, "test");
@@ -41,7 +39,6 @@ TEST_SUITE("parse_utils") {
     CHECK(std::string(arr) == "hello");
   }
 
-  // last byte non-null -- clamped to '\0', preceding bytes unchanged
   TEST_CASE("ClampStrClampsEnd") {
     char arr[4] = {'A', 'B', 'C', 'D'};
     clampStr(arr, "test");
@@ -51,7 +48,6 @@ TEST_SUITE("parse_utils") {
     CHECK(arr[2] == 'C');
   }
 
-  // template instantiation with N = 2 (minimum), 64 (sel name size), 256 (most FTL names)
   TEST_CASE("ClampStrSizes") {
     char s2[2] = {'X', 'Y'};
     clampStr(s2, "test");
@@ -68,7 +64,6 @@ TEST_SUITE("parse_utils") {
     CHECK(s256[255] == '\0');
   }
 
-  // unindexed warning (idx = -1 default) -- field name in message, no "[N]"
   TEST_CASE("ClampStrLogUnindexed") {
     LogCapture cap;
     char arr[4] = {'A', 'B', 'C', 'D'};
@@ -79,7 +74,6 @@ TEST_SUITE("parse_utils") {
     CHECK(cap.last_msg.find('[') == std::string::npos);
   }
 
-  // indexed warning -- field name and "[idx]" both present in message
   TEST_CASE("ClampStrLogIndexed") {
     LogCapture cap;
     char arr[4] = {'A', 'B', 'C', 'D'};
@@ -90,7 +84,6 @@ TEST_SUITE("parse_utils") {
     CHECK(cap.last_msg.find("not null-terminated") != std::string::npos);
   }
 
-  // no log emitted when no clamping needed
   TEST_CASE("ClampStrNoLogOnNoop") {
     LogCapture cap;
     char arr[4] = "hi";

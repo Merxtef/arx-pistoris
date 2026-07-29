@@ -18,4 +18,14 @@ template <class ResizableContainer>
   }
 }
 
+template <class ReservableContainer>
+[[nodiscard]] bool tryReserve(ReservableContainer& container, std::size_t new_capacity) noexcept {
+  try {
+    container.reserve(new_capacity);
+    return true;
+  } catch (const std::bad_alloc&) {
+    return false;
+  }
+}
+
 }  // namespace pistoris

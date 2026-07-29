@@ -1,20 +1,34 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_pistoris.h"
+#include "native_fuzz_common.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 // NOLINTNEXTLINE(readability-identifier-naming) -- libFuzzer entry point
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, std::size_t size) {
-  // first half treated as OBJ, second half as MTL
-  std::size_t split       = size / 2;
-  const uint8_t* obj_data = data;
-  const uint8_t* mtl_data = data + split;
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
+  arx_fuzz::silenceLogs();
+  if (size < sizeof(std::uint32_t)) return 0;
 
-  ArxFtlHandle h   = nullptr;
-  ArxReturnCode rc = arx_pistoris_obj_parse(obj_data, split, mtl_data, size - split, nullptr, &h);
-  if (rc == ARX_OK) arx_pistoris_ftl_free(h);
+  std::uint32_t split_request = 0;
+  std::memcpy(&split_request, data, sizeof(split_request));
+  data += sizeof(split_request);
+  size -= sizeof(split_request);
+
+  const std::size_t split = split_request % (size + 1);
+  const std::uint8_t* obj_data = data;
+  const std::uint8_t* mtl_data = data + split;
+  const std::size_t obj_size = split;
+  const std::size_t mtl_size = size - split;
+  const std::uint8_t* mtl_or_nil = (mtl_size > 0) ? mtl_data : nullptr;
+
+  ArxFtlHandle raw_ftl = nullptr;
+  const ArxReturnCode rc = arx_pistoris_obj_parse(obj_data, obj_size, mtl_or_nil, mtl_size, nullptr, &raw_ftl);
+  if (rc == ARX_OK) {
+    arx_fuzz::FtlHandle ftl(raw_ftl);
+    if (!ftl.get()) std::abort();
+  }
   return 0;
 }

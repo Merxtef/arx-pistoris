@@ -3,8 +3,8 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/tea.h"
 #include "helpers.h"
@@ -40,7 +40,7 @@ TEST_SUITE("tea") {
 
   TEST_CASE("TeaWriteExactKeyframe") {
     auto fixture = makeKeyframeTea();
-    auto bytes   = save(parse(fixture));
+    auto bytes = save(parse(fixture));
     REQUIRE(bytes.size() == fixture.size());
     CHECK(std::memcmp(bytes.data(), fixture.data(), fixture.size()) == 0);
   }
@@ -62,12 +62,13 @@ TEST_SUITE("tea") {
     std::memcpy(fixture.data() + kf_off + kTeaKfFlagFrameOff, &flag, 4);
 
     int32_t num_sample = 0;  // not -1: sample follows
-    auto* nsp          = reinterpret_cast<const uint8_t*>(&num_sample);
+    auto* nsp = reinterpret_cast<const uint8_t*>(&num_sample);
     fixture.insert(fixture.end(), nsp, nsp + 4);
 
     char sample_name[256] = {};
     std::strcpy(sample_name, "footstep.wav");
-    fixture.insert(fixture.end(), reinterpret_cast<const uint8_t*>(sample_name),
+    fixture.insert(fixture.end(),
+                   reinterpret_cast<const uint8_t*>(sample_name),
                    reinterpret_cast<const uint8_t*>(sample_name) + 256);
 
     fixture.insert(fixture.end(), 4, 0);  // sample_size = 0, audio always dropped on read
@@ -79,13 +80,13 @@ TEST_SUITE("tea") {
     CHECK(std::string(d1.keyframes[0].sample->name) == "footstep.wav");
 
     auto bytes = save(d1);
-    auto d2    = parse(bytes);
+    auto d2 = parse(bytes);
     checkEq(d1, d2);
   }
 
   // v2015 -> v2014 on save: output drops info_frame[256] per keyframe
   TEST_CASE("TeaWriteV2015DowngradesTo2014") {
-    auto buf   = makeMinimalTea(pistoris::kTeaVersionAlt);
+    auto buf = makeMinimalTea(pistoris::kTeaVersionAlt);
     int32_t nf = 24, ng = 0, nkf = 1;
     std::memcpy(buf.data() + kTeaNumFramesOff, &nf, 4);
     std::memcpy(buf.data() + kTeaNumGroupsOff, &ng, 4);
@@ -93,7 +94,7 @@ TEST_SUITE("tea") {
 
     // v2015 keyframe header (288 bytes); key_move at offset 272
     constexpr std::size_t kV2015KeyMoveOff = kTeaKfKeyMoveOff + 256;
-    std::size_t kf                         = buf.size();
+    std::size_t kf = buf.size();
     buf.insert(buf.end(), kTeaKf2015Size, 0);
     int32_t flag = pistoris::kTeaFlagFrameStep, one = 1;
     std::memcpy(buf.data() + kf + kTeaKfFlagFrameOff, &flag, 4);
@@ -101,11 +102,11 @@ TEST_SUITE("tea") {
     float tr[3] = {1.f, 2.f, 3.f};
     buf.insert(buf.end(), reinterpret_cast<uint8_t*>(tr), reinterpret_cast<uint8_t*>(tr) + 12);
     int32_t no_sample = -1;
-    auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 4, 0);  // num_sfx
 
-    auto d1    = parse(buf);
+    auto d1 = parse(buf);
     auto bytes = save(d1);
 
     CHECK(bytes.size() == buf.size() - 256);  // 1 keyframe loses info_frame[256]
@@ -136,7 +137,7 @@ TEST_SUITE("tea") {
         buf.insert(buf.end(), reinterpret_cast<uint8_t*>(tr), reinterpret_cast<uint8_t*>(tr) + 12);
       }
       int32_t no_sample = -1;
-      auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+      auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
       buf.insert(buf.end(), p, p + 4);
       buf.insert(buf.end(), 4, 0);  // num_sfx
     };
@@ -146,7 +147,7 @@ TEST_SUITE("tea") {
     append_v2015_kf(8, pistoris::kTeaFlagFrameNone, 0, 0.f, 0.f, 0.f);
     append_v2015_kf(16, pistoris::kTeaFlagFrameNone, 1, 4.f, 5.f, 6.f);
 
-    auto d1    = parse(buf);
+    auto d1 = parse(buf);
     auto bytes = save(d1);
 
     CHECK(bytes.size() == buf.size() - 3 * 256);

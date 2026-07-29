@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Merxtef
+
 param(
   [string]$Repo = $env:ARX_PISTORIS_REPO,
   [string]$Version = $env:ARX_PISTORIS_VERSION,
@@ -9,6 +12,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $Repo) { $Repo = 'Merxtef/arx-pistoris' }
 if (-not $Version) { $Version = 'latest' }
 if (-not $InstallDir) { $InstallDir = Join-Path $env:LOCALAPPDATA 'arx-pistoris\bin' }
+$InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 
 $machineArch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if ($machineArch -notin @('AMD64', 'x86_64')) {
@@ -41,8 +45,18 @@ try {
     throw "arx-pistor.exe not found in $asset"
   }
 
+  $packageRoot = Split-Path (Split-Path $exe.FullName -Parent) -Parent
+  $docSource = Join-Path $packageRoot 'share\doc\arx-pistoris'
+  if (-not (Test-Path -LiteralPath $docSource -PathType Container)) {
+    throw "documentation directory not found in $asset"
+  }
+
   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
   Copy-Item -Path $exe.FullName -Destination (Join-Path $InstallDir 'arx-pistor.exe') -Force
+
+  $docDestination = Join-Path (Split-Path $InstallDir -Parent) 'share\doc\arx-pistoris'
+  New-Item -ItemType Directory -Path $docDestination -Force | Out-Null
+  Copy-Item -Path (Join-Path $docSource '*') -Destination $docDestination -Recurse -Force
 
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   $parts = @()

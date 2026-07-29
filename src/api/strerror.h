@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "arx_pistoris/api.h"
 #include "arx_pistoris/pistoris_types.h"
 
 #ifdef _WIN32
@@ -21,7 +22,7 @@ extern "C" {
 
 // NOLINTBEGIN(readability-identifier-naming)
 
-ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc);
+ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) ARX_NOEXCEPT;
 
 // NOLINTEND(readability-identifier-naming)
 

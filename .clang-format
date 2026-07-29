@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Merxtef
+
 ---
 Language: Cpp
 Standard: c++20
@@ -5,8 +8,7 @@ BasedOnStyle: Google
 
 ColumnLimit: 120
 
-AlignConsecutiveMacros: Consecutive
-AlignConsecutiveAssignments: Consecutive
+BinPackArguments: false
 
 SortIncludes: CaseSensitive
 IncludeBlocks: Regroup

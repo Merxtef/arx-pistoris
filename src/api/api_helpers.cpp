@@ -3,12 +3,16 @@
 
 #include "api/api_helpers.h"
 
+#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
+#include "arx_pistoris/pistoris_types.h"
+
 #include "utils/log.h"
 #include "utils/math/xform.h"
 
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -26,12 +30,6 @@ bool validVertex(const ftl::Data& ftl, std::uint32_t idx) { return idx < ftl.ver
 bool validVertex(const ftl::Data& ftl, std::int32_t idx) {
   return idx >= 0 && static_cast<std::size_t>(idx) < ftl.vertices.size();
 }
-
-ArxVector3 sub(const ArxVector3& a, const ArxVector3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
-
-float lengthSquared(const ArxVector3& v) { return v.x * v.x + v.y * v.y + v.z * v.z; }
-
-float dist(const ArxVector3& a, const ArxVector3& b) { return std::sqrt(lengthSquared(sub(a, b))); }
 
 std::string lowerName(std::string_view name) {
   std::string out(name);
@@ -54,15 +52,23 @@ void warnGroupMismatch(const ftl::Data& target, const ftl::Data& reference, std:
     std::string tn = stripOrdinalPrefix(target.groups[i].name);
     std::string rn = stripOrdinalPrefix(reference.groups[i].name);
     if (tn != rn) {
-      log(ARX_LOG_WARN, std::format("{}: group {} name mismatch target='{}' reference='{}'", prefix, i,
-                                    target.groups[i].name, reference.groups[i].name));
+      log(ARX_LOG_WARN,
+          std::format("{}: group {} name mismatch target='{}' reference='{}'",
+                      prefix,
+                      i,
+                      target.groups[i].name,
+                      reference.groups[i].name));
     }
   }
   if (target.extras.parent_bone.size() == reference.extras.parent_bone.size()) {
     for (std::size_t i = 0; i < target.extras.parent_bone.size(); ++i) {
       if (target.extras.parent_bone[i] != reference.extras.parent_bone[i]) {
-        log(ARX_LOG_WARN, std::format("{}: group {} parent mismatch target={} reference={}", prefix, i,
-                                      target.extras.parent_bone[i], reference.extras.parent_bone[i]));
+        log(ARX_LOG_WARN,
+            std::format("{}: group {} parent mismatch target={} reference={}",
+                        prefix,
+                        i,
+                        target.extras.parent_bone[i],
+                        reference.extras.parent_bone[i]));
       }
     }
   }
@@ -99,7 +105,7 @@ void addSyntheticPair(std::vector<std::pair<std::int32_t, std::int32_t>>& pairs,
 ArxReturnCode overwriteTexturePaths(ftl::Data& ftl, std::string_view path, std::string_view log_prefix) {
   if (ftl.texture_containers.empty()) return ARX_OK;
 
-  std::size_t n      = path.size();
+  std::size_t n = path.size();
   std::size_t copy_n = std::min(n, sizeof(ftl::TextureContainer::filename) - 1);
   if (n > copy_n) log(ARX_LOG_WARN, std::string(log_prefix) + ": path truncated to 255 chars");
 
@@ -122,8 +128,9 @@ ArxReturnCode applyTransform(tea::Data& tea, const AffineXform& xform) { return 
 ArxReturnCode snapFtlBoneOriginsToReference(ftl::Data& target, const ftl::Data& reference) {
   constexpr std::string_view kPrefix = "snapFtlBoneOriginsToReference";
   if (target.groups.size() != reference.groups.size()) {
-    log(ARX_LOG_ERROR, std::format("{}: group count mismatch target={} reference={}", kPrefix, target.groups.size(),
-                                   reference.groups.size()));
+    log(ARX_LOG_ERROR,
+        std::format(
+            "{}: group count mismatch target={} reference={}", kPrefix, target.groups.size(), reference.groups.size()));
     return ARX_FTL_BAD_GROUP_N;
   }
   warnGroupMismatch(target, reference, kPrefix);
@@ -134,10 +141,10 @@ ArxReturnCode snapFtlBoneOriginsToReference(ftl::Data& target, const ftl::Data& 
       log(ARX_LOG_ERROR, std::format("{}: group {} has invalid origin", kPrefix, i));
       return ARX_FTL_BAD_GROUP_ORIGIN;
     }
-    auto& target_pos    = target.vertices[target.groups[i].origin].position;
+    auto& target_pos = target.vertices[target.groups[i].origin].position;
     const auto& ref_pos = reference.vertices[reference.groups[i].origin].position;
-    max_before          = std::max(max_before, dist(target_pos, ref_pos));
-    target_pos          = ref_pos;
+    max_before = std::max(max_before, math::lengthf(target_pos - ref_pos));
+    target_pos = ref_pos;
   }
 
   log(ARX_LOG_INFO,
@@ -147,8 +154,8 @@ ArxReturnCode snapFtlBoneOriginsToReference(ftl::Data& target, const ftl::Data& 
 
 ArxReturnCode snapFtlActionPointsToReference(ftl::Data& target, const ftl::Data& reference) {
   constexpr std::string_view kPrefix = "snapFtlActionPointsToReference";
-  auto target_actions                = actionMap(target);
-  std::size_t snapped                = 0;
+  auto target_actions = actionMap(target);
+  std::size_t snapped = 0;
   for (const auto& ref_action : reference.actions) {
     auto it = target_actions.find(ref_action.name);
     if (it == target_actions.end()) {
@@ -174,15 +181,16 @@ ArxReturnCode snapFtlActionPointsToReference(ftl::Data& target, const ftl::Data&
 ArxReturnCode copyFtlSyntheticSelectionAffiliations(ftl::Data& target, const ftl::Data& reference) {
   constexpr std::string_view kPrefix = "copyFtlSyntheticSelectionAffiliations";
   if (target.groups.size() != reference.groups.size()) {
-    log(ARX_LOG_ERROR, std::format("{}: group count mismatch target={} reference={}", kPrefix, target.groups.size(),
-                                   reference.groups.size()));
+    log(ARX_LOG_ERROR,
+        std::format(
+            "{}: group count mismatch target={} reference={}", kPrefix, target.groups.size(), reference.groups.size()));
     return ARX_FTL_BAD_GROUP_N;
   }
 
   std::vector<std::pair<std::int32_t, std::int32_t>> pairs;
   if (validVertex(target, target.header.origin) && validVertex(reference, reference.header.origin)) {
-    addSyntheticPair(pairs, static_cast<std::int32_t>(reference.header.origin),
-                     static_cast<std::int32_t>(target.header.origin));
+    addSyntheticPair(
+        pairs, static_cast<std::int32_t>(reference.header.origin), static_cast<std::int32_t>(target.header.origin));
   }
 
   for (std::size_t i = 0; i < target.groups.size(); ++i) {
@@ -190,7 +198,8 @@ ArxReturnCode copyFtlSyntheticSelectionAffiliations(ftl::Data& target, const ftl
       log(ARX_LOG_ERROR, std::format("{}: group {} has invalid origin", kPrefix, i));
       return ARX_FTL_BAD_GROUP_ORIGIN;
     }
-    addSyntheticPair(pairs, static_cast<std::int32_t>(reference.groups[i].origin),
+    addSyntheticPair(pairs,
+                     static_cast<std::int32_t>(reference.groups[i].origin),
                      static_cast<std::int32_t>(target.groups[i].origin));
   }
 
@@ -222,8 +231,9 @@ ArxReturnCode copyFtlSyntheticSelectionAffiliations(ftl::Data& target, const ftl
       log(ARX_LOG_INFO, std::format("{}: {} +{} synthetic vertices", kPrefix, ref_sel.name, added_for_selection));
     }
   }
-  log(ARX_LOG_INFO, std::format("{}: copied {} synthetic affiliations across {} matched vertices", kPrefix, total_added,
-                                pairs.size()));
+  log(ARX_LOG_INFO,
+      std::format(
+          "{}: copied {} synthetic affiliations across {} matched vertices", kPrefix, total_added, pairs.size()));
   return ARX_OK;
 }
 

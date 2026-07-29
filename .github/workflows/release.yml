@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Merxtef
+
 name: Release
 
 on:
@@ -6,11 +9,50 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  validate:
+    name: Validate release
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          project_version=$(
+            sed -nE 's/^project\(arx-pistoris VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES.*$/\1/p' CMakeLists.txt
+          )
+          [[ -n "$project_version" ]] || { echo "Could not read the CMake project version" >&2; exit 1; }
+          [[ "$GITHUB_REF_NAME" == "v$project_version" ]] || {
+            echo "Tag $GITHUB_REF_NAME does not match project version $project_version" >&2
+            exit 1
+          }
+
+          git fetch --no-tags origin main
+          release_commit=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          git merge-base --is-ancestor "$release_commit" origin/main || {
+            echo "Release commit is not reachable from main" >&2
+            exit 1
+          }
+
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
     name: Build ${{ matrix.asset }}
+    needs:
+      - validate
+      - ci
     runs-on: ${{ matrix.os }}
 
     strategy:
@@ -19,21 +61,17 @@ jobs:
         include:
           - os: windows-2022
             asset: arx-pistoris-windows-x64.zip
+            cmake_args: ''
           - os: ubuntu-24.04
             asset: arx-pistoris-linux-x64.tar.gz
+            cmake_args: >-
+              -DCMAKE_CXX_FLAGS=--gcc-toolchain=/usr
+              -DCMAKE_EXE_LINKER_FLAGS=--gcc-toolchain=/usr
+              -DCMAKE_SHARED_LINKER_FLAGS=--gcc-toolchain=/usr
 
     steps:
       - uses: actions/checkout@v5
-
-      - name: Install Windows dependencies
-        if: runner.os == 'Windows'
-        run: choco install llvm ninja -y
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang g++-13 ninja-build
+      - uses: ./.github/actions/setup-llvm
 
       - name: Tool versions
         run: |
@@ -41,65 +79,36 @@ jobs:
           clang++ --version
           ninja --version
 
-      - name: Check Linux std::format support
-        if: runner.os == 'Linux'
-        run: |
-          cat > /tmp/check_format.cpp <<'EOF'
-          #include <format>
-          #include <string>
-
-          int main() {
-            std::string s = std::format("{}", 1);
-            return s == "1" ? 0 : 1;
-          }
-          EOF
-          clang++ --gcc-toolchain=/usr -std=c++20 /tmp/check_format.cpp -o /tmp/check_format
-          /tmp/check_format
-
-      - name: Configure Windows
-        if: runner.os == 'Windows'
-        run: cmake --preset release
-
-      - name: Configure Linux
-        if: runner.os == 'Linux'
+      - name: Configure
         run: >
           cmake --preset release
-          -DCMAKE_CXX_COMPILER=clang++
-          -DCMAKE_CXX_FLAGS=--gcc-toolchain=/usr
-          -DCMAKE_EXE_LINKER_FLAGS=--gcc-toolchain=/usr
-          -DCMAKE_SHARED_LINKER_FLAGS=--gcc-toolchain=/usr
+          -DARX_WARNINGS_AS_ERRORS=ON
+          ${{ matrix.cmake_args }}
 
       - name: Build CLI
-        run: cmake --build --preset release --target arx_pistoris_cli
+        run: cmake --build --preset release --target arx_pistoris_cli --parallel
 
       - name: Install CLI
         run: cmake --install build-release --prefix package/arx-pistoris
 
-      - name: Smoke test package
-        run: |
-          $exe = "package/arx-pistoris/bin/arx-pistor.exe"
-          if (!(Test-Path $exe)) { throw "missing $exe" }
-          & $exe
-          if ($LASTEXITCODE -ne 1) { throw "unexpected exit code: $LASTEXITCODE" }
-          exit 0
+      - name: Smoke test Windows package
         if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/ci/package-smoke.ps1 package/arx-pistoris
 
-      - name: Smoke test package
-        run: |
-          test -x package/arx-pistoris/bin/arx-pistor
-          set +e
-          package/arx-pistoris/bin/arx-pistor
-          rc="$?"
-          set -e
-          test "$rc" -eq 1
+      - name: Smoke test Linux package
         if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/ci/package-smoke.sh package/arx-pistoris
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
+        shell: pwsh
         run: Compress-Archive -Path package/arx-pistoris -DestinationPath ${{ matrix.asset }} -Force
 
       - name: Package Linux archive
         if: runner.os == 'Linux'
+        shell: bash
         run: tar -czf ${{ matrix.asset }} -C package arx-pistoris
 
       - name: Upload package artifact
@@ -111,8 +120,10 @@ jobs:
 
   release:
     name: Publish release
-    runs-on: ubuntu-latest
     needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
 
     steps:
       - name: Download package artifacts

@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-// Shared Arx material naming for OBJ and GLB
-
 #pragma once
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
 
 #include "utils/log.h"
 
@@ -86,7 +84,6 @@ static inline std::string flagSuffix(FaceType type) {
   return s;
 }
 
-// "no_tex" stem when empty. "__" in a stem breaks re-import; Arx assets never contain it
 static inline std::string matName(std::string_view tex_stem, FaceType type) {
   std::string name(tex_stem.empty() ? "no_tex" : tex_stem);
   name += flagSuffix(type);
@@ -97,8 +94,8 @@ static inline FaceType decodeFlags(std::string_view suffix) {
   FaceType type = 0;
   while (suffix.starts_with("__")) {
     suffix.remove_prefix(2);
-    auto next    = suffix.find("__");
-    auto token   = suffix.substr(0, next);
+    auto next = suffix.find("__");
+    auto token = suffix.substr(0, next);
     bool matched = false;
     for (const auto& f : kFlagNames) {
       if (token == f.name) {
@@ -115,8 +112,8 @@ static inline FaceType decodeFlags(std::string_view suffix) {
 }
 
 static inline std::pair<std::string_view, FaceType> decodeMatName(std::string_view name) {
-  auto sep   = name.find("__");
-  auto stem  = (sep == std::string_view::npos) ? name : name.substr(0, sep);
+  auto sep = name.find("__");
+  auto stem = (sep == std::string_view::npos) ? name : name.substr(0, sep);
   auto flags = (sep == std::string_view::npos) ? std::string_view{} : name.substr(sep);
   if (stem == "no_tex") stem = {};
   return {stem, decodeFlags(flags)};

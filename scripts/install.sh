@@ -1,4 +1,7 @@
 #!/usr/bin/env sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Merxtef
+
 set -eu
 
 repo="${ARX_PISTORIS_REPO:-Merxtef/arx-pistoris}"
@@ -50,9 +53,21 @@ if [ -z "$exe" ]; then
   exit 1
 fi
 
+package_root="$(CDPATH= cd -- "$(dirname "$exe")/.." && pwd)"
+doc_source="$package_root/share/doc/arx-pistoris"
+if [ ! -d "$doc_source" ]; then
+  echo "error: documentation directory not found in $asset" >&2
+  exit 1
+fi
+
 mkdir -p "$install_dir"
+install_dir="$(CDPATH= cd -- "$install_dir" && pwd)"
 cp "$exe" "$install_dir/arx-pistor"
 chmod 755 "$install_dir/arx-pistor"
+
+doc_dir="$(dirname "$install_dir")/share/doc/arx-pistoris"
+mkdir -p "$doc_dir"
+cp -R "$doc_source/." "$doc_dir/"
 
 case ":$PATH:" in
   *":$install_dir:"*) ;;

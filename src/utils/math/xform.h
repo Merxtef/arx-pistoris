@@ -3,9 +3,9 @@
 
 #pragma once
 #include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 namespace pistoris {
 

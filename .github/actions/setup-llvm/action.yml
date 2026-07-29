@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-FileCopyrightText: 2026 Merxtef
+
+name: Set up LLVM
+description: Install the LLVM 22 toolchain used by arx-pistoris
+
+runs:
+  using: composite
+  steps:
+    - name: Install LLVM on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        choco upgrade llvm --version=22.1.7 --allow-downgrade --yes --no-progress
+        choco upgrade ninja --yes --no-progress
+        'C:\Program Files\LLVM\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Install LLVM on Linux
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        wget -q https://apt.llvm.org/llvm.sh -O "$RUNNER_TEMP/llvm.sh"
+        chmod +x "$RUNNER_TEMP/llvm.sh"
+        sudo "$RUNNER_TEMP/llvm.sh" 22
+        sudo apt-get install -y clang-format-22 clang-tidy-22 g++-13 ninja-build
+
+        tool_dir="$RUNNER_TEMP/llvm-bin"
+        mkdir -p "$tool_dir"
+        for tool in clang clang++ clang-format clang-tidy; do
+          ln -sf "/usr/bin/$tool-22" "$tool_dir/$tool"
+        done
+        echo "$tool_dir" >> "$GITHUB_PATH"
