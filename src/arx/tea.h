@@ -2,8 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #pragma once
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "utils/cursor.h"
 

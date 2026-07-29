@@ -1,73 +1,123 @@
-# Testing
+# Testing and Fuzzing
 
-## Regular tests
+## Development Gate
 
-```bash
-# Configure and build first
-just configure dev
-just build dev
+Run the ordinary configure, build, and test workflow:
+
+```text
+just dev
 ```
 
-Run tests with doctest output:
+Run individual steps or suites:
 
-```bash
-just run-tests               # all tests
-just run-tests ftl           # all ftl tests (unit + api + corpus)
-just run-tests ftl unit      # ftl unit tests only
-just run-tests ftl api       # ftl api tests only
-just run-tests ftl corpus    # ftl corpus tests only
+```text
+just build tests
+just test
+just run-tests
+just run-tests ftl
+just run-tests level unit
+just run-tests level api
+just run-tests level corpus
 ```
 
-To run with ASan + UBSan (recommended before committing):
+`run-tests` takes an optional doctest suite followed by one of `unit`, `api`,
+`corpus`, `c-api`, `cpp-api`, `c-corpus`, or `cpp-corpus`.
 
-```bash
-just sanitize
+Before a release:
+
+```text
+just pre-release
 ```
 
-To run clang-tidy as an enforced gate:
+The release gate checks formatting without modifying files, runs the ordinary
+and sanitizer test suites, enforces clang-tidy, builds every fuzz target, and
+installs and smoke-tests the release CLI package.
 
-```bash
-just tidy
-```
+`sanitize` runs the test suite with ASan and UBSan. `tidy` treats clang-tidy
+diagnostics as errors. `format` applies clang-format; `format-check` only
+reports differences.
 
-To generate coverage:
+GitHub pull requests and pushes to `main` run development, sanitizer, and
+package checks on Windows and Linux. Formatting, clang-tidy, and fuzz builds
+run on Linux. Branch protection should require the `CI / Gate` check.
 
-```bash
+## Coverage
+
+Coverage requires `llvm-profdata` and `llvm-cov`:
+
+```text
 just coverage
-just coverage src/arx/ftl.cpp
+just coverage src/level/level.cpp
 ```
+
+The complete command prints a summary and writes an HTML report below
+`build-coverage/html/`.
+
+## Test Data
+
+Committed CC0 fixtures live below `data/fixtures/`:
+
+```text
+data/fixtures/model/
+data/fixtures/animation/
+data/fixtures/level/
+```
+
+Their sources and derivative families are recorded in
+[Test Data Attribution](../data/Attribution.md).
+
+Original Arx Fatalis resources cannot be committed. Optional corpus tests
+discover them by extension below:
+
+```text
+data/arx/ftl/
+data/arx/tea/
+data/arx/fts/
+data/arx/dlf/
+data/arx/llf/
+```
+
+Readers and independent native roundtrips test every matching file that is
+present. Level bundle tests use only complete same-level FTS/DLF/LLF triplets;
+an incomplete optional game triplet is ignored rather than treated as a test
+failure. Committed fixture triplets remain mandatory.
 
 ## Fuzzing
 
-Requires Clang with libFuzzer support.
+Build all libFuzzer targets:
 
-```bash
+```text
 just fuzz-build
 ```
 
-Then run a fuzzer:
+Run a parser or roundtrip target until interrupted:
 
-```bash
-just fuzz ftl             # FTL fuzzer - Ctrl+C to stop
-just fuzz ftl roundtrip   # FTL roundtrip fuzzer
-just fuzz ftl json        # FTL JSON import fuzzer
-just fuzz tea             # TEA fuzzer
-just fuzz tea roundtrip   # TEA roundtrip fuzzer
-just fuzz obj             # OBJ fuzzer
-just fuzz obj mtl         # OBJ+MTL fuzzer
-just fuzz glb             # GLB import fuzzer
+```text
+just fuzz ftl
+just fuzz ftl roundtrip
+just fuzz ftl json
+just fuzz tea
+just fuzz tea roundtrip
+just fuzz tea json
+just fuzz obj
+just fuzz obj mtl
+just fuzz glb
+just fuzz fts
+just fuzz fts roundtrip
+just fuzz llf
+just fuzz llf roundtrip
+just fuzz dlf
+just fuzz dlf roundtrip
+just fuzz level native-fts
+just fuzz level native-llf
+just fuzz level native-dlf
+just fuzz level native-dlf-embedded
+just fuzz level glb
 ```
 
-Corpus dirs (`fuzz-corpus/*/`) are gitignored and created automatically on first run.
-Seed files in `data/fixtures/*/` are used as starting inputs and never modified.
+Use `just fuzz-mine` with the same arguments to enable value profiling and
+final statistics without a curated dictionary.
 
-## Test assets
-
-`data/fixtures/` — CC0-licensed examples committed to the repo, organized by asset role:
-`model/`, `animation/`, and `level/`. Model fixtures use `native/`, `obj/`, `glb/`, and
-`json/`; level fixtures keep document identity in the path, such as `level/dlf/native/`
-and `level/dlf/json/`.
-
-`data/arx/<format>/` — original Arx Fatalis game assets extracted from the game. These cannot
-be committed (copyright). Place files here to run tests that require real game data; the
-directory is gitignored and native-only.
+Persistent corpora are written below `fuzz-corpus/`. Crash, timeout, leak, and
+OOM artifacts are written below `fuzz-corpus/artifacts/`. Committed fixtures
+and generated seed files are read as starting inputs and are never modified.

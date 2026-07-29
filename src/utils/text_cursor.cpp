@@ -39,7 +39,7 @@ Token TextCursor::next() noexcept {
       return tok;
     }
 
-    auto start     = pos_;
+    auto start = pos_;
     auto start_col = col_;
     while (pos_ < text_.size()) {
       char ch = text_[pos_];
@@ -60,7 +60,7 @@ Token TextCursor::restOfLine() noexcept {
 
   if (pos_ >= text_.size()) return {{}, TokenKind::kEnd, line_, col_};
 
-  auto start     = pos_;
+  auto start = pos_;
   auto start_col = col_;
 
   auto end = pos_;

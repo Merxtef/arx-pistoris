@@ -3,10 +3,11 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "external/json.h"
 #include "helpers.h"
@@ -16,7 +17,6 @@
 #include <utility>
 
 TEST_SUITE("json") {
-  // export produces arx-convert-compatible key names
   TEST_CASE("JsonFieldNames") {
     auto d = makeData(3);
     pistoris::ftl::TextureContainer tc{};
@@ -60,7 +60,6 @@ TEST_SUITE("json") {
     checkEq(d, d2);
   }
 
-  // all section types populated
   TEST_CASE("JsonRoundtripFull") {
     auto d = makeData(3);
 
@@ -71,16 +70,16 @@ TEST_SUITE("json") {
 
     pistoris::ftl::Group g;
     std::memcpy(g.name, "head", 5);
-    g.origin           = 0;
-    g.indices          = {0, 1};
+    g.origin = 0;
+    g.indices = {0, 1};
     g.blob_shadow_size = 1.5f;
     d.groups.push_back(std::move(g));
 
     pistoris::ftl::Action a{};
     std::memcpy(a.name, "hit", 4);
     a.vertex_idx = 2;
-    a.action     = 1;
-    a.sfx        = 3;
+    a.action = 1;
+    a.sfx = 3;
     d.actions.push_back(a);
 
     pistoris::ftl::Selection sel;
@@ -96,7 +95,6 @@ TEST_SUITE("json") {
     checkEq(d, d2);
   }
 
-  // u/v/vertexIdx must be JSON arrays, not objects
   TEST_CASE("JsonFaceArrayFields") {
     auto d = makeData(3);
     pistoris::ftl::TextureContainer tc{};
@@ -106,13 +104,11 @@ TEST_SUITE("json") {
 
     std::string out;
     CHECK(pistoris::exportFtlToJson(d, false, out) == ARX_OK);
-    // arrays produce "[" not "{"
     CHECK(out.find("\"vertexIdx\":[") != std::string::npos);
     CHECK(out.find("\"u\":[") != std::string::npos);
     CHECK(out.find("\"v\":[") != std::string::npos);
   }
 
-  // faceType stored as raw uint32 bitmask
   TEST_CASE("JsonFaceTypeBitmask") {
     auto d = makeData(3);
     pistoris::ftl::TextureContainer tc{};
@@ -135,13 +131,11 @@ TEST_SUITE("json") {
     CHECK(pistoris::importJsonToFtl("not json {{{", &d) == ARX_JSON_BAD_FORMAT);
   }
 
-  // empty object missing all required keys
   TEST_CASE("JsonImportMissingKeys") {
     pistoris::ftl::Data d;
     CHECK(pistoris::importJsonToFtl("{}", &d) == ARX_JSON_BAD_SCHEMA);
   }
 
-  // valid JSON but fails validateFtl (0 vertices)
   TEST_CASE("JsonImportBadValidation") {
     const char* text =
         R"({"header":{"origin":0,"name":""},"vertices":[],"faces":[],"textureContainers":[],"groups":[],"actions":[],"selections":[]})";
@@ -232,16 +226,16 @@ TEST_SUITE("json") {
     std::memcpy(tea.name, "walk", 5);
 
     pistoris::tea::Keyframe kf;
-    kf.num_frame  = 24;
+    kf.num_frame = 24;
     kf.flag_frame = pistoris::kTeaFlagFrameStep;
-    kf.translate  = pistoris::ArxVector3{1.0f, 2.0f, 3.0f};
-    kf.quat       = pistoris::ArxQuat{0.5f, 0.5f, 0.5f, 0.5f};
+    kf.translate = pistoris::ArxVector3{1.0f, 2.0f, 3.0f};
+    kf.quat = pistoris::ArxQuat{0.5f, 0.5f, 0.5f, 0.5f};
 
     pistoris::tea::GroupAnim group;
     group.key_group = 1;
-    group.quat      = pistoris::ArxQuat{0.5f, 0.0f, 0.5f, 0.0f};
+    group.quat = pistoris::ArxQuat{0.5f, 0.0f, 0.5f, 0.0f};
     group.translate = {4.0f, 5.0f, 6.0f};
-    group.zoom      = {1.0f, 1.0f, 1.0f};
+    group.zoom = {1.0f, 1.0f, 1.0f};
     kf.groups.push_back(group);
     tea.keyframes.push_back(kf);
 
@@ -282,15 +276,15 @@ TEST_SUITE("json") {
     std::memcpy(tea.name, "step", 5);
 
     pistoris::tea::Keyframe kf;
-    kf.num_frame  = 24;
+    kf.num_frame = 24;
     kf.flag_frame = pistoris::kTeaFlagFrameStep;
-    kf.translate  = pistoris::ArxVector3{1.0f, 2.0f, 3.0f};
-    kf.quat       = pistoris::ArxQuat{0.5f, 0.5f, 0.5f, 0.5f};
+    kf.translate = pistoris::ArxVector3{1.0f, 2.0f, 3.0f};
+    kf.quat = pistoris::ArxQuat{0.5f, 0.5f, 0.5f, 0.5f};
     pistoris::tea::GroupAnim group;
     group.key_group = 1;
-    group.quat      = pistoris::ArxQuat{0.5f, 0.0f, 0.5f, 0.0f};
+    group.quat = pistoris::ArxQuat{0.5f, 0.0f, 0.5f, 0.0f};
     group.translate = {4.0f, 5.0f, 6.0f};
-    group.zoom      = {1.0f, 1.0f, 1.0f};
+    group.zoom = {1.0f, 1.0f, 1.0f};
     kf.groups.push_back(group);
     auto& sample = kf.sample.emplace();
     std::memcpy(sample.name, "foot.wav", 9);
@@ -333,20 +327,23 @@ TEST_SUITE("json") {
   }
 
   TEST_CASE("TeaJsonImportRejectsBadHeaderSchema") {
-    const char* text = R"({"header":{"name":"","totalNumberOfFrames":2147483648},"keyframes":[{"frame":0,"groups":[]}]})";
+    const char* text =
+        R"({"header":{"name":"","totalNumberOfFrames":2147483648},"keyframes":[{"frame":0,"groups":[]}]})";
     pistoris::tea::Data tea;
     CHECK(pistoris::importJsonToTea(text, &tea) == ARX_JSON_BAD_SCHEMA);
   }
 
   TEST_CASE("TeaJsonImportRejectsBadKeyframeSchemas") {
     SUBCASE("frame") {
-      const char* text = R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":2147483648,"groups":[]}]})";
+      const char* text =
+          R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":2147483648,"groups":[]}]})";
       pistoris::tea::Data tea;
       CHECK(pistoris::importJsonToTea(text, &tea) == ARX_JSON_BAD_SCHEMA);
     }
 
     SUBCASE("flags") {
-      const char* text = R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"flags":4294967296,"groups":[]}]})";
+      const char* text =
+          R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"flags":4294967296,"groups":[]}]})";
       pistoris::tea::Data tea;
       CHECK(pistoris::importJsonToTea(text, &tea) == ARX_JSON_BAD_SCHEMA);
     }
@@ -359,19 +356,22 @@ TEST_SUITE("json") {
     }
 
     SUBCASE("time frame") {
-      const char* text = R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"timeFrame":"0","groups":[]}]})";
+      const char* text =
+          R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"timeFrame":"0","groups":[]}]})";
       pistoris::tea::Data tea;
       CHECK(pistoris::importJsonToTea(text, &tea) == ARX_JSON_BAD_SCHEMA);
     }
 
     SUBCASE("translate") {
-      const char* text = R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"translate":{"x":0},"groups":[]}]})";
+      const char* text =
+          R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"translate":{"x":0},"groups":[]}]})";
       pistoris::tea::Data tea;
       CHECK(pistoris::importJsonToTea(text, &tea) == ARX_JSON_BAD_SCHEMA);
     }
 
     SUBCASE("quaternion") {
-      const char* text = R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"quaternion":{"w":1},"groups":[]}]})";
+      const char* text =
+          R"({"header":{"name":"","totalNumberOfFrames":1},"keyframes":[{"frame":0,"quaternion":{"w":1},"groups":[]}]})";
       pistoris::tea::Data tea;
       CHECK(pistoris::importJsonToTea(text, &tea) == ARX_JSON_BAD_SCHEMA);
     }

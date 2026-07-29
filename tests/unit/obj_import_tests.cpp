@@ -3,8 +3,8 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/pistoris_types.h"
 
 #include "external/obj.h"
@@ -18,7 +18,6 @@
 TEST_SUITE("obj") {
   // --- Geometry roundtrip ---
 
-  // export -> import: vertex/face/texture counts match
   TEST_CASE("ImportRoundtripCounts") {
     auto src = makeData(3);
     pistoris::ftl::TextureContainer tc{};
@@ -26,8 +25,8 @@ TEST_SUITE("obj") {
     std::memcpy(tc.filename, fn, std::strlen(fn) + 1);
     src.texture_containers.push_back(tc);
     auto face = makeFace(0, 1, 2, 0);
-    face.u    = {0.0f, 1.0f, 0.0f};
-    face.v    = {0.0f, 0.0f, 1.0f};
+    face.u = {0.0f, 1.0f, 0.0f};
+    face.v = {0.0f, 0.0f, 1.0f};
     face.norm = {0, 0, 1};
     src.faces.push_back(face);
 
@@ -43,7 +42,6 @@ TEST_SUITE("obj") {
     CHECK(d.faces[0].texture_id == 0);
   }
 
-  // arx_path comment in the MTL survives into TextureContainer.filename
   TEST_CASE("ImportArxPathPreserved") {
     auto src = makeData(3);
     pistoris::ftl::TextureContainer tc{};
@@ -51,8 +49,8 @@ TEST_SUITE("obj") {
     std::memcpy(tc.filename, fn, std::strlen(fn) + 1);
     src.texture_containers.push_back(tc);
     auto face = makeFace(0, 1, 2, 0);
-    face.u    = {0.0f, 1.0f, 0.0f};
-    face.v    = {0.0f, 0.0f, 1.0f};
+    face.u = {0.0f, 1.0f, 0.0f};
+    face.v = {0.0f, 0.0f, 1.0f};
     face.norm = {0, 0, 1};
     src.faces.push_back(face);
 
@@ -66,7 +64,6 @@ TEST_SUITE("obj") {
     CHECK(std::string_view(d.texture_containers[0].filename) == "GRAPH\\OBJ3D\\BODY.BMP");
   }
 
-  // Face flags are encoded in usemtl and decoded back on import
   TEST_CASE("ImportFlagsRoundtrip") {
     auto src = makeData(3);
     pistoris::ftl::TextureContainer tc{};
@@ -74,8 +71,8 @@ TEST_SUITE("obj") {
     src.texture_containers.push_back(tc);
     auto face = makeFace(0, 1, 2, 0);
     face.type = pistoris::kFaceBitTrans;
-    face.u    = {0.0f, 1.0f, 0.0f};
-    face.v    = {0.0f, 0.0f, 1.0f};
+    face.u = {0.0f, 1.0f, 0.0f};
+    face.v = {0.0f, 0.0f, 1.0f};
     face.norm = {0, 0, 1};
     src.faces.push_back(face);
 
@@ -91,7 +88,6 @@ TEST_SUITE("obj") {
 
   // --- header fields ---
 
-  // header.name is set from obj_filename parameter
   TEST_CASE("ImportHeaderName") {
     const char* obj =
         "v 1 0 0\nv 0 1 0\nv 0 0 1\n"
@@ -103,7 +99,6 @@ TEST_SUITE("obj") {
     CHECK(std::string_view(d.header.name) == "arx_pistoris\\eyeball.obj");
   }
 
-  // header.name is empty (zeroed) when no filename given
   TEST_CASE("ImportHeaderNameEmpty") {
     const char* obj =
         "v 1 0 0\nv 0 1 0\nv 0 0 1\n"
@@ -115,9 +110,7 @@ TEST_SUITE("obj") {
     CHECK(d.header.name[0] == '\0');
   }
 
-  // # origin N (1-based) resolves to the FTL index of that OBJ position
-  // here vertex 2 (1-based) is unreferenced by faces so it gets appended at the end
-  TEST_CASE("ImportOrigin") {
+  TEST_CASE("ImportOriginResolvesUnreferencedPosition") {
     const char* obj =
         "v 1 0 0\nv 0 1 0\nv 0 0 1\n"  // positions 1,2,3 (1-based); origin = position 2
         "vn 1 0 0\nvn 0 1 0\nvn 0 0 1\n"
@@ -134,14 +127,12 @@ TEST_SUITE("obj") {
     CHECK(d.vertices[ftl_origin].position.z == 0.0f);
   }
 
-  // OBJ with no faces must be rejected
-  TEST_CASE("ImportOriginDefault") {
+  TEST_CASE("ImportRejectsNoGeometry") {
     pistoris::ftl::Data d;
     ArxReturnCode rc = pistoris::importObjToFtl("# no origin here\n", {}, "", &d);
     CHECK(rc == ARX_OBJ_NO_GEOMETRY);
   }
 
-  // no # origin comment with geometry -> {0,0,0} appended after geometry vertices
   TEST_CASE("ImportOriginDefaultWithGeometry") {
     const char* obj =
         "v 1 0 0\nv 0 1 0\nv 0 0 1\n"
@@ -158,9 +149,7 @@ TEST_SUITE("obj") {
     CHECK(d.vertices[orig].position.z == 0.0f);
   }
 
-  // Exported OBJ contains # origin 1 for a zero-origin FTL, and import picks it up
   TEST_CASE("ImportOriginRoundtrip") {
-    // MakeTriangleFtlWithTexture has origin=0 and has faces so OBJ can round-trip
     pistoris::ftl::Data src;
     src.header.origin = 0;
     src.vertices.push_back({{0, 0, 0}, {0, 0, 1}});
@@ -172,9 +161,9 @@ TEST_SUITE("obj") {
     pistoris::ftl::Face face{};
     face.vertex_idx = {0, 1, 2};
     face.texture_id = 0;
-    face.u          = {0.0f, 1.0f, 0.0f};
-    face.v          = {0.0f, 0.0f, 1.0f};
-    face.norm       = {0, 0, 1};
+    face.u = {0.0f, 1.0f, 0.0f};
+    face.v = {0.0f, 0.0f, 1.0f};
+    face.norm = {0, 0, 1};
     src.faces.push_back(face);
 
     std::string obj, mtl;
@@ -190,7 +179,6 @@ TEST_SUITE("obj") {
 
   // --- Untextured faces ---
 
-  // no_tex material -> textureId == kFtlTextureNone, no TextureContainer created
   TEST_CASE("ImportNoTex") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -206,7 +194,6 @@ TEST_SUITE("obj") {
     CHECK(d.texture_containers.empty());
   }
 
-  // Quad face is fan-triangulated into 2 triangles
   TEST_CASE("ImportQuadTriangulation") {
     const char* obj =
         "# origin 1\n"
@@ -223,7 +210,6 @@ TEST_SUITE("obj") {
 
   // --- MTL fallback tests ---
 
-  // When MTL has map_Kd but no # arx_path, map_Kd value is used as filename
   TEST_CASE("ImportNoArxPathFallback") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -241,7 +227,6 @@ TEST_SUITE("obj") {
     CHECK(std::string_view(d.texture_containers[0].filename) == "BODY.BMP");
   }
 
-  // map_Kd value with spaces in the path is parsed as a single token
   TEST_CASE("ImportMapKdWithSpaces") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -259,7 +244,6 @@ TEST_SUITE("obj") {
     CHECK(std::string_view(d.texture_containers[0].filename) == "folder\\my texture.bmp");
   }
 
-  // # arx_path value with spaces in the path is parsed as a single token
   TEST_CASE("ImportArxPathSpaceInDirectory") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -277,7 +261,6 @@ TEST_SUITE("obj") {
     CHECK(std::string_view(d.texture_containers[0].filename) == "folder\\my texture.bmp");
   }
 
-  // When MTL is absent entirely, stem is used as filename
   TEST_CASE("ImportNoMtlFallback") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -294,7 +277,6 @@ TEST_SUITE("obj") {
 
   // --- Transval tests ---
 
-  // MTL "d" line is parsed and stored in face.transval
   TEST_CASE("ImportTransvalFromMtl") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -313,17 +295,16 @@ TEST_SUITE("obj") {
     CHECK(d.faces[0].transval == 0.5f);
   }
 
-  // transval round-trips through export+import
   TEST_CASE("ImportTransvalRoundtrip") {
     using namespace pistoris;
     auto d1 = makeData(3);
     ftl::TextureContainer tc{};
     std::memcpy(tc.filename, "TEX.BMP", 8);
     d1.texture_containers.push_back(tc);
-    auto face     = makeFace(0, 1, 2, 0);
-    face.type     = kFaceBitTrans;
+    auto face = makeFace(0, 1, 2, 0);
+    face.type = kFaceBitTrans;
     face.transval = 0.5f;
-    face.norm     = {0, 0, 1};
+    face.norm = {0, 0, 1};
     d1.faces.push_back(face);
 
     std::string obj, mtl;
@@ -336,8 +317,6 @@ TEST_SUITE("obj") {
     CHECK(d2.faces[0].transval == 0.5f);
   }
 
-  // two FACE_BIT_TRANS faces with different transval average on export and both get the average on
-  // import
   TEST_CASE("ImportTransvalAverage") {
     using namespace pistoris;
     auto d1 = makeData(3);
@@ -345,10 +324,10 @@ TEST_SUITE("obj") {
     std::memcpy(tc.filename, "TEX.BMP", 8);
     d1.texture_containers.push_back(tc);
     for (float tv : {0.25f, 0.75f}) {
-      auto f     = makeFace(0, 1, 2, 0);
-      f.type     = kFaceBitTrans;
+      auto f = makeFace(0, 1, 2, 0);
+      f.type = kFaceBitTrans;
       f.transval = tv;
-      f.norm     = {0, 0, 1};
+      f.norm = {0, 0, 1};
       d1.faces.push_back(f);
     }
 
@@ -364,8 +343,7 @@ TEST_SUITE("obj") {
     CHECK(d2.faces[1].transval == 0.5f);
   }
 
-  // vt with present but non-float v must be rejected, not silently 0
-  TEST_CASE("VtMalformedVBadFormat") {
+  TEST_CASE("ImportRejectsMalformedVtSecondComponent") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
         "vn 0 0 1\nvn 0 0 1\nvn 0 0 1\n"
@@ -376,7 +354,6 @@ TEST_SUITE("obj") {
     CHECK(pistoris::importObjToFtl(obj, {}, "", &d) == ARX_OBJ_BAD_FORMAT);
   }
 
-  // vt with absent v is valid and defaults to 0
   TEST_CASE("VtAbsentVDefaultsToZero") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
@@ -390,7 +367,7 @@ TEST_SUITE("obj") {
     CHECK(d.faces[0].v.z == 0.0f);
   }
 
-  TEST_CASE("ImportBadVertexIdx") {
+  TEST_CASE("ImportBadVertexIndexx") {
     const char* obj =
         "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
         "vn 0 0 1\nvn 0 0 1\nvn 0 0 1\n"

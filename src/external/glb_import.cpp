@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/ftl.h"
 #include "arx/tea.h"
@@ -14,10 +15,10 @@
 #include "utils/log.h"
 #include "utils/math/mat4.h"
 #include "utils/math/quat.h"
-#include "utils/math/vec3.h"
 #include "utils/parse_utils.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -25,6 +26,7 @@
 #include <cstring>
 #include <format>
 #include <functional>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <span>
@@ -43,25 +45,25 @@ namespace {
 
 // --- glTF constants ---
 
-constexpr int kCompByte   = 5120;
-constexpr int kCompUByte  = 5121;
-constexpr int kCompShort  = 5122;
+constexpr int kCompByte = 5120;
+constexpr int kCompUByte = 5121;
+constexpr int kCompShort = 5122;
 constexpr int kCompUShort = 5123;
-constexpr int kCompUInt   = 5125;
-constexpr int kCompFloat  = 5126;
+constexpr int kCompUInt = 5125;
+constexpr int kCompFloat = 5126;
 
-constexpr int kModeTriangles     = 4;
+constexpr int kModeTriangles = 4;
 constexpr int kModeTriangleStrip = 5;
-constexpr int kModeTriangleFan   = 6;
+constexpr int kModeTriangleFan = 6;
 
-constexpr uint32_t kGlbMagic      = 0x46546C67u;  // 'glTF'
-constexpr uint32_t kGlbVersion    = 2u;
+constexpr uint32_t kGlbMagic = 0x46546C67u;  // 'glTF'
+constexpr uint32_t kGlbVersion = 2u;
 constexpr uint32_t kChunkTypeJson = 0x4E4F534Au;  // 'JSON'
-constexpr uint32_t kChunkTypeBin  = 0x004E4942u;  // 'BIN\0'
+constexpr uint32_t kChunkTypeBin = 0x004E4942u;   // 'BIN\0'
 
 struct BoneOrdinalName {
   bool has_ordinal = false;
-  size_t ordinal   = 0;
+  size_t ordinal = 0;
   std::string_view stripped_name;
 };
 
@@ -79,8 +81,8 @@ BoneOrdinalName parseBoneOrdinalName(std::string_view name) {
     ordinal = ordinal * 10 + static_cast<size_t>(c - '0');
   }
 
-  out.has_ordinal  = true;
-  out.ordinal      = ordinal;
+  out.has_ordinal = true;
+  out.ordinal = ordinal;
   out.stripped_name = name.substr(sep + 2);
   return out;
 }
@@ -88,30 +90,71 @@ BoneOrdinalName parseBoneOrdinalName(std::string_view name) {
 using math::kIdentityMat4;
 using math::Mat4;
 
-Mat4 nodeLocalMat4(const Json& node) {
-  if (node.contains("matrix")) {
-    Mat4 out{};
-    const auto& a = node.at("matrix");
-    for (int i = 0; i < 16; ++i) out.m[i] = a.at(i).get<float>();
-    return out;
+template <std::size_t Size>
+bool readFiniteFloatArray(const Json& value, std::array<float, Size>& out) {
+  if (!value.is_array() || value.size() != Size) return false;
+  for (std::size_t i = 0; i < Size; ++i) {
+    if (!value[i].is_number()) return false;
+    const double number = value[i].get<double>();
+    if (!std::isfinite(number) || std::abs(number) > std::numeric_limits<float>::max()) return false;
+    out[i] = static_cast<float>(number);
   }
+  return true;
+}
+
+// TODO: replace legacy JSON transform parsing with cgltf
+bool parseNodeLocalMat4(const Json& node, Mat4& out) {
+  if (!node.is_object()) return false;
+
+  const auto matrix = node.find("matrix");
+  if (matrix != node.end()) {
+    if (node.contains("translation") || node.contains("rotation") || node.contains("scale")) return false;
+    std::array<float, 16> values{};
+    if (!readFiniteFloatArray(*matrix, values)) return false;
+    std::ranges::copy(values, out.m);
+    return true;
+  }
+
   ArxVector3 t{0, 0, 0};
   ArxQuat r = math::kIdentityQuat;
   ArxVector3 s{1, 1, 1};
-  if (node.contains("translation")) {
-    const auto& a = node.at("translation");
-    t             = {a.at(0).get<float>(), a.at(1).get<float>(), a.at(2).get<float>()};
+
+  const auto translation = node.find("translation");
+  if (translation != node.end()) {
+    std::array<float, 3> values{};
+    if (!readFiniteFloatArray(*translation, values)) return false;
+    t = {values[0], values[1], values[2]};
   }
-  if (node.contains("rotation")) {
-    const auto& a = node.at("rotation");
+
+  const auto rotation = node.find("rotation");
+  if (rotation != node.end()) {
+    std::array<float, 4> values{};
+    if (!readFiniteFloatArray(*rotation, values)) return false;
+    const double length_squared =
+        static_cast<double>(values[0]) * values[0] + static_cast<double>(values[1]) * values[1] +
+        static_cast<double>(values[2]) * values[2] + static_cast<double>(values[3]) * values[3];
+    constexpr double kMinimumRotationLength = 1.0e-6;
+    if (!std::isfinite(length_squared) || length_squared <= kMinimumRotationLength * kMinimumRotationLength)
+      return false;
+    const double inverse_length = 1.0 / std::sqrt(length_squared);
     // glTF quaternion order is [x, y, z, w]
-    r = {a.at(3).get<float>(), a.at(0).get<float>(), a.at(1).get<float>(), a.at(2).get<float>()};
+    r = {
+        static_cast<float>(values[3] * inverse_length),
+        static_cast<float>(values[0] * inverse_length),
+        static_cast<float>(values[1] * inverse_length),
+        static_cast<float>(values[2] * inverse_length),
+    };
   }
-  if (node.contains("scale")) {
-    const auto& a = node.at("scale");
-    s             = {a.at(0).get<float>(), a.at(1).get<float>(), a.at(2).get<float>()};
+
+  const auto scale = node.find("scale");
+  if (scale != node.end()) {
+    std::array<float, 3> values{};
+    if (!readFiniteFloatArray(*scale, values)) return false;
+    s = {values[0], values[1], values[2]};
   }
-  return math::fromTrs(t, r, s);
+
+  out = math::fromTrs(t, r, s);
+  return true;
 }
 
 // --- GLB container parse ---
@@ -145,7 +188,7 @@ ArxReturnCode parseGlbContainer(std::span<const uint8_t> glb, std::span<const ui
   }
   if (json_len > c.remaining()) return ARX_UNEXPECTED_EOF;
   size_t json_off = glb.size() - c.remaining();
-  json_out        = std::span(glb.data() + json_off, json_len);
+  json_out = std::span(glb.data() + json_off, json_len);
   c.skip(json_len);
   if (!c) return ARX_UNEXPECTED_EOF;
 
@@ -157,7 +200,7 @@ ArxReturnCode parseGlbContainer(std::span<const uint8_t> glb, std::span<const ui
     if (bin_len > c.remaining()) return ARX_UNEXPECTED_EOF;
     if (bin_type == kChunkTypeBin) {
       size_t bin_off = glb.size() - c.remaining();
-      bin_out        = std::span(glb.data() + bin_off, bin_len);
+      bin_out = std::span(glb.data() + bin_off, bin_len);
     } else {
       log(ARX_LOG_INFO, std::format("GLB import: ignoring chunk type 0x{:x}", bin_type));
     }
@@ -170,12 +213,12 @@ ArxReturnCode parseGlbContainer(std::span<const uint8_t> glb, std::span<const ui
 struct AccessorView {
   int component_type = 0;
   std::string type;
-  size_t count          = 0;
-  bool normalized       = false;
-  size_t byte_offset    = 0;  // absolute offset into bin
-  size_t byte_stride    = 0;
+  size_t count = 0;
+  bool normalized = false;
+  size_t byte_offset = 0;  // absolute offset into bin
+  size_t byte_stride = 0;
   size_t component_size = 0;
-  size_t components     = 0;
+  size_t components = 0;
   std::span<const uint8_t> bin;
 };
 
@@ -229,11 +272,11 @@ ArxReturnCode resolveAccessor(const Json& gltf, std::span<const uint8_t> bin, si
   }
 
   out.component_type = acc.at("componentType").get<int>();
-  out.type           = acc.at("type").get<std::string>();
-  out.count          = acc.at("count").get<size_t>();
-  out.normalized     = acc.value("normalized", false);
+  out.type = acc.at("type").get<std::string>();
+  out.count = acc.at("count").get<size_t>();
+  out.normalized = acc.value("normalized", false);
   out.component_size = compSize(out.component_type);
-  out.components     = componentsPerType(out.type);
+  out.components = componentsPerType(out.type);
   if (out.component_size == 0 || out.components == 0) {
     log(ARX_LOG_ERROR, std::format("GLB import: bad componentType={} or type='{}'", out.component_type, out.type));
     return ARX_GLB_BAD_FORMAT;
@@ -256,11 +299,11 @@ ArxReturnCode resolveAccessor(const Json& gltf, std::span<const uint8_t> bin, si
     }
   }
 
-  size_t bv_off    = bv.value("byteOffset", size_t{0});
-  size_t bv_len    = bv.at("byteLength").get<size_t>();
-  size_t acc_off   = acc.value("byteOffset", size_t{0});
+  size_t bv_off = bv.value("byteOffset", size_t{0});
+  size_t bv_len = bv.at("byteLength").get<size_t>();
+  size_t acc_off = acc.value("byteOffset", size_t{0});
   size_t elem_pack = out.component_size * out.components;
-  out.byte_stride  = bv.value("byteStride", elem_pack);
+  out.byte_stride = bv.value("byteStride", elem_pack);
 
   if (out.byte_stride < elem_pack) return ARX_GLB_BAD_FORMAT;
 
@@ -272,7 +315,7 @@ ArxReturnCode resolveAccessor(const Json& gltf, std::span<const uint8_t> bin, si
     return ARX_OK;
   }
   size_t last_stride = 0;
-  size_t last_off    = 0;
+  size_t last_off = 0;
   if (!checkedMul(out.count - 1, out.byte_stride, last_stride)) return ARX_GLB_BAD_FORMAT;
   if (!checkedAdd(out.byte_offset, last_stride, last_off)) return ARX_GLB_BAD_FORMAT;
   if (!checkedAdd(last_off, elem_pack, last_off)) return ARX_GLB_BAD_FORMAT;
@@ -286,7 +329,7 @@ void decodeFloats(const AccessorView& a, size_t i, float* out) {
   const uint8_t* p = a.bin.data() + a.byte_offset + i * a.byte_stride;
   for (size_t c = 0; c < a.components; ++c) {
     const uint8_t* cp = p + c * a.component_size;
-    float v           = 0.0f;
+    float v = 0.0f;
     switch (a.component_type) {
       case kCompByte: {
         int8_t x;
@@ -323,7 +366,7 @@ void decodeFloats(const AccessorView& a, size_t i, float* out) {
         break;
       }
       default:
-        break;  // SILENT: resolveAccessor validates component_type upstream
+        break;  // Component type validated by resolveAccessor
     }
     out[c] = v;
   }
@@ -431,7 +474,7 @@ ArxReturnCode computeNodeWorlds(const Json& gltf, NodeWorld& nw) {
         log(ARX_LOG_ERROR, "GLB import: scene root listed twice");
         return ARX_GLB_BAD_FORMAT;
       }
-      nw.world[n]   = nodeLocalMat4(gltf["nodes"][n]);
+      if (!parseNodeLocalMat4(gltf["nodes"][n], nw.world[n])) return ARX_GLB_BAD_FORMAT;
       nw.reached[n] = true;
       queue.push_back(n);
     }
@@ -439,7 +482,7 @@ ArxReturnCode computeNodeWorlds(const Json& gltf, NodeWorld& nw) {
 
   for (size_t qhead = 0; qhead < queue.size(); ++qhead) {
     size_t parent_idx = queue[qhead];
-    const Json& node  = gltf["nodes"][parent_idx];
+    const Json& node = gltf["nodes"][parent_idx];
     if (!node.contains("children")) continue;
     for (const auto& cv : node["children"]) {
       size_t child = cv.get<size_t>();
@@ -448,10 +491,11 @@ ArxReturnCode computeNodeWorlds(const Json& gltf, NodeWorld& nw) {
         log(ARX_LOG_ERROR, std::format("GLB import: node {} reached twice (cycle or DAG)", child));
         return ARX_GLB_BAD_FORMAT;
       }
-      nw.parent[child]  = static_cast<int32_t>(parent_idx);
+      nw.parent[child] = static_cast<int32_t>(parent_idx);
       nw.reached[child] = true;
-      Mat4 local        = nodeLocalMat4(gltf["nodes"][child]);
-      nw.world[child]   = nw.world[parent_idx] * local;
+      Mat4 local;
+      if (!parseNodeLocalMat4(gltf["nodes"][child], local)) return ARX_GLB_BAD_FORMAT;
+      nw.world[child] = nw.world[parent_idx] * local;
       queue.push_back(child);
     }
   }
@@ -495,7 +539,7 @@ void buildMaterialContainers(const Json& gltf, ftl::Data& out, std::vector<MatFl
   material_tex_ids.reserve(nm);
   std::unordered_map<std::string, int16_t> tex_key_to_idx;
   for (size_t i = 0; i < nm; ++i) {
-    const Json& mat  = gltf["materials"][i];
+    const Json& mat = gltf["materials"][i];
     std::string name = mat.value("name", std::string{});
 
     auto [decoded_stem, decoded_flags] = decodeMatName(name);
@@ -523,7 +567,7 @@ void buildMaterialContainers(const Json& gltf, ftl::Data& out, std::vector<MatFl
         ftl::TextureContainer tc{};
         size_t copy_n = std::min(filename.size(), sizeof(tc.filename) - 1);
         std::memcpy(tc.filename, filename.data(), copy_n);
-        tex_id              = static_cast<int16_t>(out.texture_containers.size());
+        tex_id = static_cast<int16_t>(out.texture_containers.size());
         tex_key_to_idx[key] = tex_id;
         out.texture_containers.push_back(tc);
       }
@@ -617,8 +661,7 @@ struct VertJointInfo {
 
 ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, const NodeWorld& nw,
                                const std::vector<std::vector<int32_t>>& skin_to_unified,
-                               const std::vector<MatFlags>& mat_flags,
-                               std::span<const int16_t> material_tex_ids,
+                               const std::vector<MatFlags>& mat_flags, std::span<const int16_t> material_tex_ids,
                                std::span<const std::string> extras_names, ftl::Data& out,
                                std::vector<VertJointInfo>& vj_out, SelectionRegistry& sel_out) {
   size_t n_nodes = nw.world.size();
@@ -635,11 +678,11 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
     int32_t node_skin = node.contains("skin") ? node.at("skin").get<int32_t>() : -1;
     if (node_skin >= 0 && static_cast<size_t>(node_skin) >= skin_to_unified.size()) return ARX_GLB_BAD_FORMAT;
 
-    // world transform applies to positions AND normals
+    // FTL normals cannot preserve non-uniform scale or shear
     if (!math::isRotationUniformScale(nw.world[node_idx])) {
       log(ARX_LOG_ERROR,
           std::format("GLB import: mesh node {} world transform has non-uniform scale or shear", node_idx));
-      return ARX_GLB_NON_UNIFORM_SCALE;
+      return ARX_GLB_MODEL_NON_UNIFORM_SCALE;
     }
 
     const Json& mesh = gltf["meshes"][mesh_idx];
@@ -647,7 +690,7 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
 
     for (size_t prim_i = 0; prim_i < mesh["primitives"].size(); ++prim_i) {
       const Json& prim = mesh["primitives"][prim_i];
-      int mode         = prim.value("mode", kModeTriangles);
+      int mode = prim.value("mode", kModeTriangles);
 
       if (!prim.contains("attributes")) continue;
       const Json& attrs = prim["attributes"];
@@ -712,8 +755,11 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
         if (sel_av.component_type != kCompFloat && !sel_av.normalized) continue;
         if (isStandardNonSelectionSemantic(key)) continue;
         if (sel_av.count != pos_av.count) {
-          log(ARX_LOG_WARN, std::format("GLB import: attribute '{}' count {} != POSITION count {}; skipping", key,
-                                        sel_av.count, pos_av.count));
+          log(ARX_LOG_WARN,
+              std::format("GLB import: attribute '{}' count {} != POSITION count {}; skipping",
+                          key,
+                          sel_av.count,
+                          pos_av.count));
           continue;
         }
         std::string ftl_name;
@@ -726,9 +772,11 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
         ++slot_index;
       }
       if (!extras_names.empty() && slot_index > extras_names.size()) {
-        log(ARX_LOG_WARN, std::format("GLB import: {} selection slot(s) but extras list has {} entries; "
-                                      "extra slots fall back to decoded key names",
-                                      slot_index, extras_names.size()));
+        log(ARX_LOG_WARN,
+            std::format("GLB import: {} selection slot(s) but extras list has {} entries; "
+                        "extra slots fall back to decoded key names",
+                        slot_index,
+                        extras_names.size()));
       }
 
       std::vector<uint32_t> src_indices;
@@ -769,7 +817,7 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
         }
         if (out.vertices.size() + 1 >= kFtlMaxVertices) {
           log(ARX_LOG_ERROR, "GLB import: vertex count exceeds 16-bit ceiling");
-          return ARX_GLB_TOO_MANY_VERTICES;
+          return ARX_GLB_MODEL_TOO_MANY_VERTICES;
         }
         if (glb_v >= pos_av.count) return ARX_GLB_BAD_FORMAT;
 
@@ -781,13 +829,13 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
         if (has_nrm) {
           float n[3]{};
           decodeFloats(nrm_av, glb_v, n);
-          nrm = math::normalizeOr(math::xformDir(world, ArxVector3{n[0], n[1], n[2]}), {0, 0, 1});
+          nrm = math::normalizeZeroOr(math::xformDir(world, ArxVector3{n[0], n[1], n[2]}), {0, 0, 1});
         }
 
         ftl::Vertex v{};
         v.position = pos;
-        v.normal   = nrm;
-        ftl_idx    = static_cast<uint16_t>(out.vertices.size());
+        v.normal = nrm;
+        ftl_idx = static_cast<uint16_t>(out.vertices.size());
         out.vertices.push_back(v);
 
         VertJointInfo vji{};
@@ -795,7 +843,7 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
           if (glb_v >= w_av.count) return ARX_GLB_BAD_FORMAT;
           float w[4]{};
           decodeFloats(w_av, glb_v, w);
-          int best_c   = -1;
+          int best_c = -1;
           float best_w = 0.0f;
           for (int c = 0; c < 4; ++c)
             if (w[c] > best_w) {
@@ -803,14 +851,16 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
               best_c = c;
             }
           if (best_c >= 0 && best_w > 0.0f && node_skin >= 0) {
-            uint32_t j_local  = decodeJointComponent(j_av, glb_v, best_c);
+            uint32_t j_local = decodeJointComponent(j_av, glb_v, best_c);
             const auto& remap = skin_to_unified[node_skin];
             if (j_local >= remap.size()) return ARX_GLB_BAD_FORMAT;
             vji.dominant_joint = remap[j_local];
             if (best_w < 0.7f)
-              log(ARX_LOG_WARN, std::format("GLB import: vertex {} dominant weight {:.3f} < 0.7; secondary "
-                                            "influences discarded",
-                                            ftl_idx, best_w));
+              log(ARX_LOG_WARN,
+                  std::format("GLB import: vertex {} dominant weight {:.3f} < 0.7; secondary "
+                              "influences discarded",
+                              ftl_idx,
+                              best_w));
           }
         }
         vj_out.push_back(vji);
@@ -867,11 +917,11 @@ ArxReturnCode ingestPrimitives(const Json& gltf, std::span<const uint8_t> bin, c
         ftl::Face f{};
         f.vertex_idx = {v0, v1, v2};
         f.texture_id = face_tex;
-        f.type       = mf.extra;
-        f.transval   = mf.transval;
-        f.u          = {uv0.x, uv1.x, uv2.x};
-        f.v          = {uv0.y, uv1.y, uv2.y};
-        f.norm       = n;
+        f.type = mf.extra;
+        f.transval = mf.transval;
+        f.u = {uv0.x, uv1.x, uv2.x};
+        f.v = {uv0.y, uv1.y, uv2.y};
+        f.norm = n;
         out.faces.push_back(f);
       }
     }
@@ -925,7 +975,7 @@ static ArxReturnCode mergeSkinJoints(const Json& gltf, std::span<const uint8_t> 
     const Json& skin = gltf["skins"][s];
     if (!skin.contains("joints")) return ARX_GLB_BAD_FORMAT;
     const Json& joints = skin["joints"];
-    size_t nj          = joints.size();
+    size_t nj = joints.size();
     if (nj == 0) continue;
 
     if (unified.mesh_node_for_skin[s] == SIZE_MAX) {
@@ -966,12 +1016,20 @@ static ArxReturnCode mergeSkinJoints(const Json& gltf, std::span<const uint8_t> 
       // disagreement => file posed at frame 0, not bind
       if (auto inv = math::inverseAffine(ibm[j])) {
         ArxVector3 expected = math::xformPoint(nw.world[unified.mesh_node_for_skin[s]], math::translation(*inv));
-        ArxVector3 jw_t     = math::translation(nw.world[n]);
-        ArxVector3 delta    = jw_t - expected;
-        if (math::lengthSquared(delta) > 1e-6f) {
-          log(ARX_LOG_DEBUG, std::format("GLB import: joint node {} (skin {}) BFS world ({},{},{}) != "
-                                         "M.world * inverse(IBM) ({},{},{})",
-                                         n, s, jw_t.x, jw_t.y, jw_t.z, expected.x, expected.y, expected.z));
+        ArxVector3 jw_t = math::translation(nw.world[n]);
+        ArxVector3 delta = jw_t - expected;
+        if (math::lengthSquaredf(delta) > 1e-6f) {
+          log(ARX_LOG_DEBUG,
+              std::format("GLB import: joint node {} (skin {}) BFS world ({},{},{}) != "
+                          "M.world * inverse(IBM) ({},{},{})",
+                          n,
+                          s,
+                          jw_t.x,
+                          jw_t.y,
+                          jw_t.z,
+                          expected.x,
+                          expected.y,
+                          expected.z));
         }
       }
     }
@@ -989,16 +1047,16 @@ static ArxReturnCode computeBindWorlds(const UnifiedJoints& unified, const NodeW
     if (!math::isRotationUniformScale(unified.joint_ibm[u])) {
       log(ARX_LOG_ERROR,
           std::format("GLB import: IBM for joint {} has non-uniform scale or shear", unified.joint_nodes[u]));
-      return ARX_GLB_NON_UNIFORM_SCALE;
+      return ARX_GLB_MODEL_NON_UNIFORM_SCALE;
     }
     auto inv = math::inverseAffine(unified.joint_ibm[u]);
     if (!inv) {
       log(ARX_LOG_ERROR, std::format("GLB import: IBM for joint {} is singular", unified.joint_nodes[u]));
       return ARX_GLB_BAD_FORMAT;
     }
-    const Mat4& m        = nw.world[unified.mesh_node_for_skin[unified.joint_owner_skin[u]]];
+    const Mat4& m = nw.world[unified.mesh_node_for_skin[unified.joint_owner_skin[u]]];
     bind_world_matrix[u] = m * *inv;
-    bind_world[u]        = math::translation(bind_world_matrix[u]);
+    bind_world[u] = math::translation(bind_world_matrix[u]);
   }
   return ARX_OK;
 }
@@ -1026,11 +1084,11 @@ static ArxReturnCode computeJointParents(const UnifiedJoints& unified, const Nod
   bool from_multiple_skins = (n_skins > 1);
   if (root_count == 0) {
     log(ARX_LOG_ERROR, "GLB import: skeleton has no root joint");
-    return from_multiple_skins ? ARX_GLB_MULTIPLE_SKINS : ARX_FTL_MULTIPLE_ROOTS;
+    return from_multiple_skins ? ARX_GLB_MODEL_MULTIPLE_SKINS : ARX_FTL_MULTIPLE_ROOTS;
   }
   if (root_count > 1) {
     log(ARX_LOG_ERROR, std::format("GLB import: unified skeleton has {} root joints, only one allowed", root_count));
-    return from_multiple_skins ? ARX_GLB_MULTIPLE_SKINS : ARX_FTL_MULTIPLE_ROOTS;
+    return from_multiple_skins ? ARX_GLB_MODEL_MULTIPLE_SKINS : ARX_FTL_MULTIPLE_ROOTS;
   }
   return ARX_OK;
 }
@@ -1049,14 +1107,14 @@ static ArxReturnCode orderJointsTopologically(const Json& gltf, const UnifiedJoi
   std::vector<int32_t> ordinal_topo(nj_unified, -1);
   std::vector<int32_t> ordinal_owner(nj_unified, -1);
   std::vector<int32_t> unified_ordinal(nj_unified, -1);
-  bool saw_ordinal      = false;
-  bool missing_ordinal  = false;
-  bool duplicate        = false;
-  bool out_of_range     = false;
+  bool saw_ordinal = false;
+  bool missing_ordinal = false;
+  bool duplicate = false;
+  bool out_of_range = false;
   bool ordinal_topology = true;
   for (size_t u = 0; u < nj_unified; ++u) {
-    size_t node_idx             = unified.joint_nodes[u];
-    std::string name            = gltf["nodes"][node_idx].value("name", std::string{});
+    size_t node_idx = unified.joint_nodes[u];
+    std::string name = gltf["nodes"][node_idx].value("name", std::string{});
     BoneOrdinalName parsed_name = parseBoneOrdinalName(name);
     if (!parsed_name.has_ordinal) {
       missing_ordinal = true;
@@ -1075,7 +1133,7 @@ static ArxReturnCode orderJointsTopologically(const Json& gltf, const UnifiedJoi
     }
 
     ordinal_owner[parsed_name.ordinal] = static_cast<int32_t>(u);
-    unified_ordinal[u]                 = static_cast<int32_t>(parsed_name.ordinal);
+    unified_ordinal[u] = static_cast<int32_t>(parsed_name.ordinal);
   }
 
   if (saw_ordinal && !missing_ordinal && !duplicate && !out_of_range) {
@@ -1089,7 +1147,7 @@ static ArxReturnCode orderJointsTopologically(const Json& gltf, const UnifiedJoi
 
     if (!missing_ordinal) {
       for (size_t ordinal = 0; ordinal < nj_unified; ++ordinal) {
-        int32_t u  = ordinal_topo[ordinal];
+        int32_t u = ordinal_topo[ordinal];
         int32_t pu = joint_parent[u];
         if (pu >= 0 && unified_ordinal[static_cast<size_t>(pu)] >= static_cast<int32_t>(ordinal)) {
           ordinal_topology = false;
@@ -1101,8 +1159,8 @@ static ArxReturnCode orderJointsTopologically(const Json& gltf, const UnifiedJoi
     if (!missing_ordinal && ordinal_topology) {
       topo = std::move(ordinal_topo);
       for (size_t t = 0; t < topo.size(); ++t) unified_to_topo_out[topo[t]] = static_cast<int32_t>(t);
-      log(ARX_LOG_INFO, std::format("GLB import: using ordinal bone name prefixes to restore {} bone(s) to FTL order",
-                                    nj_unified));
+      log(ARX_LOG_INFO,
+          std::format("GLB import: using ordinal bone name prefixes to restore {} bone(s) to FTL order", nj_unified));
       return ARX_OK;
     }
   }
@@ -1110,16 +1168,17 @@ static ArxReturnCode orderJointsTopologically(const Json& gltf, const UnifiedJoi
   if (saw_ordinal) {
     if (missing_ordinal)
       log(ARX_LOG_WARN,
-          "GLB import: ignoring ordinal bone name prefixes because some bones miss ordinals or the ordinal set has gaps");
+          "GLB import: ignoring ordinal bone name prefixes because some bones miss ordinals or the ordinal set has "
+          "gaps");
     if (duplicate)
       log(ARX_LOG_WARN, "GLB import: ignoring ordinal bone name prefixes because duplicate ordinals were found");
     if (out_of_range)
       log(ARX_LOG_WARN,
-          std::format("GLB import: ignoring ordinal bone name prefixes because at least one ordinal exceeds bone count {}",
-                      nj_unified));
+          std::format(
+              "GLB import: ignoring ordinal bone name prefixes because at least one ordinal exceeds bone count {}",
+              nj_unified));
     if (!ordinal_topology)
-      log(ARX_LOG_WARN,
-          "GLB import: ignoring ordinal bone name prefixes because they put a child before its parent");
+      log(ARX_LOG_WARN, "GLB import: ignoring ordinal bone name prefixes because they put a child before its parent");
   }
 
   bool linear_valid = true;
@@ -1161,7 +1220,7 @@ static ArxReturnCode orderJointsTopologically(const Json& gltf, const UnifiedJoi
   if (topo.size() != nj_unified) {
     log(ARX_LOG_ERROR, "GLB import: skeleton has unreachable joints (disconnected component)");
     bool from_multiple_skins = (n_skins > 1);
-    return from_multiple_skins ? ARX_GLB_MULTIPLE_SKINS : ARX_FTL_MULTIPLE_ROOTS;
+    return from_multiple_skins ? ARX_GLB_MODEL_MULTIPLE_SKINS : ARX_FTL_MULTIPLE_ROOTS;
   }
   return ARX_OK;
 }
@@ -1193,14 +1252,14 @@ ArxReturnCode buildSkeleton(const Json& gltf, std::span<const uint8_t> bin, cons
 
   bones_out.resize(nj_unified);
   for (size_t t = 0; t < nj_unified; ++t) {
-    int32_t u            = topo[t];
-    BoneInfo& bi         = bones_out[t];
-    bi.joint_node        = unified.joint_nodes[u];
-    bi.parent_topo       = (joint_parent[u] >= 0) ? unified_to_topo_out[joint_parent[u]] : -1;
-    bi.world_bind_pos    = bind_world[u];
+    int32_t u = topo[t];
+    BoneInfo& bi = bones_out[t];
+    bi.joint_node = unified.joint_nodes[u];
+    bi.parent_topo = (joint_parent[u] >= 0) ? unified_to_topo_out[joint_parent[u]] : -1;
+    bi.world_bind_pos = bind_world[u];
     bi.bind_world_matrix = bind_world_matrix[u];
-    std::string nm       = gltf["nodes"][unified.joint_nodes[u]].value("name", std::string{});
-    auto parsed_name     = parseBoneOrdinalName(nm);
+    std::string nm = gltf["nodes"][unified.joint_nodes[u]].value("name", std::string{});
+    auto parsed_name = parseBoneOrdinalName(nm);
     if (parsed_name.has_ordinal) nm = std::string(parsed_name.stripped_name);
     if (nm.empty()) nm = std::format("bone_{}", t);
     for (auto& ch : nm) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -1220,12 +1279,11 @@ void emitGroups(const Json& gltf, const std::vector<BoneInfo>& bones, const std:
   for (int32_t t = 0; t < static_cast<int32_t>(nb); ++t)
     if (bones[t].parent_topo >= 0) children[bones[t].parent_topo].push_back(t);
 
-  // one synthetic pivot vertex per bone
   size_t pivot_base = out.vertices.size();
   for (size_t t = 0; t < nb; ++t) {
     ftl::Vertex pv{};
     pv.position = bones[t].world_bind_pos;
-    pv.normal   = {0.0f, 1.0f, 0.0f};
+    pv.normal = {0.0f, 1.0f, 0.0f};
     out.vertices.push_back(pv);
   }
 
@@ -1251,9 +1309,9 @@ void emitGroups(const Json& gltf, const std::vector<BoneInfo>& bones, const std:
     ftl::Group g{};
     size_t copy_n = std::min(bones[t].name.size(), sizeof(g.name) - 1);
     std::memcpy(g.name, bones[t].name.data(), copy_n);
-    g.origin           = static_cast<uint32_t>(pivot_base + t);
+    g.origin = static_cast<uint32_t>(pivot_base + t);
     g.blob_shadow_size = 0.0f;
-    const Json& jnode  = gltf["nodes"][bones[t].joint_node];
+    const Json& jnode = gltf["nodes"][bones[t].joint_node];
     if (jnode.contains("extras") && jnode["extras"].contains("arx_blob_shadow_size")) {
       g.blob_shadow_size = jnode["extras"]["arx_blob_shadow_size"].get<float>();
     }
@@ -1307,22 +1365,25 @@ ArxReturnCode importActionPoints(const Json& gltf, const NodeWorld& nw, const st
     }
 
     // accumulate local TRS up to the nearest joint; BFS-world fallback if no joint is found
-    Mat4 chain          = nodeLocalMat4(node);
+    Mat4 chain;
+    if (!parseNodeLocalMat4(node, chain)) return ARX_GLB_BAD_FORMAT;
     int32_t parent_topo = -1;
-    int32_t cur_parent  = nw.parent[n];
+    int32_t cur_parent = nw.parent[n];
     while (cur_parent >= 0) {
       auto it = joint_node_to_topo.find(static_cast<size_t>(cur_parent));
       if (it != joint_node_to_topo.end()) {
         parent_topo = it->second;
         break;
       }
-      chain      = nodeLocalMat4(gltf["nodes"][cur_parent]) * chain;
+      Mat4 parent_local;
+      if (!parseNodeLocalMat4(gltf["nodes"][cur_parent], parent_local)) return ARX_GLB_BAD_FORMAT;
+      chain = parent_local * chain;
       cur_parent = nw.parent[cur_parent];
     }
 
     if (out.vertices.size() >= kFtlMaxVertices) {
       log(ARX_LOG_ERROR, "GLB import: vertex count exceeds 16-bit ceiling (action points)");
-      return ARX_GLB_TOO_MANY_VERTICES;
+      return ARX_GLB_MODEL_TOO_MANY_VERTICES;
     }
     if (out.actions.size() >= kFtlMaxActions) {
       log(ARX_LOG_WARN, "GLB import: action count limit reached, dropping remaining actions");
@@ -1332,14 +1393,14 @@ ArxReturnCode importActionPoints(const Json& gltf, const NodeWorld& nw, const st
     ArxVector3 wpos;
     if (parent_topo >= 0) {
       const Mat4& bind = bones[parent_topo].bind_world_matrix;
-      wpos             = math::xformPoint(bind, math::translation(chain));
+      wpos = math::xformPoint(bind, math::translation(chain));
     } else {
       wpos = math::translation(nw.world[n]);
     }
 
     ftl::Vertex av{};
-    av.position        = wpos;
-    av.normal          = {0.0f, 1.0f, 0.0f};
+    av.position = wpos;
+    av.normal = {0.0f, 1.0f, 0.0f};
     int32_t vertex_idx = static_cast<int32_t>(out.vertices.size());
     out.vertices.push_back(av);
 
@@ -1376,9 +1437,7 @@ void warnUnselectedSyntheticVertices(const ftl::Data& ftl) {
 
   if (missing == 0) return;
 
-  log(ARX_LOG_WARN,
-      std::format("GLB import: {} synthetic origin/action vertices are not in any selection.",
-                  missing));
+  log(ARX_LOG_WARN, std::format("GLB import: {} synthetic origin/action vertices are not in any selection.", missing));
 }
 
 std::set<int32_t> collectSyntheticVertices(const ftl::Data& ftl) {
@@ -1453,8 +1512,9 @@ void guessSyntheticSelectionAffiliations(ftl::Data& ftl) {
         joined += ", ";
         joined += weak[i];
       }
-      log(ARX_LOG_WARN, std::format("GLB import: group origin '{}' selection guesses were applied with low support: {}",
-                                    group.name, joined));
+      log(ARX_LOG_WARN,
+          std::format(
+              "GLB import: group origin '{}' selection guesses were applied with low support: {}", group.name, joined));
     }
   }
 
@@ -1490,10 +1550,10 @@ bool decomposeRestTrs(const Mat4& m, std::string_view bone_name, RestTRS& out) {
   float c0[3] = {m.m[0], m.m[1], m.m[2]};
   float c1[3] = {m.m[4], m.m[5], m.m[6]};
   float c2[3] = {m.m[8], m.m[9], m.m[10]};
-  float l0    = std::sqrt(c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2]);
-  float l1    = std::sqrt(c1[0] * c1[0] + c1[1] * c1[1] + c1[2] * c1[2]);
-  float l2    = std::sqrt(c2[0] * c2[0] + c2[1] * c2[1] + c2[2] * c2[2]);
-  float s     = (l0 + l1 + l2) / 3.0f;
+  float l0 = std::sqrt(c0[0] * c0[0] + c0[1] * c0[1] + c0[2] * c0[2]);
+  float l1 = std::sqrt(c1[0] * c1[0] + c1[1] * c1[1] + c1[2] * c1[2]);
+  float l2 = std::sqrt(c2[0] * c2[0] + c2[1] * c2[1] + c2[2] * c2[2]);
+  float s = (l0 + l1 + l2) / 3.0f;
 
   if (s < 1e-6f) {
     log(ARX_LOG_ERROR, std::format("GLB import: bone '{}' rest matrix has near-zero scale", bone_name));
@@ -1519,28 +1579,28 @@ bool decomposeRestTrs(const Mat4& m, std::string_view bone_name, RestTRS& out) {
   ArxQuat q;
   if (trace > 0.0f) {
     float ss = std::sqrt(trace + 1.0f) * 2.0f;
-    q.w      = 0.25f * ss;
-    q.x      = (r21 - r12) / ss;
-    q.y      = (r02 - r20) / ss;
-    q.z      = (r10 - r01) / ss;
+    q.w = 0.25f * ss;
+    q.x = (r21 - r12) / ss;
+    q.y = (r02 - r20) / ss;
+    q.z = (r10 - r01) / ss;
   } else if (r00 > r11 && r00 > r22) {
     float ss = std::sqrt(1.0f + r00 - r11 - r22) * 2.0f;
-    q.w      = (r21 - r12) / ss;
-    q.x      = 0.25f * ss;
-    q.y      = (r01 + r10) / ss;
-    q.z      = (r02 + r20) / ss;
+    q.w = (r21 - r12) / ss;
+    q.x = 0.25f * ss;
+    q.y = (r01 + r10) / ss;
+    q.z = (r02 + r20) / ss;
   } else if (r11 > r22) {
     float ss = std::sqrt(1.0f + r11 - r00 - r22) * 2.0f;
-    q.w      = (r02 - r20) / ss;
-    q.x      = (r01 + r10) / ss;
-    q.y      = 0.25f * ss;
-    q.z      = (r12 + r21) / ss;
+    q.w = (r02 - r20) / ss;
+    q.x = (r01 + r10) / ss;
+    q.y = 0.25f * ss;
+    q.z = (r12 + r21) / ss;
   } else {
     float ss = std::sqrt(1.0f + r22 - r00 - r11) * 2.0f;
-    q.w      = (r10 - r01) / ss;
-    q.x      = (r02 + r20) / ss;
-    q.y      = (r12 + r21) / ss;
-    q.z      = 0.25f * ss;
+    q.w = (r10 - r01) / ss;
+    q.x = (r02 + r20) / ss;
+    q.y = (r12 + r21) / ss;
+    q.z = 0.25f * ss;
   }
   out.r = q;
   return true;
@@ -1557,9 +1617,10 @@ int32_t identifyWrapperNode(const NodeWorld& nw, const std::vector<BoneInfo>& bo
   }
   if (candidates.size() == 1) return *candidates.begin();
   if (candidates.size() > 1) {
-    log(ARX_LOG_WARN, std::format("GLB import: {} distinct wrapper nodes found for root joints; root entity "
-                                  "translation/rotation channels disabled",
-                                  candidates.size()));
+    log(ARX_LOG_WARN,
+        std::format("GLB import: {} distinct wrapper nodes found for root joints; root entity "
+                    "translation/rotation channels disabled",
+                    candidates.size()));
   }
   return -1;
 }
@@ -1620,8 +1681,10 @@ void normalizeQuat4(float* q) {
 ArxQuat quatConj(ArxQuat q) { return {q.w, -q.x, -q.y, -q.z}; }
 
 ArxQuat quatMul(ArxQuat a, ArxQuat b) {
-  return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z, a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
-          a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x, a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
+  return {a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+          a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+          a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+          a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w};
 }
 
 // v' = q * (0,v) * conj(q), imaginary part
@@ -1654,7 +1717,7 @@ void sampleAt(const Sampler& sm, float t, int components, bool is_quat, float* o
     decodeFloats(sm.output, i, out);
     return;
   }
-  float dt    = sm.in_times[i + 1] - sm.in_times[i];
+  float dt = sm.in_times[i + 1] - sm.in_times[i];
   float alpha = dt > 0.0f ? (t - sm.in_times[i]) / dt : 0.0f;
   float a[4]{}, b[4]{};
   decodeFloats(sm.output, i, a);
@@ -1707,7 +1770,7 @@ static ArxReturnCode collectAnimChannels(const Json& gltf, std::span<const uint8
       continue;
     }
     int32_t target_node = tgt.at("node").get<int32_t>();
-    int32_t si          = ch.at("sampler").get<int32_t>();
+    int32_t si = ch.at("sampler").get<int32_t>();
 
     ARX_RETURN_IF_ERR(ensure(si));
     const auto& sm = maps.samplers[si];
@@ -1796,9 +1859,9 @@ static ArxReturnCode derivePerBoneKeyframes(const NodeWorld& nw, const std::vect
   std::fill(world_t_done.begin(), world_t_done.end(), false);
   std::function<void(size_t)> compute_world_t = [&](size_t n) {
     if (world_t_done[n]) return;
-    ArxVector3 lt   = node_bind_local[n].t;
-    ArxQuat lr      = node_bind_local[n].r;
-    ArxVector3 ls   = node_bind_local[n].s;
+    ArxVector3 lt = node_bind_local[n].t;
+    ArxQuat lr = node_bind_local[n].r;
+    ArxVector3 ls = node_bind_local[n].s;
     bool is_wrapper = (static_cast<int32_t>(n) == wrapper_node);
     if (!is_wrapper) {
       auto tit = maps.node_to_tsi.find(n);
@@ -1820,13 +1883,13 @@ static ArxReturnCode derivePerBoneKeyframes(const NodeWorld& nw, const std::vect
         ls = {v[0], v[1], v[2]};
       }
     }
-    Mat4 local        = math::fromTrs(lt, lr, ls);
+    Mat4 local = math::fromTrs(lt, lr, ls);
     Mat4 parent_world = kIdentityMat4;
     if (nw.parent[n] >= 0) {
       compute_world_t(static_cast<size_t>(nw.parent[n]));
       parent_world = world_at_t[static_cast<size_t>(nw.parent[n])];
     }
-    world_at_t[n]   = parent_world * local;
+    world_at_t[n] = parent_world * local;
     world_t_done[n] = true;
   };
 
@@ -1839,16 +1902,16 @@ static ArxReturnCode derivePerBoneKeyframes(const NodeWorld& nw, const std::vect
   std::vector<ArxVector3> bone_anim_t(ng, ArxVector3{0.0f, 0.0f, 0.0f});
 
   for (size_t gi = 0; gi < ng; ++gi) {
-    auto& ga     = kf.groups[gi];
+    auto& ga = kf.groups[gi];
     ga.key_group = 0;
 
     RestTRS bw_t;
     if (!decomposeRestTrs(world_at_t[bones[gi].joint_node], bones[gi].name, bw_t)) return ARX_GLB_BAD_FORMAT;
 
-    ArxQuat target_r    = quatMul(bw_t.r, quatConj(bone_bind_world[gi].r));
+    ArxQuat target_r = quatMul(bw_t.r, quatConj(bone_bind_world[gi].r));
     ArxVector3 target_t = bw_t.t;
 
-    ArxQuat parent_anim_r    = ArxQuat{1.0f, 0.0f, 0.0f, 0.0f};
+    ArxQuat parent_anim_r = ArxQuat{1.0f, 0.0f, 0.0f, 0.0f};
     ArxVector3 parent_anim_t = ArxVector3{0.0f, 0.0f, 0.0f};
     if (bones[gi].parent_topo >= 0) {
       parent_anim_r = bone_anim_r[bones[gi].parent_topo];
@@ -1876,7 +1939,7 @@ static ArxReturnCode derivePerBoneKeyframes(const NodeWorld& nw, const std::vect
     bone_anim_t[gi] = target_t;
 
     ArxVector3 local_s = node_bind_local[bones[gi].joint_node].s;
-    auto sit           = maps.node_to_ssi.find(bones[gi].joint_node);
+    auto sit = maps.node_to_ssi.find(bones[gi].joint_node);
     if (sit != maps.node_to_ssi.end()) {
       float v[3];
       sampleAt(maps.samplers[sit->second], t, 3, false, v);
@@ -1950,7 +2013,7 @@ static void decodeAnimationExtras(const Json& anim, tea::Data& out) {
       }
       tea::Sample s{};
       std::string nm = it.value().get<std::string>();
-      size_t copy_n  = std::min(nm.size(), sizeof(s.name) - 1);
+      size_t copy_n = std::min(nm.size(), sizeof(s.name) - 1);
       std::memcpy(s.name, nm.data(), copy_n);
       out.keyframes[fi].sample = s;
     }
@@ -1959,7 +2022,7 @@ static void decodeAnimationExtras(const Json& anim, tea::Data& out) {
 
 // must run after decodeAnimationExtras; extras index the pre-pop keyframe count
 static void resolveAnimNameAndHold(const Json& anim, tea::Data& out) {
-  std::string anim_name              = anim.value("name", std::string{});
+  std::string anim_name = anim.value("name", std::string{});
   constexpr std::string_view kHoldSx = "__h";
   bool had_hold = anim_name.size() >= kHoldSx.size() &&
                   anim_name.compare(anim_name.size() - kHoldSx.size(), kHoldSx.size(), kHoldSx) == 0;
@@ -1989,14 +2052,15 @@ ArxReturnCode importOneAnimation(const Json& gltf, std::span<const uint8_t> bin,
   ARX_RETURN_IF_ERR(buildTimeGrid(maps, anim_idx, grid_kept, frames));
   if (frames.empty()) return ARX_OK;
 
-  size_t ng      = bones.size();
+  size_t ng = bones.size();
   size_t n_nodes = nw.world.size();
 
   // node bind local TRS: chain-walk fallback; bone bind world TRS: inv(world_R(bind)) math
   std::vector<RestTRS> node_bind_local(n_nodes);
   for (size_t n = 0; n < n_nodes; ++n) {
     if (!nw.reached[n]) continue;
-    Mat4 local = nodeLocalMat4(gltf["nodes"][n]);
+    Mat4 local;
+    if (!parseNodeLocalMat4(gltf["nodes"][n], local)) return ARX_GLB_BAD_FORMAT;
     if (!decomposeRestTrs(local, "<node>", node_bind_local[n])) {
       node_bind_local[n] = RestTRS{ArxVector3{0, 0, 0}, ArxQuat{1, 0, 0, 0}, ArxVector3{1, 1, 1}};
     }
@@ -2006,7 +2070,7 @@ ArxReturnCode importOneAnimation(const Json& gltf, std::span<const uint8_t> bin,
     if (!decomposeRestTrs(bones[gi].bind_world_matrix, bones[gi].name, bone_bind_world[gi])) return ARX_GLB_BAD_FORMAT;
   }
 
-  out            = {};
+  out = {};
   out.num_groups = static_cast<int32_t>(ng);
   out.keyframes.resize(frames.size());
 
@@ -2014,12 +2078,12 @@ ArxReturnCode importOneAnimation(const Json& gltf, std::span<const uint8_t> bin,
   std::vector<Mat4> world_at_t(n_nodes);
 
   for (size_t k = 0; k < frames.size(); ++k) {
-    auto& kf      = out.keyframes[k];
-    kf.num_frame  = frames[k];
+    auto& kf = out.keyframes[k];
+    kf.num_frame = frames[k];
     kf.flag_frame = kTeaFlagFrameNone;
     kf.groups.resize(ng);
-    ARX_RETURN_IF_ERR(derivePerBoneKeyframes(nw, bones, maps, node_bind_local, bone_bind_world, wrapper_node,
-                                             grid_kept[k], world_at_t, world_t_done, kf));
+    ARX_RETURN_IF_ERR(derivePerBoneKeyframes(
+        nw, bones, maps, node_bind_local, bone_bind_world, wrapper_node, grid_kept[k], world_at_t, world_t_done, kf));
     extractRootEntityChannels(maps, grid_kept[k], kf);
   }
 
@@ -2094,7 +2158,7 @@ static ArxReturnCode importGlbToFtlTeaImpl(std::span<const uint8_t> glb, std::st
   std::vector<std::vector<int32_t>> skin_to_unified;
   ARX_RETURN_IF_ERR(buildSkeleton(gltf, bin_bytes, nw, bones, joint_to_topo, skin_to_unified));
 
-  // our exporter targets root T/R channels at the wrapper node
+  // Pistoris exports place root translation and rotation channels on the wrapper node
   int32_t wrapper_node = identifyWrapperNode(nw, bones);
 
   std::vector<MatFlags> mat_flags;
@@ -2115,7 +2179,7 @@ static ArxReturnCode importGlbToFtlTeaImpl(std::span<const uint8_t> glb, std::st
               for (const auto& v : it.value())
                 if (v.is_string()) extras_names.push_back(v.get<std::string>());
             } catch (const Json::exception&) {
-              // SILENT: malformed optional selection names are ignored.
+              // Ignore malformed optional selection names
               extras_names.clear();
             }
           }
@@ -2126,7 +2190,7 @@ static ArxReturnCode importGlbToFtlTeaImpl(std::span<const uint8_t> glb, std::st
           try {
             out_extras->emplace_back(k, it.value().get<std::string>());
           } catch (const Json::exception&) {
-            // SILENT: bad value for one optional caller extra
+            // Ignore malformed optional caller extras
             continue;
           }
         } else {
@@ -2141,18 +2205,17 @@ static ArxReturnCode importGlbToFtlTeaImpl(std::span<const uint8_t> glb, std::st
   SelectionRegistry sel_registry;
   for (const auto& name : extras_names)
     if (!name.empty()) findOrAddSelection(sel_registry, name);
-  ARX_RETURN_IF_ERR(
-      ingestPrimitives(gltf, bin_bytes, nw, skin_to_unified, mat_flags, material_tex_ids, extras_names, out_ftl, vj,
-                       sel_registry));
+  ARX_RETURN_IF_ERR(ingestPrimitives(
+      gltf, bin_bytes, nw, skin_to_unified, mat_flags, material_tex_ids, extras_names, out_ftl, vj, sel_registry));
 
   if (out_ftl.vertices.size() + 1 + bones.size() > kFtlMaxVertices) {
     log(ARX_LOG_ERROR, "GLB import: vertex count with synthetic pivots exceeds 16-bit ceiling");
-    return ARX_GLB_TOO_MANY_VERTICES;
+    return ARX_GLB_MODEL_TOO_MANY_VERTICES;
   }
   out_ftl.header.origin = static_cast<uint32_t>(out_ftl.vertices.size());
   ftl::Vertex origin_v{};
   origin_v.position = {0.0f, 0.0f, 0.0f};
-  origin_v.normal   = {0.0f, 1.0f, 0.0f};
+  origin_v.normal = {0.0f, 1.0f, 0.0f};
   out_ftl.vertices.push_back(origin_v);
 
   emitGroups(gltf, bones, joint_to_topo, vj, out_ftl);
@@ -2181,8 +2244,13 @@ static ArxReturnCode importGlbToFtlTeaImpl(std::span<const uint8_t> glb, std::st
   log(ARX_LOG_INFO,
       std::format("GLB import: {} vertices, {} faces, {} texture containers, {} bones, {} action points, "
                   "{} selection VEC4 attributes, {} animations",
-                  out_ftl.vertices.size(), out_ftl.faces.size(), out_ftl.texture_containers.size(),
-                  out_ftl.groups.size(), out_ftl.actions.size(), out_ftl.selections.size(), out_teas.size()));
+                  out_ftl.vertices.size(),
+                  out_ftl.faces.size(),
+                  out_ftl.texture_containers.size(),
+                  out_ftl.groups.size(),
+                  out_ftl.actions.size(),
+                  out_ftl.selections.size(),
+                  out_teas.size()));
 
   return ARX_OK;
 }

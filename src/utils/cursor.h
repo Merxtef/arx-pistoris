@@ -18,14 +18,14 @@ static_assert(std::endian::native == std::endian::little, "only little-endian ho
 namespace pistoris {
 
 enum class CursorErrorKind : std::uint8_t {
-  kOk            = 0,
+  kOk = 0,
   kUnexpectedEof = 1,
-  kBadAlloc      = 2,
+  kBadAlloc = 2,
 };
 
 struct CursorError {
-  std::size_t offset   = 0;
-  std::size_t needed   = 0;
+  std::size_t offset = 0;
+  std::size_t needed = 0;
   CursorErrorKind kind = CursorErrorKind::kOk;
 };
 
@@ -70,7 +70,7 @@ struct ReadCursor {
  private:
   ReadCursor& fail(std::size_t needed) noexcept {
     if (ok_) {
-      ok_  = false;
+      ok_ = false;
       err_ = {off_, needed, CursorErrorKind::kUnexpectedEof};
     }
     return *this;
@@ -78,7 +78,7 @@ struct ReadCursor {
 
   std::span<const std::uint8_t> buf_;
   std::size_t off_ = 0;
-  bool ok_         = true;
+  bool ok_ = true;
   CursorError err_{};
 };
 
@@ -144,7 +144,7 @@ struct WriteCursor {
  private:
   WriteCursor& fail(std::size_t needed) noexcept {
     if (ok_) {
-      ok_  = false;
+      ok_ = false;
       err_ = {buf_.size(), needed, CursorErrorKind::kBadAlloc};
     }
     return *this;

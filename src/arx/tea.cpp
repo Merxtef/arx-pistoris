@@ -3,8 +3,8 @@
 
 #include "arx/tea.h"
 
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "utils/cursor.h"
 #include "utils/log.h"
@@ -19,9 +19,9 @@ namespace pistoris {
 
 static ArxReturnCode readKeyframe(tea::Keyframe* kf, ReadCursor& c, uint32_t version, int32_t num_groups,
                                   int frame_idx) {
-  int32_t key_move   = 0;
+  int32_t key_move = 0;
   int32_t key_orient = 0;
-  int32_t key_morph  = 0;
+  int32_t key_morph = 0;
 
   c.read(kf->num_frame);
   c.read(kf->flag_frame);
@@ -106,8 +106,9 @@ ArxReturnCode loadTea(tea::Data* d, ReadCursor& c) {
 
   ARX_RETURN_IF_ERR(validateTea(d));
 
-  log(ARX_LOG_INFO, std::format("TEA loaded: {} keyframes, {} groups, num_frames={}", d->keyframes.size(),
-                                d->num_groups, d->num_frames));
+  log(ARX_LOG_INFO,
+      std::format(
+          "TEA loaded: {} keyframes, {} groups, num_frames={}", d->keyframes.size(), d->num_groups, d->num_frames));
 
   return ARX_OK;
 }
@@ -122,11 +123,13 @@ static WriteCursor& writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
   c.pad(4);                                                         // key_morph
   c.pad(4);                                                         // time_frame
 
-  if (kf.translate) c.write(*kf.translate);
+  const auto& translate = kf.translate;
+  if (translate) c.write(*translate);
 
-  if (kf.quat) {
+  const auto& quat = kf.quat;
+  if (quat) {
     c.pad(8);  // THEO_ANGLE
-    c.write(*kf.quat);
+    c.write(*quat);
   }
 
   for (const auto& group : kf.groups) {
@@ -137,9 +140,10 @@ static WriteCursor& writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
     c.write(group.zoom);
   }
 
-  if (kf.sample) {
+  const auto& sample = kf.sample;
+  if (sample) {
     c.write(static_cast<int32_t>(0));  // num_sample (unused by readers)
-    c.write(*kf.sample);
+    c.write(*sample);
     c.write(static_cast<int32_t>(0));  // sample_size; audio dropped
   } else {
     c.write(static_cast<int32_t>(-1));
@@ -153,8 +157,9 @@ static WriteCursor& writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
 ArxReturnCode saveTea(const tea::Data* d, WriteCursor& c) {
   ARX_RETURN_IF_ERR(validateTea(d));
 
-  log(ARX_LOG_INFO, std::format("TEA saving: {} keyframes, {} groups, num_frames={}", d->keyframes.size(),
-                                d->num_groups, d->num_frames));
+  log(ARX_LOG_INFO,
+      std::format(
+          "TEA saving: {} keyframes, {} groups, num_frames={}", d->keyframes.size(), d->num_groups, d->num_frames));
 
   char identity[20] = {};
   std::memcpy(identity, kTeaMagic, sizeof(kTeaMagic) - 1);

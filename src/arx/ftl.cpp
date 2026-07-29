@@ -3,8 +3,9 @@
 
 #include "arx/ftl.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/pistoris_types.h"
 
 #include "utils/cursor.h"
@@ -116,11 +117,11 @@ ArxReturnCode loadFtl(ftl::Data* d, ReadCursor& c) {
   if (gap > c.remaining()) return ARX_FTL_BAD_OFFSET;
   c.skip(gap);
 
-  std::int32_t num_vertices   = 0;
-  std::int32_t num_faces      = 0;
-  std::int32_t num_textures   = 0;
-  std::int32_t num_groups     = 0;
-  std::int32_t num_actions    = 0;
+  std::int32_t num_vertices = 0;
+  std::int32_t num_faces = 0;
+  std::int32_t num_textures = 0;
+  std::int32_t num_groups = 0;
+  std::int32_t num_actions = 0;
   std::int32_t num_selections = 0;
   c.read(num_vertices);
   c.read(num_faces);
@@ -156,9 +157,14 @@ ArxReturnCode loadFtl(ftl::Data* d, ReadCursor& c) {
 
   ARX_RETURN_IF_ERR(validateFtl(d));
 
-  log(ARX_LOG_INFO, std::format("FTL loaded: {} vertices, {} faces, {} textures, {} groups, {} actions, {} selections",
-                                d->vertices.size(), d->faces.size(), d->texture_containers.size(), d->groups.size(),
-                                d->actions.size(), d->selections.size()));
+  log(ARX_LOG_INFO,
+      std::format("FTL loaded: {} vertices, {} faces, {} textures, {} groups, {} actions, {} selections",
+                  d->vertices.size(),
+                  d->faces.size(),
+                  d->texture_containers.size(),
+                  d->groups.size(),
+                  d->actions.size(),
+                  d->selections.size()));
 
   return ARX_OK;
 }
@@ -216,9 +222,14 @@ static WriteCursor& writeSelections(const ftl::Data* d, WriteCursor& c) {
 ArxReturnCode saveFtl(const ftl::Data* d, WriteCursor& c) {
   ARX_RETURN_IF_ERR(validateFtl(d));
 
-  log(ARX_LOG_INFO, std::format("FTL saving: {} vertices, {} faces, {} textures, {} groups, {} actions, {} selections",
-                                d->vertices.size(), d->faces.size(), d->texture_containers.size(), d->groups.size(),
-                                d->actions.size(), d->selections.size()));
+  log(ARX_LOG_INFO,
+      std::format("FTL saving: {} vertices, {} faces, {} textures, {} groups, {} actions, {} selections",
+                  d->vertices.size(),
+                  d->faces.size(),
+                  d->texture_containers.size(),
+                  d->groups.size(),
+                  d->actions.size(),
+                  d->selections.size()));
 
   c.write(kFtlMagic);
   c.write(kFtlVersion);
@@ -309,7 +320,7 @@ static void buildFtlExtras(const ftl::Data* d) {
   };
   for (std::int32_t gi = 1; gi < ng; ++gi) {
     std::uint32_t origin = d->groups[gi].origin;
-    std::int32_t owner   = e.vertex_to_bone[origin];
+    std::int32_t owner = e.vertex_to_bone[origin];
     if (owner >= 0 && owner < gi)
       e.parent_bone[gi] = owner;
     else

@@ -7,7 +7,6 @@
 
 #include "utils/math/mat4.h"
 #include "utils/math/quat.h"
-#include "utils/math/vec3.h"
 
 #include <cmath>
 
@@ -27,7 +26,7 @@ TEST_SUITE("math::mat4") {
   }
 
   TEST_CASE("IdentityMultiply") {
-    Mat4 m  = math::kIdentityMat4;
+    Mat4 m = math::kIdentityMat4;
     m(0, 3) = 7.0f;
     m(1, 3) = 8.0f;
     m(2, 3) = 9.0f;
@@ -36,32 +35,32 @@ TEST_SUITE("math::mat4") {
   }
 
   TEST_CASE("MultiplyAssociative") {
-    Mat4 a  = math::kIdentityMat4;
+    Mat4 a = math::kIdentityMat4;
     a(0, 0) = 2.0f;
-    Mat4 b  = math::kIdentityMat4;
+    Mat4 b = math::kIdentityMat4;
     b(1, 1) = 3.0f;
-    Mat4 c  = math::kIdentityMat4;
+    Mat4 c = math::kIdentityMat4;
     c(2, 2) = 5.0f;
     checkMat4Approx((a * b) * c, a * (b * c));
   }
 
   TEST_CASE("TransformPoint") {
-    Mat4 m  = math::kIdentityMat4;
+    Mat4 m = math::kIdentityMat4;
     m(0, 3) = 10.0f;
     m(1, 3) = 20.0f;
     m(2, 3) = 30.0f;
-    auto p  = math::xformPoint(m, {1, 2, 3});
+    auto p = math::xformPoint(m, {1, 2, 3});
     CHECK(p.x == doctest::Approx(11));
     CHECK(p.y == doctest::Approx(22));
     CHECK(p.z == doctest::Approx(33));
   }
 
   TEST_CASE("TransformDirIgnoresTranslation") {
-    Mat4 m  = math::kIdentityMat4;
+    Mat4 m = math::kIdentityMat4;
     m(0, 3) = 100.0f;
     m(1, 3) = 200.0f;
     m(2, 3) = 300.0f;
-    auto v  = math::xformDir(m, {1, 2, 3});
+    auto v = math::xformDir(m, {1, 2, 3});
     CHECK(v.x == doctest::Approx(1));
     CHECK(v.y == doctest::Approx(2));
     CHECK(v.z == doctest::Approx(3));
@@ -106,10 +105,10 @@ TEST_SUITE("math::mat4") {
   }
 
   TEST_CASE("InverseTranslation") {
-    Mat4 m   = math::kIdentityMat4;
-    m(0, 3)  = 7;
-    m(1, 3)  = 8;
-    m(2, 3)  = 9;
+    Mat4 m = math::kIdentityMat4;
+    m(0, 3) = 7;
+    m(1, 3) = 8;
+    m(2, 3) = 9;
     auto inv = math::inverseAffine(m);
     REQUIRE(inv.has_value());
     auto k = math::translation(*inv);
@@ -121,7 +120,7 @@ TEST_SUITE("math::mat4") {
   TEST_CASE("InverseRoundtripWithTrs") {
     float s = std::sqrt(0.5f);
     ArxQuat r{s, s, 0, 0};  // 90 deg X
-    Mat4 m   = math::fromTrs({1, 2, 3}, r, {1, 1, 1});
+    Mat4 m = math::fromTrs({1, 2, 3}, r, {1, 1, 1});
     auto inv = math::inverseAffine(m);
     REQUIRE(inv.has_value());
     checkMat4Approx(m * *inv, math::kIdentityMat4);
@@ -129,10 +128,10 @@ TEST_SUITE("math::mat4") {
   }
 
   TEST_CASE("InverseSingularYieldsNullopt") {
-    Mat4 m   = math::kIdentityMat4;
-    m(0, 0)  = 0;
-    m(1, 1)  = 0;
-    m(2, 2)  = 0;
+    Mat4 m = math::kIdentityMat4;
+    m(0, 0) = 0;
+    m(1, 1) = 0;
+    m(2, 2) = 0;
     auto inv = math::inverseAffine(m);
     CHECK_FALSE(inv.has_value());
   }
@@ -147,7 +146,7 @@ TEST_SUITE("math::mat4") {
   }
 
   TEST_CASE("IsRotationUniformScaleRejectsNonUniformScale") {
-    Mat4 m  = math::kIdentityMat4;
+    Mat4 m = math::kIdentityMat4;
     m(0, 0) = 2.0f;
     m(1, 1) = 1.0f;
     m(2, 2) = 1.0f;
@@ -155,7 +154,7 @@ TEST_SUITE("math::mat4") {
   }
 
   TEST_CASE("IsRotationUniformScaleRejectsShear") {
-    Mat4 m  = math::kIdentityMat4;
+    Mat4 m = math::kIdentityMat4;
     m(0, 1) = 0.5f;  // X column has a Y component -> not orthogonal
     CHECK_FALSE(math::isRotationUniformScale(m));
   }

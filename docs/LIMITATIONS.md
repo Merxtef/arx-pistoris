@@ -1,123 +1,253 @@
-# Known Limitations
+# Fidelity and Limitations
 
-Known fidelity trade-offs and encoding constraints per conversion.
+Pistoris aims for semantically lossless conversion between supported native
+game formats and their coherent intermediate representation. It does not
+promise byte-identical output: records may be reordered, geometry may be
+resliced, compressed bytes will differ, and equivalent derived data may be
+rebuilt.
 
-## FTL <-> OBJ
+GLB and OBJ are authoring surfaces. They preserve as much editable meaning as
+their DCC-friendly structures allow, but they are not archives of every native
+record.
 
-### Per-face transval precision
+## Compatible JSON
 
-OBJ MTL has one `d` (opacity) value per material, not per face. The exporter
-groups faces by `(texture_id, face_type)` into a single material. If multiple
-faces share that key but carry different `transval` values, the exporter averages
-them and writes the average as `d`. On re-import every face in that material gets
-the averaged value.
+JSON support matches arx-convert schemas. JSON is converted to or from native
+FTL, TEA, FTS, DLF, and LLF carriers; it is not a separate Pistoris
+intermediate.
 
-Workaround: ensure faces that share a texture and flags also share the same
-transval before exporting.
+Data absent from the compatibility schema cannot roundtrip through JSON.
+Prefer native carriers or Level GLB when the JSON ecosystem is not required.
 
-### Texture stem `__` encoding
+## Level Native Conversion
 
-The exporter encodes face flags in material names using `__` as a separator
-(e.g. `BODY__TRANS__WATER`). If a texture filename stem itself contains `__`,
-`decodeMatName` on re-import will split at the first occurrence and misread the
-rest as flags. Arx Fatalis asset stems never contain `__`, so this does not
-affect any real game content.
+### FTS remains the required Level carrier
 
-## FTL+TEA <-> GLB
+Native-to-Level conversion requires FTS. LLF and DLF are optional companions.
+An external LLF takes precedence over lighting embedded in DLF. Missing
+lighting produces neutral corner colors and no dynamic lights.
 
-### Per-face transval precision
+### Empty rooms are omitted from GLB
 
-Same constraint as FTL <-> OBJ: GLTF materials carry one alpha value. The
-exporter groups faces by `(texture_id, face_type)`; when faces sharing that key
-disagree on `transval`, the exporter averages them and writes the average into
-`baseColorFactor[3]`. On re-import every face in that material gets the
-averaged value.
+Native-to-Level conversion retains real room slots even when they have no
+faces. Level GLB export omits those rooms because they have no editable
+geometry. Portals and room-distance records tied to omitted rooms cannot
+survive that GLB projection. Pistoris warns when the discarded topology
+contains positive room distances or portals that suggest meaningful data.
 
-Workaround: ensure faces that share a texture and flags also share the same
-transval before exporting.
+### Native layout is rebuilt
 
-### Texture stem `__` encoding
+Level does not retain the original FTS cell arrays or polygon packing. Native
+baking reslices Level geometry into 100 by 100 Arx cells and reconstructs
+compatible native quads by default. Disable quad reconstruction only when
+triangle-for-triangle native output is specifically needed.
 
-Identical to the OBJ case. The GLTF material name is built via the same
-`matName(stem, flags)` helper and decoded with the same `decodeMatName` on
-import; a texture stem containing `__` would be misread. Arx Fatalis asset
-stems never contain `__`.
+Quad reconstruction joins only compatible adjacent triangles. It does not
+change their independent corner normals or merge arbitrary fragmented
+geometry.
 
-### Bone order depends on ordinal-prefixed names
+### Native limits are enforced
 
-GLB export writes FTL bone groups with numeric order prefixes such as
-`000__root`, `003__chest`, or `042__hand`. The exporter pads to at least
-three digits for readable sorting, but this is not a 999-bone limit; larger
-ordinals expand as needed. On import, those ordinals restore the original FTL
-group order before TEA animation tracks are decoded, and the prefix is stripped
-from the resulting FTL group name. This keeps assets editable in DCC tools that
-reorder internal joint arrays.
+Pistoris rejects FTS data that exceeds native representation limits, including:
 
-If a DCC tool removes prefixes, duplicates them, changes them to values outside
-the bone count, or creates an order where a child appears before its parent,
-the importer warns and falls back to glTF joint order/topology. The imported
-model and animations may still be internally consistent, but the TEA group
-order may no longer match the original asset.
+- more than 254 real rooms
+- more than 32768 room polygon references in one cell
+- more than 65535 render corners for one room and texture resource, excluding
+  `IGNORE` and `HIDE` faces as the engine does
+- out-of-range native indices and counts
 
-### Unreferenced texture containers dropped
+Level enforces its own collection and index limits, but it need not reject the
+per-room texture-corner total. During Level baking, a texture that would exceed
+that native limit is split across collision-free `_N` resource aliases. Every
+alias references an identical image. Callers that skip texture sidecar export
+must create those copies themselves.
 
-The exporter only emits GLTF materials for `(texture_id, face_type)` pairs
-that appear in at least one face (`CollectMaterials`). An FTL
-`texture_container` not referenced by any face is absent from the GLB, so it
-does not survive a roundtrip. Face-to-container mapping for used textures is
-preserved exactly; only dead entries are lost.
+### Room distances and anchor links
 
-### Selection names depend on DCC attribute handling
+Room distances and anchor connections are editable Level data, but neither has
+a vanilla-DCC-friendly GLB representation. Level GLB export omits them.
+Regenerate them explicitly after GLB import, or retain the in-memory Level when
+their exact authored values matter.
 
-FTL selections are exported as custom GLTF `VEC4` attributes, plus an ordered
-`arx_selection_names` mesh extra carrying the original names. Exact names
-roundtrip when that extra survives. If a DCC tool rewrites attributes to names
-such as `COLOR_0` or changes custom attribute casing, the importer can still
-recover the selection masks but the names may need repair.
+Native baking writes default `-1` room distances where the data is missing or
+incomplete and reports the omission.
 
-Workaround: use the CLI `--rename-selections` option after GLB import to
-rename selections by their imported order. Empty rename entries and trailing
-selections omitted from the rename list are left unchanged.
+### Vertex welding is explicit
 
-### Synthetic origin/action vertices need selection affiliation
+Native import preserves polygon-local position identity. It does not infer
+that coincident vertices are shared. Call Level vertex welding explicitly when
+the desired topology is known.
 
-GLB import synthesizes FTL-only vertices for `header.origin`, bone origins, and
-action points. DCC tools do not expose those vertices as ordinary editable mesh
-vertices, so their selection membership cannot always be authored directly.
-If a required synthetic vertex is not in the expected selection, game-side
-merge/copy logic may skip it; for bone origins this can reset origins and break
-animation.
+Room-aware welding protects portal-adjacent boundaries and can preserve,
+reject, or discard faces that would collapse. It remains an inference:
+coincident positions alone cannot prove original topological identity.
 
-Workaround: use `--reference-ftl` with `--copy-reference-affiliations` to copy
-selection membership for synthetic vertices from a compatible base-game model.
-The GLB importer warns when synthetic origin/action vertices are not in any
-selection.
+## Level and GLB
 
-### Exact bone and action positions for merged models
+### Coordinates differ
 
-Some game merge/equipment paths require bone origin positions to be byte-for-byte
-compatible with the base model and may compare floats with `==`. A normal GLB
-roundtrip preserves the edited model's own skeleton, but it cannot guarantee
-exact compatibility with a separate base-game FTL.
+Level uses native Arx coordinates with -Y up. Geometry and active portal X/Z
+coordinates must be inside inclusive `[0,16000]`. GLB uses +Y up.
 
-Workaround: use `--reference-ftl` with `--snap-bone-origins-to-reference snap-origins`
-and `--snap-action-points-to-reference` for same-kind models that are already
-almost identical. Use `delta-deform` only as a simple per-group translation
-baseline. `hierarchy-deform` is experimental and can severely distort models
-whose proportions differ from the reference, even when group topology matches;
-its optional step limit is mainly useful for debugging where deformation starts
-diverging. Deformation modes use the single-owner group map from FTL extras
-(`vertex_to_bone`), not raw overlapping group index lists. They are heuristic
-repairs, not full ARAP/cage solves, and can distort if topology or group
-ownership differs from the reference.
+GLB conversion applies the selected unit ratio and offset at the boundary. The
+ratio must be inside inclusive `[1,1000]` and defaults to 100. Automatic import
+placement chooses a 100-unit-aligned X/Z offset. Keep the reported offset when
+an exact inverse export matters.
 
-### Header origin position reset
+### GLB topology cannot describe every seam
 
-The exporter shifts all vertex, bone-bind, and unbound-action-point positions
-by `-header_origin.position` so the GLB mesh is centered at the entity pivot
-(which both the Arx engine and arx-pistoris expect at `(0,0,0)`). The
-importer synthesizes a new `header.origin` vertex at `(0,0,0)`. After a
-roundtrip the entity pivot is always at the origin of the mesh-local frame.
-For source FTLs whose pivot was offset, the absolute mesh-local coordinates
-change; relative geometry, rig, and animation data are preserved. The engine
-only cares about the pivot-to-vertex relationships, not absolute coords.
+Level stores indexed positions while UVs, normals, and colors live on face
+corners. GLB uses one index across all vertex attributes, so export duplicates
+render vertices at attribute seams.
+
+On import, a Level position is identified by its source node, `POSITION`
+accessor, and accessor index. The same source position can remain shared across
+primitives, but equal coordinates from different nodes or accessors are not
+stitched because GLB cannot say whether the split was intentional or created
+for rendering. Keep the original DCC or Level source when welded topology is
+authoritative.
+
+Portal import performs only a narrow positional weld needed to recover a
+three- or four-point semantic perimeter from ordinary GLB render splits.
+
+### GLB omits native build products
+
+Level GLB does not retain:
+
+- FTS cell slicing and packing
+- FTS quad slots
+- room-distance records
+- anchor connections
+
+Cell layout and quads are rebuilt during native baking. Room distances and
+anchor links are generated only when explicitly requested.
+
+### Materials collapse face data by identity
+
+Level preserves raw per-face `transval` through the material name token
+`TRANSVAL_<value>`. Standard GLB preview alpha can show ordinary values between
+zero and one, but GLB cannot reproduce every native blend mode for values
+outside that range.
+
+GLB material properties also imply native flags:
+
+- `doubleSided=true` implies `DOUBLESIDED`
+- `alphaMode=BLEND` implies `TRANS`
+- `alphaMode=MASK` is image cutout and does not imply `TRANS`
+
+When a material references a base-color image, that image defines texture
+identity. The material stem still defines flags.
+
+### Texture names use `__` as syntax
+
+`__` separates texture stems from face flags. Do not use it in newly authored
+texture names.
+
+The original game has exactly three known texture-path exceptions. Level maps
+them to safe aliases and restores the native identities during baking:
+
+```text
+graph/obj3d/textures/l4_dwarf_[stone]__wall01
+<-> graph/obj3d/textures/l4_dwarf_[stone]_wall01
+
+graph/obj3d/textures/l4_dwarf_[stone]__wall24
+<-> graph/obj3d/textures/l4_dwarf_[stone]_wall24
+
+graph/obj3d/textures/npc_human__base_hero_head
+<-> graph/obj3d/textures/npc_human_base_hero_head_1
+```
+
+No general escaping scheme exists for additional `__` texture names.
+
+### Native texture dimensions
+
+Arx rendering expects power-of-two texture dimensions in paths that use its
+wrap-clamp behavior. Native Level baking preserves already compatible PNG,
+JPEG, BMP, or TGA bytes. A non-power-of-two image is resized independently on
+each axis to the next power of two and encoded as PNG.
+
+GLB export embeds PNG and JPEG directly and converts BMP and TGA to PNG because
+core GLB supports only PNG and JPEG images.
+
+### Zone meshes are semantic volumes
+
+Zone import welds transformed positions before reconstructing the perimeter.
+This tolerates ordinary UV, normal, and material splits. Intentionally distinct
+zone columns cannot occupy exactly the same position.
+
+### Entity previews are not Level geometry
+
+A static mesh attached to an `arx_entity__*` root is an authoring preview. It
+is ignored on Level import and is not baked into FTS geometry or Level
+textures.
+
+## FTL and OBJ
+
+OBJ represents static FTL geometry and materials only. Skeletons, action
+points, vertex selections, and animations are not representable.
+
+MTL has one opacity value per material. Faces that share a texture and flag set
+also share the imported transparency value. Pistoris cannot preserve distinct
+per-face `transval` values within that one material.
+
+Texture identity is selected from `# arx_path`, then `map_Kd`, then the decoded
+material stem.
+
+## Legacy FTL and TEA GLB
+
+### Transparency is material-wide
+
+Legacy FTL GLB has no Level-style `TRANSVAL` name token. Faces grouped into one
+GLB material share its alpha value. Distinct native `transval` values within
+that material are averaged on export.
+
+### Unused texture containers are omitted
+
+Only textures referenced by FTL faces are emitted to GLB. Unreferenced native
+texture-container records do not survive a GLB roundtrip. Referenced texture
+identity remains stable.
+
+### Bone order depends on indexed names
+
+Exported bone names use exact zero-based prefixes such as `000__root`.
+Import restores FTL group order from those prefixes when every index is unique,
+complete, and topologically valid.
+
+If a DCC removes or corrupts the prefixes, Pistoris warns and falls back to GLB
+joint order. The resulting model may remain internally valid but no longer
+match an existing TEA group order.
+
+### Selection names depend on DCC behavior
+
+FTL selections use custom GLB `VEC4` attributes plus an ordered
+`arx_selection_names` mesh extra. Exact names survive when the DCC preserves
+the extra. A DCC may rewrite attributes to positional names such as `COLOR_0`;
+the masks can remain recoverable while names require CLI repair.
+
+Use `--rename-selections` to restore names by imported position.
+
+### Synthetic vertices need reference repair
+
+GLB import synthesizes FTL-only vertices for the model origin, bone origins,
+and action points. Their original selection membership is not always editable
+through a DCC. Game-side model merge logic may depend on that membership and
+on bit-exact bone or action positions.
+
+Use a compatible base FTL with:
+
+```text
+--ftl-reference
+--snap-bone-origins-to-reference
+--snap-action-points-to-reference
+--copy-synthetic-selection-affiliations
+```
+
+Reference deformation modes are repair heuristics, not general mesh
+deformation solvers.
+
+### The model pivot is canonicalized
+
+FTL GLB export centers the mesh at the entity pivot. Import synthesizes the FTL
+header origin at `(0,0,0)`. Relative geometry, skeleton, and animation data are
+preserved, but an originally offset mesh-local coordinate frame does not
+roundtrip byte-for-byte.

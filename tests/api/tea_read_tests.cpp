@@ -11,8 +11,6 @@
 #include <vector>
 
 TEST_SUITE("tea") {
-  // --- Null guard tests ---
-
   TEST_CASE("TeaNameNullAndValid") {
     CHECK(arx_pistoris_tea_name(nullptr) == nullptr);
 
@@ -30,25 +28,23 @@ TEST_SUITE("tea") {
   }
 
   TEST_CASE("TeaApiNullData") {
-    ArxTeaHandle h   = nullptr;
+    ArxTeaHandle h = nullptr;
     ArxReturnCode rc = arx_pistoris_tea_parse(nullptr, 0, &h);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
     CHECK(h == nullptr);
   }
 
   TEST_CASE("TeaApiNullOut") {
-    uint8_t dummy    = 0;
+    uint8_t dummy = 0;
     ArxReturnCode rc = arx_pistoris_tea_parse(&dummy, sizeof(dummy), nullptr);
-    CHECK(rc == ARX_INVALID_HANDLE);
+    CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
-
-  // --- Smoke test ---
 
   TEST_CASE("TeaApiReadSmoke") {
     std::vector<uint8_t> buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
-    ArxTeaHandle h   = nullptr;
+    ArxTeaHandle h = nullptr;
     ArxReturnCode rc = arx_pistoris_tea_parse(buf.data(), buf.size(), &h);
     CHECK(rc == ARX_OK);
     CHECK(h != nullptr);

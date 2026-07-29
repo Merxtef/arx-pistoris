@@ -5,7 +5,7 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/arx_pistoris.h"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
 
 #include "helpers.h"
 
@@ -33,8 +33,8 @@ TEST_SUITE("ftl") {
       if (e.path().extension() != ".ftl") continue;
       count++;
       CAPTURE(e.path().string());
-      auto bytes       = readBytes(e.path());
-      ArxFtlHandle h   = nullptr;
+      auto bytes = readBytes(e.path());
+      ArxFtlHandle h = nullptr;
       ArxReturnCode rc = arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h);
       CHECK(rc == ARX_OK);
       if (h) arx_pistoris_ftl_free(h);
@@ -48,20 +48,20 @@ TEST_SUITE("ftl") {
       if (e.path().extension() != ".ftl") continue;
       count++;
       CAPTURE(e.path().string());
-      auto bytes      = readBytes(e.path());
+      auto bytes = readBytes(e.path());
       ArxFtlHandle h1 = nullptr;
       CHECK(arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h1) == ARX_OK);
       if (!h1) continue;
 
       uint8_t* out = nullptr;
-      size_t sz    = 0;
-      CHECK(arx_pistoris_ftl_write(h1, &out, &sz) == ARX_OK);
+      size_t sz = 0;
+      CHECK(arx_pistoris_ftl_write(h1, 1, &out, &sz) == ARX_OK);
       if (!out) {
         arx_pistoris_ftl_free(h1);
         continue;
       }
 
-      ArxFtlHandle h2   = nullptr;
+      ArxFtlHandle h2 = nullptr;
       ArxReturnCode rc2 = arx_pistoris_ftl_parse(out, sz, &h2);
       arx_pistoris_free_bytes(out);
       CHECK(rc2 == ARX_OK);
@@ -82,8 +82,8 @@ TEST_SUITE("ftl") {
     for (auto& e : fs::directory_iterator(dir)) {
       if (e.path().extension() != ".ftl") continue;
       CAPTURE(e.path().string());
-      auto bytes       = readBytes(e.path());
-      ArxFtlHandle h   = nullptr;
+      auto bytes = readBytes(e.path());
+      ArxFtlHandle h = nullptr;
       ArxReturnCode rc = arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h);
       CHECK(rc == ARX_OK);
       if (h) arx_pistoris_ftl_free(h);
@@ -96,20 +96,20 @@ TEST_SUITE("ftl") {
     for (auto& e : fs::directory_iterator(dir)) {
       if (e.path().extension() != ".ftl") continue;
       CAPTURE(e.path().string());
-      auto bytes      = readBytes(e.path());
+      auto bytes = readBytes(e.path());
       ArxFtlHandle h1 = nullptr;
       CHECK(arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h1) == ARX_OK);
       if (!h1) continue;
 
       uint8_t* out = nullptr;
-      size_t sz    = 0;
-      CHECK(arx_pistoris_ftl_write(h1, &out, &sz) == ARX_OK);
+      size_t sz = 0;
+      CHECK(arx_pistoris_ftl_write(h1, 1, &out, &sz) == ARX_OK);
       if (!out) {
         arx_pistoris_ftl_free(h1);
         continue;
       }
 
-      ArxFtlHandle h2   = nullptr;
+      ArxFtlHandle h2 = nullptr;
       ArxReturnCode rc2 = arx_pistoris_ftl_parse(out, sz, &h2);
       arx_pistoris_free_bytes(out);
       CHECK(rc2 == ARX_OK);

@@ -48,18 +48,18 @@ TEST_SUITE("basic") {
   // bare 'usemtl' (no name) fires ARX_LOG_WARN; callback must capture it
   TEST_CASE("log callback fires") {
     std::string captured;
-    ArxLogLevel captured_level                    = ARX_LOG_DEBUG;
+    ArxLogLevel captured_level = ARX_LOG_DEBUG;
     std::pair<std::string*, ArxLogLevel*> capture = {&captured, &captured_level};
     arx_pistoris_set_log_callback(
         [](ArxLogLevel level, const char* msg, void* ud) {
-          auto* p    = static_cast<std::pair<std::string*, ArxLogLevel*>*>(ud);
-          *p->first  = msg;
+          auto* p = static_cast<std::pair<std::string*, ArxLogLevel*>*>(ud);
+          *p->first = msg;
           *p->second = level;
         },
         &capture);
 
     const char* obj = "usemtl\n";
-    ArxFtlHandle h  = nullptr;
+    ArxFtlHandle h = nullptr;
     arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj), std::strlen(obj), nullptr, 0, nullptr, &h);
     arx_pistoris_ftl_free(h);
     arx_pistoris_set_log_callback(nullptr, nullptr);
@@ -68,9 +68,9 @@ TEST_SUITE("basic") {
     CHECK(!captured.empty());
   }
 
-  // -Werror=switch covers per-code completeness at compile time (non-Release); only fallthrough needs runtime check
+  // tests/check_rc_coverage.py checks assigned-code completeness; runtime verifies unknown values
   TEST_CASE("StrerrorFallthroughForUnknownCodes") {
-    CHECK(std::string(arx_pistoris_strerror(ARX_RETURN_CODE_MAX)) == "unknown error code");
+    CHECK(std::string(arx_pistoris_strerror(INT32_MAX)) == "unknown error code");
     CHECK(std::string(arx_pistoris_strerror(static_cast<ArxReturnCode>(9999))) == "unknown error code");
   }
 

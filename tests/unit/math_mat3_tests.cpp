@@ -8,7 +8,6 @@
 #include "utils/math/mat3.h"
 #include "utils/math/quat.h"
 
-#include <cmath>
 #include <numbers>
 
 using namespace pistoris;
@@ -29,18 +28,18 @@ TEST_SUITE("math::mat3") {
 
   TEST_CASE("IdentityMultiply") {
     ArxMat3 m = math::kIdentityMat3;
-    m(0, 1)   = 2.0f;
-    m(2, 0)   = 3.0f;
+    m(0, 1) = 2.0f;
+    m(2, 0) = 3.0f;
     checkMat3Approx(m * math::kIdentityMat3, m);
     checkMat3Approx(math::kIdentityMat3 * m, m);
   }
 
   TEST_CASE("MultiplyAssociative") {
     ArxMat3 a = math::kIdentityMat3;
-    a(0, 0)   = 2.0f;
+    a(0, 0) = 2.0f;
     ArxMat3 b = math::fromEulerXYZ(0.3f, 0.4f, 0.5f);
     ArxMat3 c = math::kIdentityMat3;
-    c(2, 2)   = 3.0f;
+    c(2, 2) = 3.0f;
     checkMat3Approx((a * b) * c, a * (b * c));
   }
 
@@ -54,7 +53,7 @@ TEST_SUITE("math::mat3") {
   // Rz(90 deg): (x, y, z) -> (-y, x, z)
   TEST_CASE("TransformVectorRotation") {
     ArxMat3 rz = math::fromEulerXYZ(0, 0, kPi / 2.0f);
-    auto v     = rz * ArxVector3{1, 0, 0};
+    auto v = rz * ArxVector3{1, 0, 0};
     CHECK(v.x == doctest::Approx(0));
     CHECK(v.y == doctest::Approx(1));
     CHECK(v.z == doctest::Approx(0));
@@ -97,7 +96,7 @@ TEST_SUITE("math::mat3") {
     ArxQuat q = math::extractRotation(r);
 
     ArxVector3 probe = {1.0f, 0.5f, -0.3f};
-    ArxVector3 a     = r * probe;
+    ArxVector3 a = r * probe;
 
     ArxQuat vq{0, probe.x, probe.y, probe.z};
     ArxQuat rq = q * vq * math::conjugate(q);
@@ -108,10 +107,10 @@ TEST_SUITE("math::mat3") {
 
   // Shepperd should recover rotation even when columns are scaled
   TEST_CASE("ExtractRotationIgnoresScale") {
-    ArxMat3 r      = math::fromEulerXYZ(0.3f, -0.7f, 0.5f);
+    ArxMat3 r = math::fromEulerXYZ(0.3f, -0.7f, 0.5f);
     ArxMat3 scaled = math::scaleColumns(r, {2, 3, 5});
-    ArxQuat q1     = math::extractRotation(r);
-    ArxQuat q2     = math::extractRotation(scaled);
+    ArxQuat q1 = math::extractRotation(r);
+    ArxQuat q2 = math::extractRotation(scaled);
     CHECK(q1.w == doctest::Approx(q2.w));
     CHECK(q1.x == doctest::Approx(q2.x));
     CHECK(q1.y == doctest::Approx(q2.y));
@@ -131,7 +130,7 @@ TEST_SUITE("math::mat3") {
   // Rx(90): (x,y,z) -> (x, -z, y)
   TEST_CASE("FromEulerXYZ90X") {
     ArxMat3 r = math::fromEulerXYZ(kPi / 2.0f, 0, 0);
-    auto v    = r * ArxVector3{0, 1, 0};
+    auto v = r * ArxVector3{0, 1, 0};
     CHECK(v.x == doctest::Approx(0));
     CHECK(v.y == doctest::Approx(0));
     CHECK(v.z == doctest::Approx(1));

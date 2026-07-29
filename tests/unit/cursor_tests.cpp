@@ -37,7 +37,7 @@ TEST_SUITE("cursor") {
     uint8_t data[] = {0x01, 0x02};
     pistoris::ReadCursor c(data, sizeof(data));
 
-    int32_t big  = 0;
+    int32_t big = 0;
     int8_t small = 0;
     c.read(big);    // fails
     c.read(small);  // skipped: cursor already failed

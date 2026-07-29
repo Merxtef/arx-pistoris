@@ -3,8 +3,8 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/pistoris_types.h"
 
 #include "arx/ftl.h"
@@ -26,7 +26,7 @@ static pistoris::ftl::Data parseFixture(const std::vector<uint8_t>& fixture) {
 TEST_SUITE("ftl") {
   TEST_CASE("WriteExactMinimal") {
     auto fixture = makeMinimalFtl();
-    auto d       = parseFixture(fixture);
+    auto d = parseFixture(fixture);
     pistoris::WriteCursor wc;
     CHECK(pistoris::saveFtl(&d, wc) == ARX_OK);
     auto bytes = wc.take();
@@ -36,7 +36,7 @@ TEST_SUITE("ftl") {
 
   TEST_CASE("WriteExactTriangle") {
     auto fixture = makeTriangleFtlWithFlags(pistoris::kFaceBitTrans);
-    auto d       = parseFixture(fixture);
+    auto d = parseFixture(fixture);
     pistoris::WriteCursor wc;
     CHECK(pistoris::saveFtl(&d, wc) == ARX_OK);
     auto bytes = wc.take();
@@ -59,8 +59,8 @@ TEST_SUITE("ftl") {
 
     pistoris::ftl::Group g{};
     std::strcpy(g.name, "root");
-    g.origin           = 0;
-    g.indices          = {0, 1, 2, 3};
+    g.origin = 0;
+    g.indices = {0, 1, 2, 3};
     g.blob_shadow_size = 1.5f;
     d1.groups.push_back(g);
 
@@ -87,7 +87,7 @@ TEST_SUITE("ftl") {
 
   TEST_CASE("WriteRoundtrip") {
     auto fixture = makeTriangleFtlWithFlags(pistoris::kFaceBitTrans);
-    auto d1      = parseFixture(fixture);
+    auto d1 = parseFixture(fixture);
 
     pistoris::WriteCursor wc;
     REQUIRE(pistoris::saveFtl(&d1, wc) == ARX_OK);

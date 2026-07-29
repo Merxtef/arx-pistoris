@@ -5,7 +5,9 @@
 
 #include "arx_pistoris/arx_math.hpp"
 
-#include "utils/math/vec3.h"
+#include <cmath>
+#include <limits>
+#include <type_traits>
 
 using namespace pistoris;
 
@@ -60,6 +62,8 @@ TEST_SUITE("math::vec3") {
 
   TEST_CASE("Dot") {
     ArxVector3 a{1, 2, 3}, b{4, -5, 6};
+    CHECK(math::dotf(a, b) == doctest::Approx(4 - 10 + 18));
+    static_assert(std::is_same_v<decltype(math::dot(a, b)), double>);
     CHECK(math::dot(a, b) == doctest::Approx(4 - 10 + 18));
   }
 
@@ -81,8 +85,20 @@ TEST_SUITE("math::vec3") {
 
   TEST_CASE("Length") {
     ArxVector3 v{3, 4, 0};
-    CHECK(math::length(v) == doctest::Approx(5.0f));
-    CHECK(math::lengthSquared(v) == doctest::Approx(25.0f));
+    CHECK(math::lengthf(v) == doctest::Approx(5.0f));
+    CHECK(math::lengthSquaredf(v) == doctest::Approx(25.0f));
+    static_assert(std::is_same_v<decltype(math::length(v)), double>);
+    static_assert(std::is_same_v<decltype(math::lengthSquared(v)), double>);
+    CHECK(math::length(v) == doctest::Approx(5.0));
+    CHECK(math::lengthSquared(v) == doctest::Approx(25.0));
+  }
+
+  TEST_CASE("DoubleLengthHandlesLargeFloatVectors") {
+    ArxVector3 v{1.0e20f, 1.0e20f, 0.0f};
+    CHECK_FALSE(std::isfinite(math::lengthSquaredf(v)));
+    CHECK(std::isfinite(math::lengthSquared(v)));
+    double expected = 2.0 * static_cast<double>(v.x) * static_cast<double>(v.x);
+    CHECK(math::lengthSquared(v) == doctest::Approx(expected));
   }
 
   TEST_CASE("Normalize") {
@@ -90,7 +106,7 @@ TEST_SUITE("math::vec3") {
     CHECK(n.x == doctest::Approx(0));
     CHECK(n.y == doctest::Approx(0.6f));
     CHECK(n.z == doctest::Approx(0.8f));
-    CHECK(math::length(n) == doctest::Approx(1.0f));
+    CHECK(math::lengthf(n) == doctest::Approx(1.0f));
   }
 
   TEST_CASE("NormalizeZeroYieldsZero") {
@@ -100,16 +116,37 @@ TEST_SUITE("math::vec3") {
     CHECK(n.z == 0);
   }
 
-  TEST_CASE("NormalizeOrZeroYieldsFallback") {
-    auto n = math::normalizeOr({0, 0, 0}, {1, 0, 0});
+  TEST_CASE("NormalizeZeroOrZeroYieldsFallback") {
+    auto n = math::normalizeZeroOr({0, 0, 0}, {1, 0, 0});
     CHECK(n.x == 1);
     CHECK(n.y == 0);
     CHECK(n.z == 0);
   }
 
-  TEST_CASE("NormalizeOrNonzeroYieldsUnit") {
-    auto n = math::normalizeOr({0, 3, 4}, {1, 0, 0});
-    CHECK(math::length(n) == doctest::Approx(1.0f));
+  TEST_CASE("NormalizeZeroOrNonzeroYieldsUnit") {
+    auto n = math::normalizeZeroOr({0, 3, 4}, {1, 0, 0});
+    CHECK(math::lengthf(n) == doctest::Approx(1.0f));
+  }
+
+  TEST_CASE("NormalizeFiniteOrRejectsNonfiniteAndZero") {
+    ArxVector3 fallback{1, 0, 0};
+    auto zero = math::normalizeFiniteOr({0, 0, 0}, fallback);
+    CHECK(zero == fallback);
+    auto inf = math::normalizeFiniteOr({std::numeric_limits<float>::infinity(), 0, 0}, fallback);
+    CHECK(inf == fallback);
+  }
+
+  TEST_CASE("NormalizeFiniteOrNonzeroYieldsUnit") {
+    auto n = math::normalizeFiniteOr({0, 3, 4}, {1, 0, 0});
+    CHECK(math::lengthf(n) == doctest::Approx(1.0f));
+  }
+
+  TEST_CASE("NormalizeFiniteOrRejectsVectorsAtMinimumLength") {
+    ArxVector3 fallback{1, 0, 0};
+    CHECK(math::normalizeFiniteOr({0, 3, 4}, fallback, 5.0) == fallback);
+
+    auto n = math::normalizeFiniteOr({0, 3, 4}, fallback, 4.9);
+    CHECK(math::lengthf(n) == doctest::Approx(1.0f));
   }
 
   TEST_CASE("ComponentMinMax") {

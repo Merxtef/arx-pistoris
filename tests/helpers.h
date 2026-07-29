@@ -1,12 +1,62 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// SPDX-FileCopyrightText: 2026 Merxtef
+/*
+ * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ *
+ * This file is part of Arx Libertatis.
+ *
+ * Arx Libertatis is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Arx Libertatis is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ */
+/* Based on:
+===========================================================================
+ARX FATALIS GPL Source Code
+Copyright (C) 1999-2010 Arkane Studios SA, a ZeniMax Media company.
+
+This file is part of the Arx Fatalis GPL Source Code ('Arx Fatalis Source Code').
+
+Arx Fatalis Source Code is free software: you can redistribute it and/or modify it under the terms of the GNU General
+Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+Arx Fatalis Source Code is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+details.
+
+You should have received a copy of the GNU General Public License along with Arx Fatalis Source Code.  If not, see
+<http://www.gnu.org/licenses/>.
+
+In addition, the Arx Fatalis Source Code is also subject to certain additional terms. You should have received a copy of
+these additional terms immediately following the terms and conditions of the GNU General Public License which
+accompanied the Arx Fatalis Source Code. If not, please request a copy in writing from Arkane Studios at the address
+below.
+
+If you have questions concerning this license or the applicable additional terms, you may contact in writing Arkane
+Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
+===========================================================================
+*/
+// Source:
+// https://github.com/arx/ArxLibertatis/blob/5b95e4c5ca9d583f1b11c085326979772645e0f3/src/graphics/data/FastSceneFormat.h
+/*
+ * Modified for arx-pistoris:
+ * Copyright (C) 2026 Merxtef
+ */
 
 #pragma once
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/ftl_data.hpp"
-#include "arx_pistoris/tea_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/tea.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -15,27 +65,27 @@
 
 // tests assume default offset_3d_data = kFtlNVertsOff (544)
 constexpr int32_t kFtlSectionPtrsOff = 520;  // int32[6]
-constexpr int32_t kFtlNVertsOff      = 544;  // default offset_3d_data
-constexpr int32_t kFtlNFacesOff      = 548;
-constexpr int32_t kFtlNTexOff        = 552;
-constexpr int32_t kFtlNGroupsOff     = 556;
-constexpr int32_t kFtlNActionsOff    = 560;
-constexpr int32_t kFtlNSelsOff       = 564;
-constexpr int32_t kFtlHeaderOff      = 568;
-constexpr int32_t kFtlDataOff        = 828;
+constexpr int32_t kFtlNVertsOff = 544;       // default offset_3d_data
+constexpr int32_t kFtlNFacesOff = 548;
+constexpr int32_t kFtlNTexOff = 552;
+constexpr int32_t kFtlNGroupsOff = 556;
+constexpr int32_t kFtlNActionsOff = 560;
+constexpr int32_t kFtlNSelsOff = 564;
+constexpr int32_t kFtlHeaderOff = 568;
+constexpr int32_t kFtlDataOff = 828;
 
-constexpr std::size_t kFtlVertexSize      = 56;
-constexpr std::size_t kFtlFaceSize        = 116;
-constexpr std::size_t kFtlTextureSize     = 256;
+constexpr std::size_t kFtlVertexSize = 56;
+constexpr std::size_t kFtlFaceSize = 116;
+constexpr std::size_t kFtlTextureSize = 256;
 constexpr std::size_t kFtlGroupHeaderSize = 272;
-constexpr std::size_t kFtlSelHeaderSize   = 72;
-constexpr std::size_t kFtlActionSize      = 268;
+constexpr std::size_t kFtlSelHeaderSize = 72;
+constexpr std::size_t kFtlActionSize = 268;
 
-constexpr std::size_t kFtlFaceOffVertIdx   = 16;
-constexpr std::size_t kFtlFaceOffTexId     = 22;
-constexpr std::size_t kFtlGroupOffOrigin   = 256;
+constexpr std::size_t kFtlFaceOffVertIdx = 16;
+constexpr std::size_t kFtlFaceOffTexId = 22;
+constexpr std::size_t kFtlGroupOffOrigin = 256;
 constexpr std::size_t kFtlGroupOffIdxCount = 260;
-constexpr std::size_t kFtlSelOffIdxCount   = 64;
+constexpr std::size_t kFtlSelOffIdxCount = 64;
 constexpr std::size_t kFtlActionOffVertIdx = 256;
 
 inline pistoris::ftl::Data makeData(int n = 1) {
@@ -91,26 +141,145 @@ inline std::vector<uint8_t> makeTriangleFtlWithTexture() {
 
 inline std::vector<uint8_t> makeTriangleFtlWithFlags(uint32_t face_type) {
   std::vector<uint8_t> buf = makeTriangleFtlWithTexture();
-  std::size_t fbase        = kFtlDataOff + 3 * kFtlVertexSize;
+  std::size_t fbase = kFtlDataOff + 3 * kFtlVertexSize;
   std::memcpy(buf.data() + fbase, &face_type, 4);
   return buf;
 }
 
-constexpr int32_t kTeaVersionOff   = 20;
+inline pistoris::fts::Data makeMinimalFtsData() {
+  pistoris::fts::Data d;
+  d.header.version = pistoris::kFtsVersion;
+  d.scene.version = pistoris::kFtsVersion;
+  d.scene.sizex = 1;
+  d.scene.sizez = 1;
+  d.scene.num_textures = 0;
+  d.scene.num_polys = 0;
+  d.scene.num_anchors = 0;
+  d.scene.num_portals = 0;
+  d.scene.num_rooms = 0;
+  d.cells.resize(1);
+  d.rooms.resize(1);
+  d.room_distances.resize(1);
+  return d;
+}
+
+inline pistoris::fts::Data makeTriangleFtsData() {
+  pistoris::fts::Data d = makeMinimalFtsData();
+  d.scene.num_rooms = 1;
+  d.rooms.resize(2);
+  d.room_distances.resize(4);
+  pistoris::fts::Poly poly{};
+  poly.room = 1;
+  poly.v[0].ssx = 0.0f;
+  poly.v[0].sy = 0.0f;
+  poly.v[0].ssz = 0.0f;
+  poly.v[1].ssx = 1.0f;
+  poly.v[1].sy = 0.0f;
+  poly.v[1].ssz = 0.0f;
+  poly.v[2].ssx = 0.0f;
+  poly.v[2].sy = 0.0f;
+  poly.v[2].ssz = 1.0f;
+  poly.norm = {0.0f, -1.0f, 0.0f};
+  poly.norm2 = poly.norm;
+  poly.nrml[0] = poly.nrml[1] = poly.nrml[2] = poly.norm;
+  poly.area = 0.5f;
+  d.cells[0].polygons.push_back(poly);
+  d.scene.num_polys = 1;
+  d.rooms[1].data.num_polys = 1;
+  d.rooms[1].polygons.push_back({0, 0, 0, 0});
+  return d;
+}
+
+template <class T>
+inline void appendBytes(std::vector<uint8_t>& buf, const T& val) {
+  const auto* p = reinterpret_cast<const uint8_t*>(&val);
+  buf.insert(buf.end(), p, p + sizeof(T));
+}
+
+template <class T>
+inline void appendArrayBytes(std::vector<uint8_t>& buf, const std::vector<T>& vals) {
+  if (vals.empty()) return;
+  const auto* p = reinterpret_cast<const uint8_t*>(vals.data());
+  buf.insert(buf.end(), p, p + sizeof(T) * vals.size());
+}
+
+inline std::vector<uint8_t> makeMinimalFts() {
+  pistoris::fts::Data d = makeMinimalFtsData();
+  std::vector<uint8_t> buf;
+  appendBytes(buf, d.header);
+  appendBytes(buf, d.scene);
+  pistoris::fts::SceneInfo info;
+  appendBytes(buf, info);
+  appendBytes(buf, d.rooms[0].data);
+  appendArrayBytes(buf, d.room_distances);
+  return buf;
+}
+
+inline std::vector<uint8_t> makeFtsBytes(const pistoris::fts::Data& d) {
+  struct TextureRecord {
+    int32_t tc = 0;
+    int32_t temp = 0;
+    char fic[256] = {};
+  };
+  static_assert(sizeof(TextureRecord) == 264);
+
+  std::vector<uint8_t> buf;
+  pistoris::fts::Header header = d.header;
+  header.count = static_cast<int32_t>(d.unique_headers.size());
+  pistoris::fts::SceneHeader scene = d.scene;
+  scene.num_textures = static_cast<int32_t>(d.textures.size());
+  appendBytes(buf, header);
+  appendArrayBytes(buf, d.unique_headers);
+  appendBytes(buf, scene);
+  for (const auto& [id, texture] : d.textures) {
+    TextureRecord record;
+    record.tc = id;
+    record.temp = texture.temp;
+    std::memcpy(record.fic, texture.fic, sizeof(record.fic));
+    appendBytes(buf, record);
+  }
+  for (const auto& cell : d.cells) {
+    pistoris::fts::SceneInfo info;
+    info.nbpoly = static_cast<int32_t>(cell.polygons.size());
+    info.nbianchors = static_cast<int32_t>(cell.anchor_ids.size());
+    appendBytes(buf, info);
+    appendArrayBytes(buf, cell.polygons);
+    appendArrayBytes(buf, cell.anchor_ids);
+  }
+  for (const auto& anchor : d.anchors) {
+    pistoris::fts::AnchorData data = anchor.data;
+    data.num_linked = static_cast<int16_t>(anchor.linked.size());
+    appendBytes(buf, data);
+    appendArrayBytes(buf, anchor.linked);
+  }
+  appendArrayBytes(buf, d.portals);
+  for (const auto& room : d.rooms) {
+    pistoris::fts::RoomData data = room.data;
+    data.num_portals = static_cast<int32_t>(room.portal_ids.size());
+    data.num_polys = static_cast<int32_t>(room.polygons.size());
+    appendBytes(buf, data);
+    appendArrayBytes(buf, room.portal_ids);
+    appendArrayBytes(buf, room.polygons);
+  }
+  appendArrayBytes(buf, d.room_distances);
+  return buf;
+}
+
+constexpr int32_t kTeaVersionOff = 20;
 constexpr int32_t kTeaNumFramesOff = 280;
 constexpr int32_t kTeaNumGroupsOff = 284;
-constexpr int32_t kTeaNumKfOff     = 288;
-constexpr int32_t kTeaHeaderSize   = 292;
+constexpr int32_t kTeaNumKfOff = 288;
+constexpr int32_t kTeaHeaderSize = 292;
 
 // v2014 kf header: 32 | v2015: +info_frame[256] -> 288
-constexpr std::size_t kTeaKf2014Size     = 32;
-constexpr std::size_t kTeaKf2015Size     = 288;
+constexpr std::size_t kTeaKf2014Size = 32;
+constexpr std::size_t kTeaKf2015Size = 288;
 constexpr std::size_t kTeaKfFlagFrameOff = 4;
-constexpr std::size_t kTeaKfKeyMoveOff   = 16;
+constexpr std::size_t kTeaKfKeyMoveOff = 16;
 constexpr std::size_t kTeaKfKeyOrientOff = 20;
-constexpr std::size_t kTeaKfKeyMorphOff  = 24;
+constexpr std::size_t kTeaKfKeyMorphOff = 24;
 
-constexpr std::size_t kTeaGroupAnimSize   = 52;
+constexpr std::size_t kTeaGroupAnimSize = 52;
 constexpr std::size_t kTeaSampleBlockSize = 260;
 
 inline std::vector<uint8_t> makeMinimalTea(uint32_t version = pistoris::kTeaVersion) {
@@ -141,7 +310,7 @@ inline void appendKeyframe2014(std::vector<uint8_t>& buf, int32_t num_groups = 0
   buf.insert(buf.end(), static_cast<std::size_t>(num_groups) * kTeaGroupAnimSize, 0);
 
   int32_t no_sample = -1;
-  auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+  auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
   buf.insert(buf.end(), p, p + 4);
   buf.insert(buf.end(), 4, 0);  // num_sfx
 }
@@ -171,7 +340,7 @@ inline std::vector<uint8_t> makeKeyframeTea() {
 
   std::size_t gr = buf.size();
   buf.insert(buf.end(), kTeaGroupAnimSize, 0);
-  int32_t kg  = 1;
+  int32_t kg = 1;
   float gq[4] = {1.f, 0.f, 0.f, 0.f};
   float gt[3] = {4.f, 5.f, 6.f};
   float gz[3] = {1.f, 1.f, 1.f};
@@ -181,7 +350,7 @@ inline std::vector<uint8_t> makeKeyframeTea() {
   std::memcpy(buf.data() + gr + 40, gz, 12);
 
   int32_t no_sample = -1;
-  auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+  auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
   buf.insert(buf.end(), p, p + 4);
   buf.insert(buf.end(), 4, 0);
 
@@ -277,14 +446,20 @@ inline void checkEq(const pistoris::tea::GroupAnim& a, const pistoris::tea::Grou
 inline void checkEq(const pistoris::tea::Keyframe& a, const pistoris::tea::Keyframe& b) {
   CHECK(a.num_frame == b.num_frame);
   CHECK(a.flag_frame == b.flag_frame);
-  CHECK(a.translate.has_value() == b.translate.has_value());
-  if (a.translate && b.translate) checkEq(*a.translate, *b.translate);
-  CHECK(a.quat.has_value() == b.quat.has_value());
-  if (a.quat && b.quat) checkEq(*a.quat, *b.quat);
+  const auto& a_translate = a.translate;
+  const auto& b_translate = b.translate;
+  CHECK(a_translate.has_value() == b_translate.has_value());
+  if (a_translate && b_translate) checkEq(*a_translate, *b_translate);
+  const auto& a_quat = a.quat;
+  const auto& b_quat = b.quat;
+  CHECK(a_quat.has_value() == b_quat.has_value());
+  if (a_quat && b_quat) checkEq(*a_quat, *b_quat);
   REQUIRE(a.groups.size() == b.groups.size());
   for (std::size_t i = 0; i < a.groups.size(); ++i) checkEq(a.groups[i], b.groups[i]);
-  CHECK(a.sample.has_value() == b.sample.has_value());
-  if (a.sample && b.sample) checkEq(*a.sample, *b.sample);
+  const auto& a_sample = a.sample;
+  const auto& b_sample = b.sample;
+  CHECK(a_sample.has_value() == b_sample.has_value());
+  if (a_sample && b_sample) checkEq(*a_sample, *b_sample);
 }
 
 inline void checkEq(const pistoris::tea::Data& a, const pistoris::tea::Data& b) {

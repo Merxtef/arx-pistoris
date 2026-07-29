@@ -33,9 +33,9 @@ struct TextCursor {
  private:
   std::string_view text_;
   std::string_view special_chars_;
-  std::size_t pos_    = 0;
+  std::size_t pos_ = 0;
   std::uint32_t line_ = 1;
-  std::uint32_t col_  = 1;
+  std::uint32_t col_ = 1;
 };
 
 }  // namespace pistoris

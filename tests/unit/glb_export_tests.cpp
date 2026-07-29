@@ -3,10 +3,11 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/ftl.h"
 #include "external/glb.h"
@@ -19,6 +20,7 @@
 #include <nlohmann/json.hpp>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 // save/load roundtrip so Extras gets populated, matching production flow
@@ -32,9 +34,9 @@ static pistoris::ftl::Data sealFtlData(const pistoris::ftl::Data& d) {
   return sealed;
 }
 
-static constexpr uint32_t kGlbMagic      = 0x46546C67u;
+static constexpr uint32_t kGlbMagic = 0x46546C67u;
 static constexpr uint32_t kChunkTypeJson = 0x4E4F534Au;
-static constexpr uint32_t kChunkTypeBin  = 0x004E4942u;
+static constexpr uint32_t kChunkTypeBin = 0x004E4942u;
 
 static uint32_t read32(const uint8_t* p) {
   uint32_t v;
@@ -53,7 +55,7 @@ static std::string extractGlbJson(const std::vector<uint8_t>& glb) {
 
 static std::span<const uint8_t> extractGlbBin(const std::vector<uint8_t>& glb) {
   uint32_t json_len = read32(glb.data() + 12);
-  size_t bin_off    = 20 + json_len;
+  size_t bin_off = 20 + json_len;
   REQUIRE(glb.size() >= bin_off + 8);
   uint32_t bin_len = read32(glb.data() + bin_off);
   REQUIRE(read32(glb.data() + bin_off + 4) == kChunkTypeBin);
@@ -68,9 +70,9 @@ struct GlbExportLogCapture {
 
   GlbExportLogCapture() {
     pistoris::log_fn = [](ArxLogLevel level, const char* msg, void* ud) {
-      auto* self       = static_cast<GlbExportLogCapture*>(ud);
+      auto* self = static_cast<GlbExportLogCapture*>(ud);
       self->last_level = level;
-      self->last_msg   = msg;
+      self->last_msg = msg;
     };
     pistoris::log_ud = this;
   }
@@ -113,7 +115,7 @@ TEST_SUITE("glb") {
   }
 
   TEST_CASE("GlbEmptyMesh") {
-    auto d = makeData(1);  // 1 vertex, no faces
+    auto d = makeData(1);
 
     std::vector<uint8_t> glb;
     CHECK(pistoris::exportFtlTeaToGlb(d, {}, glb) == ARX_OK);
@@ -133,11 +135,8 @@ TEST_SUITE("glb") {
     CHECK(pistoris::exportFtlTeaToGlb(d, {}, glb) == ARX_OK);
     auto json = extractGlbJson(glb);
 
-    // Material name uses stem
     CHECK(jsonContains(json, "BODY"));
-    // Texture URI present
     CHECK(jsonContains(json, "GRAPH/OBJ3D/BODY.BMP"));
-    // Primitive attributes
     CHECK(jsonContains(json, "POSITION"));
     CHECK(jsonContains(json, "NORMAL"));
     CHECK(jsonContains(json, "TEXCOORD_0"));
@@ -148,8 +147,8 @@ TEST_SUITE("glb") {
     pistoris::ftl::TextureContainer tc{};
     std::memcpy(tc.filename, "BODY.BMP", 9);
     d.texture_containers.push_back(tc);
-    auto face     = makeFace(0, 1, 2, 0);
-    face.type     = pistoris::kFaceBitGlow | pistoris::kFaceBitTrans;
+    auto face = makeFace(0, 1, 2, 0);
+    face.type = pistoris::kFaceBitGlow | pistoris::kFaceBitTrans;
     face.transval = 0.5f;
     d.faces.push_back(face);
 
@@ -183,8 +182,8 @@ TEST_SUITE("glb") {
 
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "chest", 6);
-    g0.origin           = 0;
-    g0.indices          = {0, 1, 2, 3};
+    g0.origin = 0;
+    g0.indices = {0, 1, 2, 3};
     g0.blob_shadow_size = 2.5f;
     d.groups.push_back(g0);
 
@@ -247,25 +246,25 @@ TEST_SUITE("glb") {
     std::vector<uint8_t> glb;
     CHECK(pistoris::exportFtlTeaToGlb(d, {}, glb) == ARX_OK);
     auto json_str = extractGlbJson(glb);
-    auto bin      = extractGlbBin(glb);
+    auto bin = extractGlbBin(glb);
 
     CHECK(jsonContains(json_str, "_HEAD"));
     CHECK(jsonContains(json_str, "_LEFT_ARM"));
 
-    auto gltf       = nlohmann::json::parse(json_str);
+    auto gltf = nlohmann::json::parse(json_str);
     const auto& acc = gltf["accessors"];
     const auto& bvs = gltf["bufferViews"];
-    const auto& pa  = gltf["meshes"][0]["primitives"][0]["attributes"];
+    const auto& pa = gltf["meshes"][0]["primitives"][0]["attributes"];
 
     auto read_mask = [&](const char* key) -> std::vector<float> {
       REQUIRE(pa.contains(key));
-      size_t ai     = pa[key].get<size_t>();
+      size_t ai = pa[key].get<size_t>();
       const auto& a = acc[ai];
       CHECK(a["componentType"] == 5126);
       CHECK(a["type"] == "VEC4");
       size_t count = a["count"].get<size_t>();
-      size_t bv    = a["bufferView"].get<size_t>();
-      size_t off   = bvs[bv]["byteOffset"].get<size_t>();
+      size_t bv = a["bufferView"].get<size_t>();
+      size_t off = bvs[bv]["byteOffset"].get<size_t>();
       std::vector<float> rgba(count * 4);
       std::memcpy(rgba.data(), bin.data() + off, sizeof(float) * count * 4);
       std::vector<float> out(count);
@@ -321,7 +320,7 @@ TEST_SUITE("glb") {
   }
 
   TEST_CASE("GlbBoneNamesCarryOrdinalPrefixes") {
-    auto d                 = makeData(4);
+    auto d = makeData(4);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
@@ -329,7 +328,7 @@ TEST_SUITE("glb") {
 
     pistoris::ftl::Group root{};
     std::memcpy(root.name, "root", 5);
-    root.origin  = 0;
+    root.origin = 0;
     root.indices = {0, 1, 2, 3};
     d.groups.push_back(root);
 
@@ -359,7 +358,7 @@ TEST_SUITE("glb") {
 
     std::vector<uint8_t> glb;
     REQUIRE(pistoris::exportFtlTeaToGlb(d, {}, glb, std::span(extras)) == ARX_OK);
-    auto gltf               = nlohmann::json::parse(extractGlbJson(glb));
+    auto gltf = nlohmann::json::parse(extractGlbJson(glb));
     const auto& mesh_extras = gltf["meshes"][0]["extras"];
     REQUIRE(mesh_extras.contains("arx_selection_names"));
     CHECK(mesh_extras["arx_selection_names"][0].get<std::string>() == "head");
@@ -389,7 +388,7 @@ TEST_SUITE("glb") {
 
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "root_bone", 10);
-    g0.origin  = 0;
+    g0.origin = 0;
     g0.indices = {0, 1, 2};
     d.groups.push_back(g0);
 
@@ -400,15 +399,15 @@ TEST_SUITE("glb") {
     tea.num_groups = 1;
 
     pistoris::tea::Keyframe kf;
-    kf.num_frame  = 24;
+    kf.num_frame = 24;
     kf.flag_frame = pistoris::kTeaFlagFrameStep;
-    kf.translate  = pistoris::ArxVector3{1.0f, 2.0f, 3.0f};
-    kf.quat       = pistoris::ArxQuat{0.5f, 0.5f, 0.5f, 0.5f};
+    kf.translate = pistoris::ArxVector3{1.0f, 2.0f, 3.0f};
+    kf.quat = pistoris::ArxQuat{0.5f, 0.5f, 0.5f, 0.5f};
 
     pistoris::tea::GroupAnim ga;
-    ga.quat      = {1.0f, 0.0f, 0.0f, 0.0f};
+    ga.quat = {1.0f, 0.0f, 0.0f, 0.0f};
     ga.translate = {4.0f, 5.0f, 6.0f};
-    ga.zoom      = {1.0f, 1.0f, 1.0f};
+    ga.zoom = {1.0f, 1.0f, 1.0f};
     kf.groups.push_back(ga);
 
     tea.keyframes.push_back(kf);
@@ -429,8 +428,6 @@ TEST_SUITE("glb") {
   TEST_CASE("GlbTeaGroupMismatch") {
     auto d = makeData(3);
     d.faces.push_back(makeFace(0, 1, 2));
-    // no groups in FTL
-
     pistoris::tea::Data tea;
     tea.num_frames = 24;
     tea.num_groups = 1;  // mismatch: FTL has 0 groups
@@ -441,11 +438,10 @@ TEST_SUITE("glb") {
 
     const pistoris::tea::Data* tea_ptr = &tea;
     std::vector<uint8_t> glb;
-    CHECK(pistoris::exportFtlTeaToGlb(d, {&tea_ptr, 1}, glb) == ARX_GLB_TEA_GROUP_MISMATCH);
+    CHECK(pistoris::exportFtlTeaToGlb(d, {&tea_ptr, 1}, glb) == ARX_GLB_ANIMATION_GROUP_MISMATCH);
   }
 
-  TEST_CASE("GlbNoGroupsForTea") {
-    // FTL has no groups; TEA provided with num_groups=0 and no bones -> reject as malformed
+  TEST_CASE("GlbRejectsTeaWithoutFtlSkeleton") {
     auto d = makeData(3);
     d.faces.push_back(makeFace(0, 1, 2));
 
@@ -458,18 +454,16 @@ TEST_SUITE("glb") {
 
     const pistoris::tea::Data* tea_ptr = &tea;
     std::vector<uint8_t> glb;
-    CHECK(pistoris::exportFtlTeaToGlb(d, {&tea_ptr, 1}, glb) == ARX_GLB_NO_GROUPS_FOR_TEA);
+    CHECK(pistoris::exportFtlTeaToGlb(d, {&tea_ptr, 1}, glb) == ARX_GLB_ANIMATION_NO_MODEL_GROUPS);
   }
 
   TEST_CASE("GlbHoldSuffix") {
-    // last keyframe (num_frame=10) falls short of anim_end (num_frames=24)
-    // -> synthetic hold frame appended, animation name suffixed with "__h"
     auto d = makeData(3);
     d.faces.push_back(makeFace(0, 1, 2));
 
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "root", 5);
-    g0.origin  = 0;
+    g0.origin = 0;
     g0.indices = {0, 1, 2};
     d.groups.push_back(g0);
     d = sealFtlData(d);
@@ -479,7 +473,7 @@ TEST_SUITE("glb") {
     tea.num_groups = 1;
     std::memcpy(tea.name, "walk", 5);
     pistoris::tea::Keyframe kf;
-    kf.num_frame  = 10;
+    kf.num_frame = 10;
     kf.flag_frame = pistoris::kTeaFlagFrameNone;
     kf.groups.emplace_back();
     tea.keyframes.push_back(kf);
@@ -492,13 +486,12 @@ TEST_SUITE("glb") {
   }
 
   TEST_CASE("GlbNoHoldSuffixWhenExact") {
-    // last keyframe aligns with num_frames -> no hold, no "__h" suffix
     auto d = makeData(3);
     d.faces.push_back(makeFace(0, 1, 2));
 
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "root", 5);
-    g0.origin  = 0;
+    g0.origin = 0;
     g0.indices = {0, 1, 2};
     d.groups.push_back(g0);
     d = sealFtlData(d);
@@ -508,7 +501,7 @@ TEST_SUITE("glb") {
     tea.num_groups = 1;
     std::memcpy(tea.name, "attack", 7);
     pistoris::tea::Keyframe kf;
-    kf.num_frame = 24;  // matches num_frames exactly
+    kf.num_frame = 24;
     kf.groups.emplace_back();
     tea.keyframes.push_back(kf);
 
@@ -522,7 +515,7 @@ TEST_SUITE("glb") {
 
   // 3 verts x 21846 faces, unique UV per corner -> 65538 distinct ExpandKeys, exceeds uint16 max
   TEST_CASE("GlbExportTooManyVertices") {
-    auto d                 = makeData(3);
+    auto d = makeData(3);
     d.vertices[0].position = {0.0f, 0.0f, 0.0f};
     d.vertices[1].position = {1.0f, 0.0f, 0.0f};
     d.vertices[2].position = {0.0f, 1.0f, 0.0f};
@@ -533,12 +526,12 @@ TEST_SUITE("glb") {
       auto f = makeFace(0, 1, 2);
       // distinct u per corner -> distinct ExpandKey {vi, u_bits, v_bits} per corner
       float fi = static_cast<float>(i);
-      f.u      = {fi * 3.0f, fi * 3.0f + 1.0f, fi * 3.0f + 2.0f};
+      f.u = {fi * 3.0f, fi * 3.0f + 1.0f, fi * 3.0f + 2.0f};
       d.faces.push_back(f);
     }
 
     std::vector<uint8_t> glb;
-    CHECK(pistoris::exportFtlTeaToGlb(d, {}, glb) == ARX_GLB_TOO_MANY_VERTICES);
+    CHECK(pistoris::exportFtlTeaToGlb(d, {}, glb) == ARX_GLB_MODEL_TOO_MANY_VERTICES);
   }
 
 }  // TEST_SUITE

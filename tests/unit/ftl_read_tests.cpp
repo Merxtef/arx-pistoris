@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/pistoris_types.h"
 
 #include "arx/ftl.h"
@@ -65,7 +65,6 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_FTL_BAD_VERSION);
   }
 
-  // buffer ends at kFtlHeaderOff, leaving no bytes for Header read
   TEST_CASE("FtlTruncatedHeader") {
     std::vector<uint8_t> buf(kFtlHeaderOff, 0);
     std::memcpy(buf.data(), pistoris::kFtlMagic, 4);
@@ -78,16 +77,14 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // numberOfVertices = 2 but only 1 vertex follows
   TEST_CASE("FtlTruncatedVertices") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t two              = 2;
+    int32_t two = 2;
     std::memcpy(buf.data() + kFtlNVertsOff, &two, sizeof(two));
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // 1 face referencing texture 0, but no texture containers -> invalid texture id
   TEST_CASE("FtlInvalidFaceTexture") {
     std::vector<uint8_t> buf = makeMinimalFtl();
     buf.resize(buf.size() + kFtlVertexSize + kFtlFaceSize, 0);
@@ -100,7 +97,7 @@ TEST_SUITE("ftl") {
 
   TEST_CASE("FtlBadOffsetNegative") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = -1;
+    int32_t bad = -1;
     std::memcpy(buf.data() + kFtlSectionPtrsOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_OFFSET);
@@ -108,7 +105,7 @@ TEST_SUITE("ftl") {
 
   TEST_CASE("FtlBadOffsetTooSmall") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = 100;
+    int32_t bad = 100;
     std::memcpy(buf.data() + kFtlSectionPtrsOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_OFFSET);
@@ -116,15 +113,14 @@ TEST_SUITE("ftl") {
 
   TEST_CASE("FtlBadOffsetPastEof") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = static_cast<int32_t>(buf.size() + 100);
+    int32_t bad = static_cast<int32_t>(buf.size() + 100);
     std::memcpy(buf.data() + kFtlSectionPtrsOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_OFFSET);
   }
 
-  // offset_3d_data > 544: gap between secondary header and 3D section is skipped
-  TEST_CASE("FtlOffsetGap") {
-    constexpr int32_t kOffset   = 600;
+  TEST_CASE("FtlAllowsOffsetGap") {
+    constexpr int32_t kOffset = 600;
     constexpr std::size_t kSize = kOffset + (kFtlDataOff - kFtlNVertsOff) + kFtlVertexSize;
     std::vector<uint8_t> buf(kSize, 0);
     std::memcpy(buf.data(), pistoris::kFtlMagic, 4);
@@ -166,37 +162,33 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_FTL_BAD_SEL_IDX);
   }
 
-  // numberOfVertices = 0 -> no FTL can have zero vertices
-  TEST_CASE("FtlBadVertN") {
+  TEST_CASE("FtlRejectsZeroVertexCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t zero             = 0;
+    int32_t zero = 0;
     std::memcpy(buf.data() + kFtlNVertsOff, &zero, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_VERT_N);
   }
 
-  // header.origin = 1 with only 1 vertex (index 0) -> out of range
-  TEST_CASE("FtlBadOrigin") {
+  TEST_CASE("FtlRejectsOutOfRangeOrigin") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    uint32_t bad             = 1;
+    uint32_t bad = 1;
     std::memcpy(buf.data() + kFtlHeaderOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_ORIGIN);
   }
 
-  // numberOfFaces = -1
-  TEST_CASE("FtlBadFaceN") {
+  TEST_CASE("FtlRejectsNegativeFaceCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = -1;
+    int32_t bad = -1;
     std::memcpy(buf.data() + kFtlNFacesOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_FACE_N);
   }
 
-  // face type bits beyond FACE_BITS_ALL = (1<<28)-1
-  TEST_CASE("FtlBadFaceType") {
+  TEST_CASE("FtlRejectsUnknownFaceTypeBits") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t one              = 1;
+    int32_t one = 1;
     std::memcpy(buf.data() + kFtlNFacesOff, &one, 4);
     buf.resize(kFtlDataOff + kFtlVertexSize + kFtlFaceSize, 0);
     uint32_t bad_type = 1U << 28;
@@ -207,10 +199,9 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_FTL_BAD_FACE_TYPE);
   }
 
-  // vertex_idx.x = 1 >= numVertices (1)
-  TEST_CASE("FtlBadFaceVertIdx") {
+  TEST_CASE("FtlRejectsOutOfRangeFaceVertex") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t one              = 1;
+    int32_t one = 1;
     std::memcpy(buf.data() + kFtlNFacesOff, &one, 4);
     buf.resize(kFtlDataOff + kFtlVertexSize + kFtlFaceSize, 0);
     uint16_t idx[3] = {1, 0, 0};
@@ -221,28 +212,25 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_FTL_BAD_FACE_VERT_IDX);
   }
 
-  // numberOfTextures = -1
-  TEST_CASE("FtlBadTexN") {
+  TEST_CASE("FtlRejectsNegativeTextureCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = -1;
+    int32_t bad = -1;
     std::memcpy(buf.data() + kFtlNTexOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_TEX_N);
   }
 
-  // numberOfGroups = -1
-  TEST_CASE("FtlBadGroupN") {
+  TEST_CASE("FtlRejectsNegativeGroupCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = -1;
+    int32_t bad = -1;
     std::memcpy(buf.data() + kFtlNGroupsOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_GROUP_N);
   }
 
-  // group num_indices = -1
-  TEST_CASE("FtlBadGroupIdxN") {
+  TEST_CASE("FtlRejectsNegativeGroupIndexCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t one              = 1;
+    int32_t one = 1;
     std::memcpy(buf.data() + kFtlNGroupsOff, &one, 4);
     buf.resize(kFtlDataOff + kFtlVertexSize + kFtlGroupHeaderSize, 0);
     int32_t bad = -1;
@@ -251,29 +239,26 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_FTL_BAD_GROUP_IDX_N);
   }
 
-  // group origin 2 >= numVertices (2)
-  TEST_CASE("FtlBadGroupOrigin") {
+  TEST_CASE("FtlRejectsOutOfRangeGroupOrigin") {
     constexpr std::size_t kGroupBase = kFtlDataOff + 2 * kFtlVertexSize;
-    auto buf                         = makeFtlWithGroupIndex(0);
-    uint32_t bad_origin              = 2;
+    auto buf = makeFtlWithGroupIndex(0);
+    uint32_t bad_origin = 2;
     std::memcpy(buf.data() + kGroupBase + kFtlGroupOffOrigin, &bad_origin, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_GROUP_ORIGIN);
   }
 
-  // numberOfActions = -1
-  TEST_CASE("FtlBadActionN") {
+  TEST_CASE("FtlRejectsNegativeActionCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = -1;
+    int32_t bad = -1;
     std::memcpy(buf.data() + kFtlNActionsOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_ACTION_N);
   }
 
-  // action vertex_idx = -1 -> out of range
-  TEST_CASE("FtlBadActionVertIdx") {
+  TEST_CASE("FtlRejectsOutOfRangeActionVertex") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t one              = 1;
+    int32_t one = 1;
     std::memcpy(buf.data() + kFtlNActionsOff, &one, 4);
     buf.resize(kFtlDataOff + kFtlVertexSize + kFtlActionSize, 0);
     int32_t bad = -1;
@@ -282,19 +267,17 @@ TEST_SUITE("ftl") {
     CHECK(load(buf, d) == ARX_FTL_BAD_ACTION_VERT_IDX);
   }
 
-  // numberOfSelections = -1
-  TEST_CASE("FtlBadSelN") {
+  TEST_CASE("FtlRejectsNegativeSelectionCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t bad              = -1;
+    int32_t bad = -1;
     std::memcpy(buf.data() + kFtlNSelsOff, &bad, 4);
     pistoris::ftl::Data d;
     CHECK(load(buf, d) == ARX_FTL_BAD_SEL_N);
   }
 
-  // selection num_selected = -1
-  TEST_CASE("FtlBadSelIdxN") {
+  TEST_CASE("FtlRejectsNegativeSelectionIndexCount") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    int32_t one              = 1;
+    int32_t one = 1;
     std::memcpy(buf.data() + kFtlNSelsOff, &one, 4);
     buf.resize(kFtlDataOff + kFtlVertexSize + kFtlSelHeaderSize, 0);
     int32_t bad = -1;
@@ -316,7 +299,7 @@ TEST_SUITE("ftl") {
 
   // group.name is first 256 bytes of group header
   TEST_CASE("FtlGroupNameNoNullTerm") {
-    auto buf                         = makeFtlWithGroupIndex(0);
+    auto buf = makeFtlWithGroupIndex(0);
     constexpr std::size_t kGroupBase = kFtlDataOff + 2 * kFtlVertexSize;
     std::memset(buf.data() + kGroupBase, 'A', 256);
     pistoris::ftl::Data d;
@@ -326,7 +309,7 @@ TEST_SUITE("ftl") {
 
   // texture.filename is the full 256-byte TextureContainer
   TEST_CASE("FtlTextureFilenameNoNullTerm") {
-    auto buf                       = makeTriangleFtlWithTexture();
+    auto buf = makeTriangleFtlWithTexture();
     constexpr std::size_t kTexBase = kFtlDataOff + 3 * kFtlVertexSize + kFtlFaceSize;
     std::memset(buf.data() + kTexBase, 'A', 256);
     pistoris::ftl::Data d;
@@ -336,7 +319,7 @@ TEST_SUITE("ftl") {
 
   // action.name is first 256 bytes of action; vertex_idx at +256 stays 0 (valid)
   TEST_CASE("FtlActionNameNoNullTerm") {
-    auto buf    = makeMinimalFtl();
+    auto buf = makeMinimalFtl();
     int32_t one = 1;
     std::memcpy(buf.data() + kFtlNActionsOff, &one, 4);
     buf.resize(kFtlDataOff + kFtlVertexSize + kFtlActionSize, 0);
@@ -348,7 +331,7 @@ TEST_SUITE("ftl") {
 
   // selection.name is first 64 bytes of selection header
   TEST_CASE("FtlSelectionNameNoNullTerm") {
-    auto buf                       = makeFtlWithSelIndex(0);
+    auto buf = makeFtlWithSelIndex(0);
     constexpr std::size_t kSelBase = kFtlDataOff + 2 * kFtlVertexSize;
     std::memset(buf.data() + kSelBase, 'A', 64);
     pistoris::ftl::Data d;
@@ -361,11 +344,11 @@ TEST_SUITE("ftl") {
     pistoris::ftl::Data d = makeData(4);
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "root", 5);
-    g0.origin  = 0;
+    g0.origin = 0;
     g0.indices = {0, 1, 2};
     pistoris::ftl::Group g1{};
     std::memcpy(g1.name, "orphan", 7);
-    g1.origin  = 3;  // vertex 3 is not in g0.indices and not in any group before g1
+    g1.origin = 3;  // vertex 3 is not in g0.indices and not in any group before g1
     g1.indices = {3};
     d.groups.push_back(std::move(g0));
     d.groups.push_back(std::move(g1));
@@ -378,11 +361,11 @@ TEST_SUITE("ftl") {
     pistoris::ftl::Data d = makeData(4);
     pistoris::ftl::Group g0{};
     std::memcpy(g0.name, "root", 5);
-    g0.origin  = 0;
+    g0.origin = 0;
     g0.indices = {0, 1, 2, 3};
     pistoris::ftl::Group g1{};
     std::memcpy(g1.name, "child", 6);
-    g1.origin  = 1;  // vertex 1 is in g0.indices -> g0 is parent
+    g1.origin = 1;  // vertex 1 is in g0.indices -> g0 is parent
     g1.indices = {1, 2};
     d.groups.push_back(std::move(g0));
     d.groups.push_back(std::move(g1));

@@ -3,8 +3,8 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/tea.h"
 #include "helpers.h"
@@ -30,12 +30,11 @@ TEST_SUITE("tea") {
 
   TEST_CASE("TeaBadIdentifier") {
     auto buf = makeMinimalTea();
-    buf[0]   = 'X';
+    buf[0] = 'X';
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_INVALID_IDENTIFIER);
   }
 
-  // buffer ends exactly after 20-byte identity; version read fails
   TEST_CASE("TeaTruncatedAfterIdentity") {
     std::vector<uint8_t> buf(20, 0);
     std::memcpy(buf.data(), pistoris::kTeaMagic, sizeof(pistoris::kTeaMagic));
@@ -44,7 +43,7 @@ TEST_SUITE("tea") {
   }
 
   TEST_CASE("TeaBadVersion") {
-    auto buf     = makeMinimalTea();
+    auto buf = makeMinimalTea();
     uint32_t bad = pistoris::kTeaVersion - 1;
     std::memcpy(buf.data() + kTeaVersionOff, &bad, 4);
     pistoris::tea::Data d;
@@ -53,7 +52,6 @@ TEST_SUITE("tea") {
 
   // --- Truncated header ---
 
-  // valid identity + version, then cut off before anim_name + num_frames
   TEST_CASE("TeaTruncatedBeforeNumFrames") {
     std::vector<uint8_t> buf(24, 0);
     std::memcpy(buf.data(), pistoris::kTeaMagic, sizeof(pistoris::kTeaMagic));
@@ -64,32 +62,32 @@ TEST_SUITE("tea") {
 
   // --- Bad header field values ---
 
-  TEST_CASE("TeaBadFramesN") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaRejectsNegativeFrameCount") {
+    auto buf = makeMinimalTea();
     int32_t bad = -1;
     std::memcpy(buf.data() + kTeaNumFramesOff, &bad, 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_TEA_BAD_FRAMES_N);
   }
 
-  TEST_CASE("TeaBadGroupsNNegative") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaRejectsNegativeGroupCount") {
+    auto buf = makeMinimalTea();
     int32_t bad = -1;
     std::memcpy(buf.data() + kTeaNumGroupsOff, &bad, 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_TEA_BAD_GROUPS_N);
   }
 
-  TEST_CASE("TeaBadGroupsNTooLarge") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaRejectsExcessiveGroupCount") {
+    auto buf = makeMinimalTea();
     int32_t bad = static_cast<int32_t>(pistoris::kTeaMaxGroups + 1);
     std::memcpy(buf.data() + kTeaNumGroupsOff, &bad, 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_TEA_BAD_GROUPS_N);
   }
 
-  TEST_CASE("TeaBadKeyframesNNegative") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaRejectsNegativeKeyframeCount") {
+    auto buf = makeMinimalTea();
     int32_t bad = -1;
     std::memcpy(buf.data() + kTeaNumKfOff, &bad, 4);
     pistoris::tea::Data d;
@@ -98,7 +96,6 @@ TEST_SUITE("tea") {
 
   // --- Truncated keyframe body (v2014) ---
 
-  // num_key_frames=1 but no keyframe bytes follow
   TEST_CASE("TeaTruncatedKeyframeHeader") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -106,7 +103,6 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // key_move=1 but no translate bytes follow
   TEST_CASE("TeaTruncatedInTranslate") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -118,7 +114,6 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // key_orient=1 but no THEO_ANGLE or ArxQuat bytes follow
   TEST_CASE("TeaTruncatedInQuat") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -130,7 +125,6 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // key_morph=1 but no 16-byte morph block follows
   TEST_CASE("TeaTruncatedInMorph") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -142,9 +136,8 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // num_groups=1 but keyframe header has no group data
   TEST_CASE("TeaTruncatedInGroups") {
-    auto buf    = makeMinimalTea();
+    auto buf = makeMinimalTea();
     int32_t one = 1;
     std::memcpy(buf.data() + kTeaNumGroupsOff, &one, 4);
     setNumKeyframes(buf, 1);
@@ -153,7 +146,6 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // full keyframe header + 0 groups, then truncated before num_sample
   TEST_CASE("TeaTruncatedInNumSample") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -162,58 +154,54 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // num_sample != -1 but no sample name bytes follow
   TEST_CASE("TeaTruncatedInSampleName") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     buf.insert(buf.end(), kTeaKf2014Size, 0);
     int32_t has_sample = 0;
-    auto* p            = reinterpret_cast<const uint8_t*>(&has_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&has_sample);
     buf.insert(buf.end(), p, p + 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // sample present but sample_size = -1
-  TEST_CASE("TeaBadSampleSize") {
+  TEST_CASE("TeaRejectsNegativeSampleSize") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     buf.insert(buf.end(), kTeaKf2014Size, 0);
     int32_t has_sample = 0;
-    auto* p            = reinterpret_cast<const uint8_t*>(&has_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&has_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 256, 'A');  // sample name
     int32_t bad_size = -1;
-    auto* q          = reinterpret_cast<const uint8_t*>(&bad_size);
+    auto* q = reinterpret_cast<const uint8_t*>(&bad_size);
     buf.insert(buf.end(), q, q + 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_TEA_BAD_SAMPLE_SIZE);
   }
 
-  // sample_size=10 but only 5 audio bytes follow
   TEST_CASE("TeaTruncatedInAudioBytes") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     buf.insert(buf.end(), kTeaKf2014Size, 0);
     int32_t has_sample = 0;
-    auto* p            = reinterpret_cast<const uint8_t*>(&has_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&has_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 256, 0);  // sample name
     int32_t audio_size = 10;
-    auto* q            = reinterpret_cast<const uint8_t*>(&audio_size);
+    auto* q = reinterpret_cast<const uint8_t*>(&audio_size);
     buf.insert(buf.end(), q, q + 4);
     buf.insert(buf.end(), 5, 0);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
   }
 
-  // num_sample=-1 but no num_sfx follows
   TEST_CASE("TeaTruncatedInNumSfx") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     buf.insert(buf.end(), kTeaKf2014Size, 0);
     int32_t no_sample = -1;
-    auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
     buf.insert(buf.end(), p, p + 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
@@ -221,7 +209,6 @@ TEST_SUITE("tea") {
 
   // --- Truncated v2015 keyframe ---
 
-  // v2015: only num_frame+flag_frame present, info_frame[256] skip runs past EOF
   TEST_CASE("TeaTruncatedInInfoFrame") {
     auto buf = makeMinimalTea(pistoris::kTeaVersionAlt);
     setNumKeyframes(buf, 1);
@@ -232,7 +219,7 @@ TEST_SUITE("tea") {
 
   // --- ValidateTea ---
 
-  TEST_CASE("TeaBadFlagFrame") {
+  TEST_CASE("TeaRejectsUnknownFrameFlag") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
@@ -242,7 +229,6 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_TEA_BAD_FLAG_FRAME);
   }
 
-  // 0 keyframes has no animation body
   TEST_CASE("TeaEmptyKeyframesRejected") {
     auto buf = makeMinimalTea();
     pistoris::tea::Data d;
@@ -272,7 +258,6 @@ TEST_SUITE("tea") {
     CHECK(!d.keyframes[0].sample);
   }
 
-  // v2015 keyframe: num_frame(4)+flag_frame(4)+info_frame[256]+remaining 6 fields(24)
   TEST_CASE("TeaOneKeyframeV2015") {
     auto buf = makeMinimalTea(pistoris::kTeaVersionAlt);
     setNumKeyframes(buf, 1);
@@ -280,7 +265,7 @@ TEST_SUITE("tea") {
     int32_t flag = pistoris::kTeaFlagFrameNone;
     std::memcpy(buf.data() + kTeaHeaderSize + kTeaKfFlagFrameOff, &flag, 4);
     int32_t no_sample = -1;
-    auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 4, 0);  // num_sfx
     pistoris::tea::Data d;
@@ -293,7 +278,7 @@ TEST_SUITE("tea") {
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf, 0, pistoris::kTeaFlagFrameNone, 1);  // key_move=1
     std::size_t tr_off = kTeaHeaderSize + kTeaKf2014Size;
-    float xyz[3]       = {1.f, 2.f, 3.f};
+    float xyz[3] = {1.f, 2.f, 3.f};
     std::memcpy(buf.data() + tr_off, xyz, 12);
     pistoris::tea::Data d;
     REQUIRE(load(buf, d) == ARX_OK);
@@ -309,7 +294,7 @@ TEST_SUITE("tea") {
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf, 0, pistoris::kTeaFlagFrameNone, 0, 1);  // key_orient=1
     std::size_t quat_off = kTeaHeaderSize + kTeaKf2014Size + 8;     // +8 for THEO_ANGLE
-    float wxyz[4]        = {1.f, 0.f, 0.f, 0.f};
+    float wxyz[4] = {1.f, 0.f, 0.f, 0.f};
     std::memcpy(buf.data() + quat_off, wxyz, 16);
     pistoris::tea::Data d;
     REQUIRE(load(buf, d) == ARX_OK);
@@ -324,13 +309,13 @@ TEST_SUITE("tea") {
     int32_t flag = pistoris::kTeaFlagFrameNone;
     std::memcpy(buf.data() + kTeaHeaderSize + kTeaKfFlagFrameOff, &flag, 4);
     int32_t has_sample = 0;
-    auto* p            = reinterpret_cast<const uint8_t*>(&has_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&has_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 256, 0);  // sample name
     const char* name = "test.wav";
     std::memcpy(buf.data() + buf.size() - 256, name, std::strlen(name));
     int32_t audio_size = 4;
-    auto* q            = reinterpret_cast<const uint8_t*>(&audio_size);
+    auto* q = reinterpret_cast<const uint8_t*>(&audio_size);
     buf.insert(buf.end(), q, q + 4);
     buf.insert(buf.end(), 4, 0);  // 4 audio bytes
     buf.insert(buf.end(), 4, 0);  // num_sfx
@@ -340,7 +325,6 @@ TEST_SUITE("tea") {
     CHECK(std::strcmp(d.keyframes[0].sample->name, "test.wav") == 0);
   }
 
-  // key_morph=1: 16-byte block must be skipped without error
   TEST_CASE("TeaKeyframeWithMorph") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -349,8 +333,7 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_OK);
   }
 
-  // flag_frame=9 (footstep) is valid
-  TEST_CASE("TeaFlagFrameStep") {
+  TEST_CASE("TeaAcceptsFootstepFrameFlag") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf, 0, pistoris::kTeaFlagFrameStep);
@@ -359,9 +342,8 @@ TEST_SUITE("tea") {
     CHECK(d.keyframes[0].flag_frame == pistoris::kTeaFlagFrameStep);
   }
 
-  // 1 keyframe, 2 groups
-  TEST_CASE("TeaGroupsParsed") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaParsesMultipleGroups") {
+    auto buf = makeMinimalTea();
     int32_t two = 2;
     std::memcpy(buf.data() + kTeaNumGroupsOff, &two, 4);
     setNumKeyframes(buf, 1);
@@ -371,17 +353,16 @@ TEST_SUITE("tea") {
     CHECK(d.keyframes[0].groups.size() == 2);
   }
 
-  TEST_CASE("TeaBadKeyframesNTooLarge") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaRejectsExcessiveKeyframeCount") {
+    auto buf = makeMinimalTea();
     int32_t bad = static_cast<int32_t>(pistoris::kTeaMaxKeyframes + 1);
     std::memcpy(buf.data() + kTeaNumKfOff, &bad, 4);
     pistoris::tea::Data d;
     CHECK(load(buf, d) == ARX_TEA_BAD_KEYFRAMES_N);
   }
 
-  // num_frames is stored verbatim; verify it survives load
-  TEST_CASE("TeaNumFramesNonZero") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaPreservesFrameCount") {
+    auto buf = makeMinimalTea();
     int32_t val = 240;
     std::memcpy(buf.data() + kTeaNumFramesOff, &val, 4);
     setNumKeyframes(buf, 1);
@@ -391,7 +372,6 @@ TEST_SUITE("tea") {
     CHECK(d.num_frames == 240);
   }
 
-  // key_move=1, key_orient=1, key_morph=1 all in one keyframe
   TEST_CASE("TeaKeyframeAllOptionals") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
@@ -402,9 +382,8 @@ TEST_SUITE("tea") {
     CHECK(d.keyframes[0].quat.has_value());
   }
 
-  // group quat/translate/zoom bytes land in the right fields
   TEST_CASE("TeaGroupFieldValues") {
-    auto buf    = makeMinimalTea();
+    auto buf = makeMinimalTea();
     int32_t one = 1;
     std::memcpy(buf.data() + kTeaNumGroupsOff, &one, 4);
     setNumKeyframes(buf, 1);
@@ -412,9 +391,9 @@ TEST_SUITE("tea") {
 
     // group layout: key_group(4) + angle(8) + quat(16) + translate(12) + zoom(12)
     std::size_t gr = kTeaHeaderSize + kTeaKf2014Size;
-    float gq[4]    = {0.f, 0.707f, 0.f, 0.707f};
-    float gt[3]    = {10.f, 20.f, 30.f};
-    float gz[3]    = {0.f, 0.f, 3.f};
+    float gq[4] = {0.f, 0.707f, 0.f, 0.707f};
+    float gt[3] = {10.f, 20.f, 30.f};
+    float gz[3] = {0.f, 0.f, 3.f};
     std::memcpy(buf.data() + gr + 12, gq, 16);
     std::memcpy(buf.data() + gr + 28, gt, 12);
     std::memcpy(buf.data() + gr + 40, gz, 12);
@@ -427,7 +406,6 @@ TEST_SUITE("tea") {
     CHECK(d.keyframes[0].groups[0].zoom.z == doctest::Approx(3.f));
   }
 
-  // proves cursor alignment: info_frame[256] skip lands at the right offset for v2015
   TEST_CASE("TeaV2015FieldsAfterInfoFrameSkip") {
     auto buf = makeMinimalTea(pistoris::kTeaVersionAlt);
     setNumKeyframes(buf, 1);
@@ -435,7 +413,7 @@ TEST_SUITE("tea") {
     std::memcpy(buf.data() + kTeaNumFramesOff, &nf, 4);
 
     constexpr std::size_t kV2015KeyMoveOff = kTeaKfKeyMoveOff + 256;  // 272
-    std::size_t kf                         = buf.size();
+    std::size_t kf = buf.size();
     buf.insert(buf.end(), kTeaKf2015Size, 0);
     int32_t num_frame = 7, flag = pistoris::kTeaFlagFrameStep, one = 1;
     std::memcpy(buf.data() + kf + 0, &num_frame, 4);
@@ -446,7 +424,7 @@ TEST_SUITE("tea") {
     buf.insert(buf.end(), reinterpret_cast<uint8_t*>(tr), reinterpret_cast<uint8_t*>(tr) + 12);
 
     int32_t no_sample = -1;
-    auto* p           = reinterpret_cast<const uint8_t*>(&no_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&no_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 4, 0);
 
@@ -461,9 +439,8 @@ TEST_SUITE("tea") {
     CHECK(trv.z == doctest::Approx(7.f));
   }
 
-  // two keyframes both at num_frame=5 -> second is not strictly after first
-  TEST_CASE("TeaNonMonotonicFrames") {
-    auto buf    = makeMinimalTea();
+  TEST_CASE("TeaRejectsDuplicateFrameNumber") {
+    auto buf = makeMinimalTea();
     int32_t two = 2;
     std::memcpy(buf.data() + kTeaNumKfOff, &two, 4);
     appendKeyframe2014(buf, 0, pistoris::kTeaFlagFrameNone, 0, 0, 0, 5);
@@ -473,7 +450,7 @@ TEST_SUITE("tea") {
   }
 
   TEST_CASE("TeaDecreasingFrames") {
-    auto buf    = makeMinimalTea();
+    auto buf = makeMinimalTea();
     int32_t two = 2;
     std::memcpy(buf.data() + kTeaNumKfOff, &two, 4);
     appendKeyframe2014(buf, 0, pistoris::kTeaFlagFrameNone, 0, 0, 0, 10);
@@ -482,9 +459,8 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_TEA_NON_MONOTONIC_FRAMES);
   }
 
-  // strictly increasing 0 -> 5 -> 10, all within num_frames=10
-  TEST_CASE("TeaMonotonicFrames") {
-    auto buf      = makeMinimalTea();
+  TEST_CASE("TeaAcceptsIncreasingFrames") {
+    auto buf = makeMinimalTea();
     int32_t three = 3, nf = 10;
     std::memcpy(buf.data() + kTeaNumFramesOff, &nf, 4);
     std::memcpy(buf.data() + kTeaNumKfOff, &three, 4);
@@ -496,9 +472,8 @@ TEST_SUITE("tea") {
     CHECK(d.keyframes.size() == 3);
   }
 
-  // last keyframe num_frame (20) exceeds num_frames (10) -> rejected
   TEST_CASE("TeaLastKeyframePastNumFrames") {
-    auto buf    = makeMinimalTea();
+    auto buf = makeMinimalTea();
     int32_t one = 1, nf = 10, kf_frame = 20;
     std::memcpy(buf.data() + kTeaNumFramesOff, &nf, 4);
     std::memcpy(buf.data() + kTeaNumKfOff, &one, 4);
@@ -507,15 +482,14 @@ TEST_SUITE("tea") {
     CHECK(load(buf, d) == ARX_TEA_BAD_FRAMES_N);
   }
 
-  // sample name fills all 256 bytes without null; must be clamped on load
-  TEST_CASE("TeaSampleNameNoNullTerm") {
+  TEST_CASE("TeaClampsUnterminatedSampleName") {
     auto buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     buf.insert(buf.end(), kTeaKf2014Size, 0);
     int32_t flag = pistoris::kTeaFlagFrameNone;
     std::memcpy(buf.data() + kTeaHeaderSize + kTeaKfFlagFrameOff, &flag, 4);
     int32_t has_sample = 0;
-    auto* p            = reinterpret_cast<const uint8_t*>(&has_sample);
+    auto* p = reinterpret_cast<const uint8_t*>(&has_sample);
     buf.insert(buf.end(), p, p + 4);
     buf.insert(buf.end(), 256, 'A');  // sample name, no null
     buf.insert(buf.end(), 4, 0);      // sample_size=0

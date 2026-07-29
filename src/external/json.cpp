@@ -3,10 +3,10 @@
 
 #include "external/json.h"
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/ftl.h"
 #include "arx/tea.h"
@@ -43,7 +43,7 @@ ArxReturnCode exportFtlToJson(const ftl::Data& d, bool pretty, std::string& out)
 
   Json j;
   j["$schema"] = "https://arx-tools.github.io/schemas/ftl.schema.json";
-  j["header"]  = {{"origin", d.header.origin}, {"name", std::string(d.header.name)}};
+  j["header"] = {{"origin", d.header.origin}, {"name", std::string(d.header.name)}};
 
   j["vertices"] = Json::array();
   for (const auto& v : d.vertices)
@@ -190,7 +190,7 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
     const Json* jh = member(j, "header");
     if (!jh) return ARX_JSON_BAD_SCHEMA;
     const Json* origin = member(*jh, "origin");
-    const Json* name   = member(*jh, "name");
+    const Json* name = member(*jh, "name");
     std::string text_value;
     if (!origin || !name || !getUnsignedInt(*origin, out.header.origin) || !getString(*name, text_value))
       return ARX_JSON_BAD_SCHEMA;
@@ -201,7 +201,7 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
     for (const auto& jv : *vertices) {
       ftl::Vertex v;
       const Json* vector = member(jv, "vector");
-      const Json* norm   = member(jv, "norm");
+      const Json* norm = member(jv, "norm");
       if (!vector || !norm || !getVec3Object(*vector, v.position) || !getVec3Object(*norm, v.normal))
         return ARX_JSON_BAD_SCHEMA;
       out.vertices.push_back(v);
@@ -211,12 +211,12 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
     ARX_RETURN_IF_ERR(getArrayMember(j, "faces", faces, kFtlMaxFaces));
     for (const auto& jf : *faces) {
       ftl::Face f;
-      const Json* face_type   = member(jf, "faceType");
-      const Json* vertex_idx  = member(jf, "vertexIdx");
+      const Json* face_type = member(jf, "faceType");
+      const Json* vertex_idx = member(jf, "vertexIdx");
       const Json* texture_idx = member(jf, "textureIdx");
-      const Json* u           = member(jf, "u");
-      const Json* v           = member(jf, "v");
-      const Json* norm        = member(jf, "norm");
+      const Json* u = member(jf, "u");
+      const Json* v = member(jf, "v");
+      const Json* norm = member(jf, "norm");
       if (!face_type || !vertex_idx || !texture_idx || !u || !v || !norm || !getUnsignedInt(*face_type, f.type) ||
           !vertex_idx->is_array() || vertex_idx->size() != 3 || !getUnsignedInt((*vertex_idx)[0], f.vertex_idx.x) ||
           !getUnsignedInt((*vertex_idx)[1], f.vertex_idx.y) || !getUnsignedInt((*vertex_idx)[2], f.vertex_idx.z) ||
@@ -242,9 +242,9 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
     ARX_RETURN_IF_ERR(getArrayMember(j, "groups", groups, kFtlMaxGroups));
     for (const auto& jg : *groups) {
       ftl::Group g;
-      name                         = member(jg, "name");
-      origin                       = member(jg, "origin");
-      const Json* indices          = member(jg, "indices");
+      name = member(jg, "name");
+      origin = member(jg, "origin");
+      const Json* indices = member(jg, "indices");
       const Json* blob_shadow_size = member(jg, "blobShadowSize");
       if (!name || !origin || !indices || !blob_shadow_size || !getString(*name, text_value) ||
           !getUnsignedInt(*origin, g.origin) || !getFloat(*blob_shadow_size, g.blob_shadow_size))
@@ -258,10 +258,10 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
     ARX_RETURN_IF_ERR(getArrayMember(j, "actions", actions, kFtlMaxActions));
     for (const auto& ja : *actions) {
       ftl::Action a{};
-      name                   = member(ja, "name");
+      name = member(ja, "name");
       const Json* vertex_idx = member(ja, "vertexIdx");
-      const Json* action     = member(ja, "action");
-      const Json* sfx        = member(ja, "sfx");
+      const Json* action = member(ja, "action");
+      const Json* sfx = member(ja, "sfx");
       if (!name || !vertex_idx || !action || !sfx || !getString(*name, text_value) ||
           !getSignedInt(*vertex_idx, a.vertex_idx) || !getSignedInt(*action, a.action) || !getSignedInt(*sfx, a.sfx))
         return ARX_JSON_BAD_SCHEMA;
@@ -273,7 +273,7 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
     ARX_RETURN_IF_ERR(getArrayMember(j, "selections", selections, kFtlMaxSelections));
     for (const auto& js : *selections) {
       ftl::Selection s;
-      name                 = member(js, "name");
+      name = member(js, "name");
       const Json* selected = member(js, "selected");
       if (!name || !selected || !getString(*name, text_value)) return ARX_JSON_BAD_SCHEMA;
       ARX_RETURN_IF_ERR(getInt32Array(*selected, s.selected, out.vertices.size()));
@@ -293,10 +293,15 @@ static ArxReturnCode importJsonToFtlImpl(std::string_view text, ftl::Data& out) 
   auto rc = validateFtl(&out);
   if (rc != ARX_OK) return rc;
 
-  log(ARX_LOG_INFO, std::format("FTL JSON loaded: {} vertices, {} faces, {} textures, {} groups, {} actions, {} "
-                                "selections",
-                                out.vertices.size(), out.faces.size(), out.texture_containers.size(), out.groups.size(),
-                                out.actions.size(), out.selections.size()));
+  log(ARX_LOG_INFO,
+      std::format("FTL JSON loaded: {} vertices, {} faces, {} textures, {} groups, {} actions, {} "
+                  "selections",
+                  out.vertices.size(),
+                  out.faces.size(),
+                  out.texture_containers.size(),
+                  out.groups.size(),
+                  out.actions.size(),
+                  out.selections.size()));
 
   return ARX_OK;
 }
@@ -312,19 +317,19 @@ ArxReturnCode exportTeaToJson(const tea::Data& d, bool pretty, std::string& out)
   ARX_RETURN_IF_ERR(validateTea(&d));
 
   Json j;
-  j["$schema"]                       = "https://arx-tools.github.io/schemas/tea.schema.json";
-  j["header"]                        = Json::object();
-  j["header"]["name"]                = std::string(d.name);
+  j["$schema"] = "https://arx-tools.github.io/schemas/tea.schema.json";
+  j["header"] = Json::object();
+  j["header"]["name"] = std::string(d.name);
   j["header"]["totalNumberOfFrames"] = d.num_frames;
 
   j["keyframes"] = Json::array();
   for (const auto& kf : d.keyframes) {
     Json jkf;
-    jkf["frame"]            = kf.num_frame;
-    jkf["flags"]            = kf.flag_frame;
+    jkf["frame"] = kf.num_frame;
+    jkf["flags"] = kf.flag_frame;
     jkf["isMasterKeyFrame"] = false;
-    jkf["isKeyFrame"]       = false;
-    jkf["timeFrame"]        = 0;
+    jkf["isKeyFrame"] = false;
+    jkf["timeFrame"] = 0;
 
     jkf["groups"] = Json::array();
     for (const auto& group : kf.groups) {
@@ -336,9 +341,12 @@ ArxReturnCode exportTeaToJson(const tea::Data& d, bool pretty, std::string& out)
       jkf["groups"].push_back(std::move(jg));
     }
 
-    if (kf.translate && !isZeroVec3(*kf.translate)) jkf["translate"] = vec3Obj(*kf.translate);
-    if (kf.quat && !isIdentityQuat(*kf.quat)) jkf["quaternion"] = quatObj(*kf.quat);
-    if (const auto* sample = kf.sample ? &*kf.sample : nullptr)
+    const auto& translate = kf.translate;
+    if (translate && !isZeroVec3(*translate)) jkf["translate"] = vec3Obj(*translate);
+    const auto& quat = kf.quat;
+    if (quat && !isIdentityQuat(*quat)) jkf["quaternion"] = quatObj(*quat);
+    const auto& sample_value = kf.sample;
+    if (const auto* sample = sample_value ? &*sample_value : nullptr)
       jkf["sample"] = {{"name", std::string(sample->name)}, {"sizeInBytes", 0}};
 
     j["keyframes"].push_back(std::move(jkf));
@@ -356,7 +364,7 @@ static ArxReturnCode importJsonToTeaImpl(std::string_view text, tea::Data& out) 
     const Json* jh = member(j, "header");
     if (!jh) return ARX_JSON_BAD_SCHEMA;
 
-    const Json* name                   = member(*jh, "name");
+    const Json* name = member(*jh, "name");
     const Json* total_number_of_frames = member(*jh, "totalNumberOfFrames");
     std::string text_value;
     if (!name || !total_number_of_frames || !getString(*name, text_value) ||
@@ -386,12 +394,12 @@ static ArxReturnCode importJsonToTeaImpl(std::string_view text, tea::Data& out) 
       const Json* flags = member(jkf, "flags");
       if (flags && !getSignedInt(*flags, kf.flag_frame)) return ARX_JSON_BAD_SCHEMA;
 
-      bool ignored_bool               = false;
+      bool ignored_bool = false;
       const Json* is_master_key_frame = member(jkf, "isMasterKeyFrame");
       if (is_master_key_frame && !getBool(*is_master_key_frame, ignored_bool)) return ARX_JSON_BAD_SCHEMA;
       const Json* is_key_frame = member(jkf, "isKeyFrame");
       if (is_key_frame && !getBool(*is_key_frame, ignored_bool)) return ARX_JSON_BAD_SCHEMA;
-      int32_t ignored_int    = 0;
+      int32_t ignored_int = 0;
       const Json* time_frame = member(jkf, "timeFrame");
       if (time_frame && !getSignedInt(*time_frame, ignored_int)) return ARX_JSON_BAD_SCHEMA;
 
@@ -413,7 +421,7 @@ static ArxReturnCode importJsonToTeaImpl(std::string_view text, tea::Data& out) 
       for (const auto& jg : *groups) {
         tea::GroupAnim group;
         const Json* is_key = member(jg, "isKey");
-        bool key_group     = false;
+        bool key_group = false;
         if (!is_key || !getBool(*is_key, key_group)) return ARX_JSON_BAD_SCHEMA;
         group.key_group = key_group ? 1 : 0;
 
@@ -450,8 +458,11 @@ static ArxReturnCode importJsonToTeaImpl(std::string_view text, tea::Data& out) 
   auto rc = validateTea(&out);
   if (rc != ARX_OK) return rc;
 
-  log(ARX_LOG_INFO, std::format("TEA JSON loaded: {} keyframes, {} groups, num_frames={}", out.keyframes.size(),
-                                out.num_groups, out.num_frames));
+  log(ARX_LOG_INFO,
+      std::format("TEA JSON loaded: {} keyframes, {} groups, num_frames={}",
+                  out.keyframes.size(),
+                  out.num_groups,
+                  out.num_frames));
 
   return ARX_OK;
 }

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/common_data.hpp"
-#include "arx_pistoris/ftl_data.hpp"
+#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/flags.h"
+#include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/pistoris_types.h"
-#include "arx_pistoris/tea_data.hpp"
 
 #include "arx/ftl.h"
 #include "arx/tea.h"
@@ -12,14 +13,13 @@
 #include "external/mat_name.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
-#include "utils/math/quat.h"
-#include "utils/math/vec3.h"
 #include "utils/parse_utils.h"
 
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -37,16 +37,16 @@ namespace pistoris {
 // Selection names are positional; preserve attribute insertion order
 using Json = nlohmann::ordered_json;
 
-static constexpr int kCompFloat  = 5126;
+static constexpr int kCompFloat = 5126;
 static constexpr int kCompUShort = 5123;
 
-static constexpr int kTargetArray   = 34962;
+static constexpr int kTargetArray = 34962;
 static constexpr int kTargetElement = 34963;
 
-static constexpr uint32_t kGlbMagic      = 0x46546C67u;  // 'glTF'
-static constexpr uint32_t kGlbVersion    = 2u;
+static constexpr uint32_t kGlbMagic = 0x46546C67u;  // 'glTF'
+static constexpr uint32_t kGlbVersion = 2u;
 static constexpr uint32_t kChunkTypeJson = 0x4E4F534Au;  // 'JSON'
-static constexpr uint32_t kChunkTypeBin  = 0x004E4942u;  // 'BIN\0'
+static constexpr uint32_t kChunkTypeBin = 0x004E4942u;   // 'BIN\0'
 
 static std::string boneOrdinalName(int32_t index, std::string_view name) {
   return std::format("{:03}__{}", index, name);
@@ -79,12 +79,12 @@ static void repeatLastN(std::vector<float>& buf, size_t n) {
 
 struct GlbAcc {
   WriteCursor bin;
-  Json bvs  = Json::array();
+  Json bvs = Json::array();
   Json accs = Json::array();
 
   size_t addBufferView(size_t offset, size_t len, int target = 0) {
     Json bv;
-    bv["buffer"]     = 0;
+    bv["buffer"] = 0;
     bv["byteOffset"] = offset;
     bv["byteLength"] = len;
     if (target != 0) bv["target"] = target;
@@ -94,11 +94,11 @@ struct GlbAcc {
 
   size_t addAccessor(size_t bv_idx, size_t count, const char* type, int comp, size_t byte_off = 0) {
     Json acc;
-    acc["bufferView"]    = bv_idx;
-    acc["byteOffset"]    = byte_off;
+    acc["bufferView"] = bv_idx;
+    acc["byteOffset"] = byte_off;
     acc["componentType"] = comp;
-    acc["count"]         = count;
-    acc["type"]          = type;
+    acc["count"] = count;
+    acc["type"] = type;
     accs.push_back(std::move(acc));
     return accs.size() - 1;
   }
@@ -106,7 +106,7 @@ struct GlbAcc {
   template <typename T>
   size_t writeAccessor(const T* data, size_t count, int components, const char* type, int comp, int target = 0) {
     align4(bin);
-    size_t off       = bin.size();
+    size_t off = bin.size();
     size_t n_scalars = count * static_cast<size_t>(components);
     bin.writeN(data, n_scalars);
     size_t bv = addBufferView(off, sizeof(T) * n_scalars, target);
@@ -119,13 +119,13 @@ struct GlbAcc {
     bin.writeN(times.data(), times.size());
     size_t bv = addBufferView(off, sizeof(float) * times.size());
     Json acc;
-    acc["bufferView"]    = bv;
-    acc["byteOffset"]    = 0;
+    acc["bufferView"] = bv;
+    acc["byteOffset"] = 0;
     acc["componentType"] = kCompFloat;
-    acc["count"]         = times.size();
-    acc["type"]          = "SCALAR";
-    acc["min"]           = Json::array({times.front()});
-    acc["max"]           = Json::array({times.back()});
+    acc["count"] = times.size();
+    acc["type"] = "SCALAR";
+    acc["min"] = Json::array({times.front()});
+    acc["max"] = Json::array({times.back()});
     accs.push_back(std::move(acc));
     return accs.size() - 1;
   }
@@ -135,7 +135,7 @@ struct GlbAcc {
     align4(bin);
     size_t off = bin.size();
     bin.writeN(xyz.data(), xyz.size());
-    size_t bv  = addBufferView(off, sizeof(float) * xyz.size(), kTargetArray);
+    size_t bv = addBufferView(off, sizeof(float) * xyz.size(), kTargetArray);
     float fmax = std::numeric_limits<float>::max();
     float flow = std::numeric_limits<float>::lowest();
     ArxVector3 min_v{fmax, fmax, fmax};
@@ -146,13 +146,13 @@ struct GlbAcc {
       max_v = math::componentMax(max_v, p);
     }
     Json acc;
-    acc["bufferView"]    = bv;
-    acc["byteOffset"]    = 0;
+    acc["bufferView"] = bv;
+    acc["byteOffset"] = 0;
     acc["componentType"] = kCompFloat;
-    acc["count"]         = count;
-    acc["type"]          = "VEC3";
-    acc["min"]           = Json::array({min_v.x, min_v.y, min_v.z});
-    acc["max"]           = Json::array({max_v.x, max_v.y, max_v.z});
+    acc["count"] = count;
+    acc["type"] = "VEC3";
+    acc["min"] = Json::array({min_v.x, min_v.y, min_v.z});
+    acc["max"] = Json::array({max_v.x, max_v.y, max_v.z});
     accs.push_back(std::move(acc));
     return accs.size() - 1;
   }
@@ -199,8 +199,8 @@ static ArxReturnCode buildPrim(const ftl::Data& d, int16_t tex_id, FaceType type
     const auto& face = d.faces[fi];
     if (face.texture_id != tex_id || face.type != type) continue;
 
-    const float us[3]    = {face.u.x, face.u.y, face.u.z};
-    const float vs[3]    = {face.v.x, face.v.y, face.v.z};
+    const float us[3] = {face.u.x, face.u.y, face.u.z};
+    const float vs[3] = {face.v.x, face.v.y, face.v.z};
     const uint16_t vi[3] = {face.vertex_idx.x, face.vertex_idx.y, face.vertex_idx.z};
 
     for (int c = 0; c < 3; ++c) {
@@ -211,10 +211,10 @@ static ArxReturnCode buildPrim(const ftl::Data& d, int16_t tex_id, FaceType type
         continue;
       }
 
-      if (out.positions.size() / 3 > std::numeric_limits<uint16_t>::max()) return ARX_GLB_TOO_MANY_VERTICES;
+      if (out.positions.size() / 3 > std::numeric_limits<uint16_t>::max()) return ARX_GLB_MODEL_TOO_MANY_VERTICES;
 
       auto new_idx = static_cast<uint16_t>(out.positions.size() / 3);
-      seen[key]    = new_idx;
+      seen[key] = new_idx;
       out.indices.push_back(new_idx);
 
       const auto& v = d.vertices[vi[c]];
@@ -224,8 +224,7 @@ static ArxReturnCode buildPrim(const ftl::Data& d, int16_t tex_id, FaceType type
       out.texcoords.push_back(vs[c]);
       out.source_vi.push_back(vi[c]);
 
-      // SILENT: ungrouped vertex assigned to bone 0 as a fallback
-      // vtb is sized to vertices.size() and all -1 when groups is empty
+      // Ungrouped vertices fall back to bone 0
       int32_t bone = vtb[vi[c]];
       if (bone < 0) bone = 0;
 
@@ -242,9 +241,9 @@ static ArxReturnCode buildPrim(const ftl::Data& d, int16_t tex_id, FaceType type
 
 static float averageTransval(const ftl::Data& d, int16_t tex_id, FaceType type) {
   float sum = 0.0f;
-  float mn  = std::numeric_limits<float>::max();
-  float mx  = std::numeric_limits<float>::lowest();
-  int cnt   = 0;
+  float mn = std::numeric_limits<float>::max();
+  float mx = std::numeric_limits<float>::lowest();
+  int cnt = 0;
   for (const auto& face : d.faces) {
     if (face.texture_id != tex_id || face.type != type) continue;
     sum += face.transval;
@@ -271,8 +270,8 @@ static void writeInvTranslationMat4(WriteCursor& bin, float px, float py, float 
 struct ExportCtx {
   const ftl::Data& ftl;
   std::span<const tea::Data* const> teas;
-  int32_t ng    = 0;
-  int32_t na    = 0;
+  int32_t ng = 0;
+  int32_t na = 0;
   bool has_skin = false;
   ArxVector3 origin_shift{0.0f, 0.0f, 0.0f};
   std::vector<ArxVector3> bone_world_pos{};
@@ -304,14 +303,14 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
                                                  Json& images, size_t& n_mat_keys,
                                                  std::vector<std::string>& sel_names_ordered) {
   primitives = Json::array();
-  materials  = Json::array();
-  textures   = Json::array();
-  images     = Json::array();
+  materials = Json::array();
+  textures = Json::array();
+  images = Json::array();
 
   auto mat_keys = collectMaterials(cx.ftl);
-  n_mat_keys    = mat_keys.size();
+  n_mat_keys = mat_keys.size();
   std::unordered_map<std::string, int32_t> image_idx_map;
-  size_t mat_idx  = 0;
+  size_t mat_idx = 0;
   const auto& vtb = cx.ftl.extras.vertex_to_bone;
 
   const auto& sels = cx.ftl.selections;
@@ -346,8 +345,8 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
         cx.acc.writeAccessor(prim.indices.data(), prim.indices.size(), 1, "SCALAR", kCompUShort, kTargetElement);
 
     Json prim_json;
-    prim_json["attributes"]["POSITION"]   = pos_acc;
-    prim_json["attributes"]["NORMAL"]     = nrm_acc;
+    prim_json["attributes"]["POSITION"] = pos_acc;
+    prim_json["attributes"]["NORMAL"] = nrm_acc;
     prim_json["attributes"]["TEXCOORD_0"] = uv_acc;
 
     if (cx.has_skin) {
@@ -355,7 +354,7 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
           cx.acc.writeAccessor(prim.joints.data(), prim.joints.size() / 4, 4, "VEC4", kCompUShort, kTargetArray);
       size_t wgt_acc =
           cx.acc.writeAccessor(prim.weights.data(), prim.weights.size() / 4, 4, "VEC4", kCompFloat, kTargetArray);
-      prim_json["attributes"]["JOINTS_0"]  = jnt_acc;
+      prim_json["attributes"]["JOINTS_0"] = jnt_acc;
       prim_json["attributes"]["WEIGHTS_0"] = wgt_acc;
     }
 
@@ -363,7 +362,7 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
     for (size_t si = 0; si < sels.size(); ++si) {
       std::vector<float> mask(prim.source_vi.size() * 4);
       for (size_t i = 0; i < prim.source_vi.size(); ++i) {
-        float v         = sel_mask[si][prim.source_vi[i]] ? 1.0f : 0.0f;
+        float v = sel_mask[si][prim.source_vi[i]] ? 1.0f : 0.0f;
         mask[i * 4 + 0] = v;
         mask[i * 4 + 1] = v;
         mask[i * 4 + 2] = v;
@@ -373,17 +372,17 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
       prim_json["attributes"][sel_attr_name[si]] = sel_acc;
     }
 
-    prim_json["indices"]  = idx_acc;
+    prim_json["indices"] = idx_acc;
     prim_json["material"] = mat_idx;
-    prim_json["mode"]     = 4;  // TRIANGLES
+    prim_json["mode"] = 4;  // TRIANGLES
     primitives.push_back(std::move(prim_json));
 
     std::string_view tex_stem;
     std::string tex_uri;
     if (tex_id != kFtlTextureNone) {
       const auto& filename = cx.ftl.texture_containers[tex_id].filename;
-      tex_stem             = pathStem(filename);
-      tex_uri              = texUri(filename);
+      tex_stem = pathStem(filename);
+      tex_uri = texUri(filename);
     }
 
     float transval = (type & kFaceBitTrans) ? averageTransval(cx.ftl, tex_id, type) : 0.0f;
@@ -392,7 +391,7 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
     mat["name"] = matName(tex_stem, type);
 
     Json pbr;
-    pbr["metallicFactor"]  = 0.0f;
+    pbr["metallicFactor"] = 0.0f;
     pbr["roughnessFactor"] = 1.0f;
     if (!tex_uri.empty()) {
       auto it = image_idx_map.find(tex_uri);
@@ -400,7 +399,7 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
       if (it != image_idx_map.end()) {
         img_idx = it->second;
       } else {
-        img_idx                = static_cast<int32_t>(images.size());
+        img_idx = static_cast<int32_t>(images.size());
         image_idx_map[tex_uri] = img_idx;
         Json img;
         img["uri"] = tex_uri;
@@ -427,7 +426,7 @@ static ArxReturnCode buildPrimitivesAndMaterials(ExportCtx& cx, Json& primitives
 
 static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
   skin_json = Json();
-  nodes     = Json::array();
+  nodes = Json::array();
 
   const auto& parent = cx.ftl.extras.parent_bone;
 
@@ -439,14 +438,14 @@ static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
       const auto& p = cx.bone_world_pos[gi];
       writeInvTranslationMat4(cx.acc.bin, p.x, p.y, p.z);
     }
-    size_t ibm_bv  = cx.acc.addBufferView(ibm_off, sizeof(float) * 16 * static_cast<size_t>(cx.ng));
+    size_t ibm_bv = cx.acc.addBufferView(ibm_off, sizeof(float) * 16 * static_cast<size_t>(cx.ng));
     size_t ibm_acc = cx.acc.addAccessor(ibm_bv, cx.ng, "MAT4", kCompFloat);
 
     Json joints = Json::array();
     for (int32_t gi = 0; gi < cx.ng; ++gi) joints.push_back(boneNode(gi));
     // Single-root enforced by validateFtl (ARX_FTL_ORPHAN_BONE)
-    skin_json["skeleton"]            = boneNode(0);
-    skin_json["joints"]              = std::move(joints);
+    skin_json["skeleton"] = boneNode(0);
+    skin_json["joints"] = std::move(joints);
     skin_json["inverseBindMatrices"] = ibm_acc;
   }
 
@@ -465,7 +464,7 @@ static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
 
   // node 1: wrapper; carries TEA root anim, holds root bones and unbound actions
   {
-    Json skel     = Json::object();
+    Json skel = Json::object();
     Json children = Json::array();
     for (int32_t gi = 0; gi < cx.ng; ++gi)
       if (parent[gi] < 0) children.push_back(boneNode(gi));
@@ -479,7 +478,7 @@ static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
   for (int32_t gi = 0; gi < cx.ng; ++gi) {
     Json node;
     node["name"] = boneOrdinalName(gi, cx.ftl.groups[gi].name);
-    Json ch      = Json::array();
+    Json ch = Json::array();
     for (auto c : cx.bone_children[gi]) ch.push_back(boneNode(c));
     for (int32_t ai = 0; ai < cx.na; ++ai)
       if (cx.action_bone[ai] == gi) ch.push_back(actionNode(cx.ng, ai));
@@ -487,7 +486,7 @@ static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
     ArxVector3 local = cx.bone_world_pos[gi];
     if (parent[gi] >= 0) local = local - cx.bone_world_pos[parent[gi]];
     cx.bone_rest_local[gi] = local;
-    node["translation"]    = Json::array({local.x, local.y, local.z});
+    node["translation"] = Json::array({local.x, local.y, local.z});
     if (cx.ftl.groups[gi].blob_shadow_size != 0.0f)
       node["extras"]["arx_blob_shadow_size"] = cx.ftl.groups[gi].blob_shadow_size;
     nodes.push_back(std::move(node));
@@ -497,9 +496,9 @@ static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
   for (int32_t ai = 0; ai < cx.na; ++ai) {
     const auto& action = cx.ftl.actions[ai];
     Json node;
-    node["name"]        = "arx_action__" + std::string(action.name);
-    ArxVector3 anchor   = cx.action_bone[ai] >= 0 ? cx.bone_world_pos[cx.action_bone[ai]] : cx.origin_shift;
-    ArxVector3 local    = cx.ftl.vertices[action.vertex_idx].position - anchor;
+    node["name"] = "arx_action__" + std::string(action.name);
+    ArxVector3 anchor = cx.action_bone[ai] >= 0 ? cx.bone_world_pos[cx.action_bone[ai]] : cx.origin_shift;
+    ArxVector3 local = cx.ftl.vertices[action.vertex_idx].position - anchor;
     node["translation"] = Json::array({local.x, local.y, local.z});
     nodes.push_back(std::move(node));
   }
@@ -508,7 +507,7 @@ static void buildSkinAndNodes(ExportCtx& cx, Json& skin_json, Json& nodes) {
 // if last keyframe < num_frames, append hold + "__h" name suffix so importer recovers duration
 static void buildAnimations(ExportCtx& cx, const tea::Data& tea, size_t ti, Json& anim) {
   int32_t nkf = static_cast<int32_t>(tea.keyframes.size());
-  int32_t ng  = cx.ng;
+  int32_t ng = cx.ng;
 
   std::vector<float> all_times(nkf);
   for (int32_t i = 0; i < nkf; ++i) all_times[i] = tea.keyframes[i].num_frame / kTeaFps;
@@ -531,9 +530,9 @@ static void buildAnimations(ExportCtx& cx, const tea::Data& tea, size_t ti, Json
       appendVec3(bone_s[gi], ArxVector3{1.0f, 1.0f, 1.0f} + ga.zoom);
     }
     if (need_hold) {
-      repeatLastN(bone_t[gi], 3);  // vec3 translation
-      repeatLastN(bone_r[gi], 4);  // vec4 quat
-      repeatLastN(bone_s[gi], 3);  // vec3 scale
+      repeatLastN(bone_t[gi], 3);
+      repeatLastN(bone_r[gi], 4);
+      repeatLastN(bone_s[gi], 3);
     }
   }
 
@@ -541,13 +540,15 @@ static void buildAnimations(ExportCtx& cx, const tea::Data& tea, size_t ti, Json
   std::vector<float> root_t_vals, root_r_vals;
   for (int32_t ki = 0; ki < nkf; ++ki) {
     const auto& kf = tea.keyframes[ki];
-    if (kf.translate) {
+    const auto& translate = kf.translate;
+    if (translate) {
       root_t_times.push_back(all_times[ki]);
-      appendVec3(root_t_vals, *kf.translate);
+      appendVec3(root_t_vals, *translate);
     }
-    if (kf.quat) {
+    const auto& quat = kf.quat;
+    if (quat) {
       root_r_times.push_back(all_times[ki]);
-      appendQuatGltf(root_r_vals, *kf.quat);
+      appendQuatGltf(root_r_vals, *quat);
     }
   }
 
@@ -558,26 +559,27 @@ static void buildAnimations(ExportCtx& cx, const tea::Data& tea, size_t ti, Json
     for (int32_t ki = 0; ki < nkf; ++ki) {
       const auto& kf = tea.keyframes[ki];
       if (kf.flag_frame == kTeaFlagFrameStep) footsteps.push_back(ki);
-      if (kf.sample) audio[std::to_string(ki)] = std::string(kf.sample->name);
+      const auto& sample = kf.sample;
+      if (sample) audio[std::to_string(ki)] = std::string(sample->name);
     }
     if (!footsteps.empty()) anim_extras["arx_footstep_frames"] = std::move(footsteps);
     if (!audio.empty()) anim_extras["arx_audio_keyframes"] = std::move(audio);
   }
 
-  Json samplers    = Json::array();
-  Json channels    = Json::array();
+  Json samplers = Json::array();
+  Json channels = Json::array();
   size_t all_t_acc = cx.acc.writeTimeAccessor(all_times);
 
   for (int32_t gi = 0; gi < ng; ++gi) {
     auto add_channel = [&](size_t out_acc, const char* path) {
       size_t si = samplers.size();
       Json samp;
-      samp["input"]         = all_t_acc;
-      samp["output"]        = out_acc;
+      samp["input"] = all_t_acc;
+      samp["output"] = out_acc;
       samp["interpolation"] = "LINEAR";
       samplers.push_back(std::move(samp));
       Json ch;
-      ch["sampler"]        = si;
+      ch["sampler"] = si;
       ch["target"]["node"] = boneNode(gi);
       ch["target"]["path"] = path;
       channels.push_back(std::move(ch));
@@ -591,32 +593,32 @@ static void buildAnimations(ExportCtx& cx, const tea::Data& tea, size_t ti, Json
     add_channel(s_acc, "scale");
   }
 
-  auto add_root_channel = [&](std::vector<float>& times_v, std::vector<float>& vals, int components, const char* type,
-                              const char* path) {
-    if (times_v.empty()) return;
-    size_t in_acc  = cx.acc.writeTimeAccessor(times_v);
-    size_t out_acc = cx.acc.writeAccessor(vals.data(), times_v.size(), components, type, kCompFloat);
-    size_t si      = samplers.size();
-    Json samp;
-    samp["input"]         = in_acc;
-    samp["output"]        = out_acc;
-    samp["interpolation"] = "LINEAR";
-    samplers.push_back(std::move(samp));
-    Json ch;
-    ch["sampler"]        = si;
-    ch["target"]["node"] = kSkelWrapperNode;
-    ch["target"]["path"] = path;
-    channels.push_back(std::move(ch));
-  };
+  auto add_root_channel =
+      [&](std::vector<float>& times_v, std::vector<float>& vals, int components, const char* type, const char* path) {
+        if (times_v.empty()) return;
+        size_t in_acc = cx.acc.writeTimeAccessor(times_v);
+        size_t out_acc = cx.acc.writeAccessor(vals.data(), times_v.size(), components, type, kCompFloat);
+        size_t si = samplers.size();
+        Json samp;
+        samp["input"] = in_acc;
+        samp["output"] = out_acc;
+        samp["interpolation"] = "LINEAR";
+        samplers.push_back(std::move(samp));
+        Json ch;
+        ch["sampler"] = si;
+        ch["target"]["node"] = kSkelWrapperNode;
+        ch["target"]["path"] = path;
+        channels.push_back(std::move(ch));
+      };
 
   add_root_channel(root_t_times, root_t_vals, 3, "VEC3", "translation");
   add_root_channel(root_r_times, root_r_vals, 4, "VEC4", "rotation");
 
-  anim                  = Json();
+  anim = Json();
   std::string anim_name = (tea.name[0] != '\0') ? std::string(tea.name) : std::format("animation_{}", ti);
 
   if (need_hold) anim_name += "__h";
-  anim["name"]     = std::move(anim_name);
+  anim["name"] = std::move(anim_name);
   anim["samplers"] = std::move(samplers);
   anim["channels"] = std::move(channels);
   if (!anim_extras.empty()) anim["extras"] = std::move(anim_extras);
@@ -624,12 +626,12 @@ static void buildAnimations(ExportCtx& cx, const tea::Data& tea, size_t ti, Json
 
 static ArxReturnCode assembleGlbContainer(Json&& gltf, GlbAcc& acc, std::vector<uint8_t>& out) {
   std::string json_str = gltf.dump();
-  size_t json_pad      = (4 - json_str.size() % 4) % 4;
+  size_t json_pad = (4 - json_str.size() % 4) % 4;
   json_str.append(json_pad, ' ');
 
   align4(acc.bin);
   ARX_RETURN_IF_ERR(acc.bin);
-  auto bin_data        = acc.bin.take();
+  auto bin_data = acc.bin.take();
   size_t bin_data_size = bin_data.size();
 
   if (json_str.size() > std::numeric_limits<uint32_t>::max() || bin_data_size > std::numeric_limits<uint32_t>::max()) {
@@ -644,7 +646,7 @@ static ArxReturnCode assembleGlbContainer(Json&& gltf, GlbAcc& acc, std::vector<
   }
 
   uint32_t json_chunk_len = static_cast<uint32_t>(json_str.size());
-  uint32_t total_len      = static_cast<uint32_t>(total_len_size);
+  uint32_t total_len = static_cast<uint32_t>(total_len_size);
 
   out.clear();
   out.reserve(total_len);
@@ -731,19 +733,20 @@ ArxReturnCode exportFtlTeaToGlb(const ftl::Data& ftl, std::span<const tea::Data*
     any_tea = true;
     ARX_RETURN_IF_ERR(validateTea(teas[ti]));
     if (static_cast<size_t>(teas[ti]->num_groups) != ftl.groups.size()) {
-      log(ARX_LOG_ERROR, std::format("GLB export: TEA[{}] num_groups={} != FTL group count={}", ti,
-                                     teas[ti]->num_groups, ftl.groups.size()));
-      return ARX_GLB_TEA_GROUP_MISMATCH;
+      log(ARX_LOG_ERROR,
+          std::format(
+              "GLB export: TEA[{}] num_groups={} != FTL group count={}", ti, teas[ti]->num_groups, ftl.groups.size()));
+      return ARX_GLB_ANIMATION_GROUP_MISMATCH;
     }
   }
   if (any_tea && ftl.groups.empty()) {
     log(ARX_LOG_ERROR, "GLB export: TEA animations supplied but FTL has no bone groups");
-    return ARX_GLB_NO_GROUPS_FOR_TEA;
+    return ARX_GLB_ANIMATION_NO_MODEL_GROUPS;
   }
 
   ExportCtx cx{.ftl = ftl, .teas = teas};
-  cx.ng       = static_cast<int32_t>(ftl.groups.size());
-  cx.na       = static_cast<int32_t>(ftl.actions.size());
+  cx.ng = static_cast<int32_t>(ftl.groups.size());
+  cx.na = static_cast<int32_t>(ftl.actions.size());
   cx.has_skin = cx.ng > 0;
 
   if (ftl.header.origin < ftl.vertices.size()) cx.origin_shift = ftl.vertices[ftl.header.origin].position;
@@ -765,15 +768,15 @@ ArxReturnCode exportFtlTeaToGlb(const ftl::Data& ftl, std::span<const tea::Data*
   ARX_RETURN_IF_ERR(cx.acc.bin);
   buildSkinAndNodes(cx, skin_json, nodes);
   ARX_RETURN_IF_ERR(cx.acc.bin);
-  const size_t n_primitives                = primitives.size();
-  const size_t n_materials                 = materials.size();
-  const size_t n_bones                     = countEmittedBones(skin_json);
-  const size_t n_action_points             = countEmittedActionPoints(nodes);
+  const size_t n_primitives = primitives.size();
+  const size_t n_materials = materials.size();
+  const size_t n_bones = countEmittedBones(skin_json);
+  const size_t n_action_points = countEmittedActionPoints(nodes);
   const size_t n_selection_vec4_attributes = countEmittedSelectionAttributes(primitives, sel_names_ordered);
 
   Json animations = Json::array();
   for (size_t ti = 0; ti < teas.size(); ++ti) {
-    if (!teas[ti]) continue;  // SILENT: null slot = "no anim at this slot" per caller convention
+    if (!teas[ti]) continue;  // Null slots represent omitted animations
     Json anim;
     buildAnimations(cx, *teas[ti], ti, anim);
     ARX_RETURN_IF_ERR(cx.acc.bin);
@@ -782,11 +785,11 @@ ArxReturnCode exportFtlTeaToGlb(const ftl::Data& ftl, std::span<const tea::Data*
   size_t n_animations = animations.size();
 
   Json gltf;
-  gltf["asset"]["version"]   = "2.0";
+  gltf["asset"]["version"] = "2.0";
   gltf["asset"]["generator"] = "arx-pistoris";
-  gltf["scene"]              = 0;
-  gltf["scenes"]             = Json::array({Json::object({{"nodes", Json::array({0, 1})}})});
-  gltf["nodes"]              = std::move(nodes);
+  gltf["scene"] = 0;
+  gltf["scenes"] = Json::array({Json::object({{"nodes", Json::array({0, 1})}})});
+  gltf["nodes"] = std::move(nodes);
 
   Json mesh_json;
   mesh_json["primitives"] = std::move(primitives);
@@ -809,19 +812,27 @@ ArxReturnCode exportFtlTeaToGlb(const ftl::Data& ftl, std::span<const tea::Data*
   if (!images.empty()) gltf["images"] = std::move(images);
   if (!animations.empty()) gltf["animations"] = std::move(animations);
 
-  gltf["accessors"]   = std::move(cx.acc.accs);
+  gltf["accessors"] = std::move(cx.acc.accs);
   gltf["bufferViews"] = std::move(cx.acc.bvs);
 
   // buffer 0 is the BIN chunk; no uri = embedded
   size_t bin_data_size = cx.acc.bin.size();
-  gltf["buffers"]      = Json::array({Json::object({{"byteLength", bin_data_size}})});
+  gltf["buffers"] = Json::array({Json::object({{"byteLength", bin_data_size}})});
 
   ARX_RETURN_IF_ERR(assembleGlbContainer(std::move(gltf), cx.acc, out));
 
-  log(ARX_LOG_INFO, std::format("GLB export: {} vertices, {} faces, {} primitives, {} materials, {} bones, "
-                                "{} action points, {} selection VEC4 attributes, {} animations, {} bytes",
-                                ftl.vertices.size(), ftl.faces.size(), n_primitives, n_materials, n_bones,
-                                n_action_points, n_selection_vec4_attributes, n_animations, out.size()));
+  log(ARX_LOG_INFO,
+      std::format("GLB export: {} vertices, {} faces, {} primitives, {} materials, {} bones, "
+                  "{} action points, {} selection VEC4 attributes, {} animations, {} bytes",
+                  ftl.vertices.size(),
+                  ftl.faces.size(),
+                  n_primitives,
+                  n_materials,
+                  n_bones,
+                  n_action_points,
+                  n_selection_vec4_attributes,
+                  n_animations,
+                  out.size()));
 
   return ARX_OK;
 }
