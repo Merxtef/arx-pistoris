@@ -10,10 +10,13 @@
 #include "formats/format.h"
 #include "io/path_location.h"
 #include "io/service.h"
+#include "resources/layout.h"
+#include "resources/read_diagnostics.h"
 #include "resources/selector.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,6 +32,7 @@ bool validateClassification(const ClassifiedPath& input) {
   switch (extension_format) {
     case Format::kFtl:
     case Format::kTea:
+    case Format::kAmb:
     case Format::kGlb:
     case Format::kFts:
     case Format::kLlf:
@@ -48,68 +52,41 @@ bool validateClassification(const ClassifiedPath& input) {
 }
 
 bool appendClassified(std::string path, PathLocation location, std::vector<std::uint8_t> buffer,
-                      std::size_t positional_index, ArxResourceKind resource_kind, std::vector<ClassifiedPath>& out) {
+                      std::size_t positional_index, ArxResourceKind resource_kind,
+                      std::optional<ResourceLayout> explicit_layout, std::vector<ClassifiedPath>& out) {
   ClassifiedPath input{.path = std::move(path),
                        .location = std::move(location),
                        .buffer = std::move(buffer),
                        .positional_index = positional_index,
                        .resource_kind = resource_kind};
-  input.facts = classifyInput(input.buffer, input.path.c_str());
+  input.facts = classifyInput(input.buffer, input.path);
+  input.layout = explicit_layout.value_or(primaryResourceLayout(input.facts.format, input.location.address));
   if (!validateClassification(input)) return false;
   out.push_back(std::move(input));
   return true;
-}
-
-PathLocation resourceLocation(std::string path) {
-  return {.path = std::move(path), .address = PathAddress::kMountRelative};
-}
-
-bool readRequiredResource(IoService& io, std::string_view path, std::vector<std::uint8_t>& out) {
-  ResourceReadResult result = io.readResource(path, out);
-  switch (result) {
-    case ResourceReadResult::kSuccess:
-      return true;
-    case ResourceReadResult::kNotFound:
-      diagnostic(DiagnosticCode::kResourceNotFound,
-                 "Mounted resource not found: %.*s",
-                 static_cast<int>(path.size()),
-                 path.data());
-      return false;
-    case ResourceReadResult::kInvalidPath:
-      diagnostic(DiagnosticCode::kResourceSelectorInvalid,
-                 "Invalid mounted resource path: %.*s",
-                 static_cast<int>(path.size()),
-                 path.data());
-      return false;
-    case ResourceReadResult::kReadFailed:
-      diagnostic(DiagnosticCode::kResourceReadFailed,
-                 "Mounted resource cannot be read: %.*s",
-                 static_cast<int>(path.size()),
-                 path.data());
-      return false;
-  }
-  return false;
 }
 
 bool loadRawInput(const char* argument, std::size_t positional_index, IoService& io, std::vector<ClassifiedPath>& out) {
   PathLocation location;
   std::string error;
   if (!io.resolvePathLocation(argument, location, error)) {
-    diagnostic(DiagnosticCode::kResourceReadFailed, "Invalid input path '%s': %s", argument, error.c_str());
+    diagnostic(DiagnosticCode::kIoPathInvalid, "Invalid input path '%s': %s", argument, error.c_str());
     return false;
   }
   std::vector<std::uint8_t> buffer;
   ResourceReadResult result = io.readPath(location, buffer);
   if (result != ResourceReadResult::kSuccess) {
-    diagnostic(result == ResourceReadResult::kNotFound ? DiagnosticCode::kResourceNotFound
-                                                       : DiagnosticCode::kResourceReadFailed,
-               result == ResourceReadResult::kNotFound ? "Input file not found: %s" : "Input file cannot be read: %s",
-               argument);
+    reportRequiredReadFailure(result, "Input file", argument);
     return false;
   }
   std::string path = location.path;
-  return appendClassified(
-      std::move(path), std::move(location), std::move(buffer), positional_index, ARX_RESOURCE_KIND_NONE, out);
+  return appendClassified(std::move(path),
+                          std::move(location),
+                          std::move(buffer),
+                          positional_index,
+                          ARX_RESOURCE_KIND_NONE,
+                          std::nullopt,
+                          out);
 }
 
 bool loadSelectedResource(const ResourceSelector& selector, std::size_t positional_index, IoService& io,
@@ -117,20 +94,28 @@ bool loadSelectedResource(const ResourceSelector& selector, std::size_t position
   std::vector<std::uint8_t> buffer;
   if (!readRequiredResource(io, selector.logical_path, buffer)) return false;
   return appendClassified(selector.logical_path,
-                          resourceLocation(selector.logical_path),
+                          {.path = selector.logical_path, .address = PathAddress::kMountRelative},
                           std::move(buffer),
                           positional_index,
                           selector.kind,
+                          ResourceLayout::kGame,
                           out);
 }
 
 }  // namespace
 
+bool readRequiredResource(IoService& io, std::string_view path, std::vector<std::uint8_t>& out) {
+  const ResourceReadResult result = io.readResource(path, out);
+  if (result == ResourceReadResult::kSuccess) return true;
+  reportRequiredReadFailure(result, "Mounted resource", path);
+  return false;
+}
+
 bool appendClassifiedInput(std::string path, PathLocation location, std::vector<std::uint8_t> buffer,
-                           std::size_t positional_index, ArxResourceKind resource_kind,
+                           std::size_t positional_index, ArxResourceKind resource_kind, ResourceLayout layout,
                            std::vector<ClassifiedPath>& out) {
   return appendClassified(
-      std::move(path), std::move(location), std::move(buffer), positional_index, resource_kind, out);
+      std::move(path), std::move(location), std::move(buffer), positional_index, resource_kind, layout, out);
 }
 
 bool loadClassifiedInputs(std::span<const char* const> arguments, IoService& io, std::vector<ClassifiedPath>& out) {

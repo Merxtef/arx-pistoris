@@ -13,27 +13,22 @@
 namespace pistoris::navigation::collision {
 namespace {
 
-std::vector<FootprintHit> footprintHits(const StaticCollisionIndex& index, const Cylinder& cylinder) {
-  std::vector<FootprintHit> hits;
-  for (std::uint32_t face_index : index.candidates(cylinder)) {
-    std::optional<FootprintHit> hit = footprintHit(index.face(face_index), cylinder);
-    if (hit.has_value()) hits.push_back(*hit);
-  }
-  return hits;
-}
-
-std::optional<float> verticalPlacementOffset(const StaticCollisionIndex& index, const Cylinder& cylinder) {
+std::optional<float> verticalPlacementOffset(const StaticCollisionIndex& index, const Cylinder& cylinder,
+                                             std::vector<std::uint32_t>& candidates) {
   constexpr float kContactEpsilon = 0.01f;
   float cylinder_top = cylinder.origin.y + cylinder.height;
   float cylinder_bottom = cylinder.origin.y;
   float target_y = cylinder.origin.y;
   bool blocked = false;
 
-  for (const FootprintHit& hit : footprintHits(index, cylinder)) {
-    if (hit.min_y >= cylinder_bottom - kContactEpsilon) continue;
-    if (hit.max_y <= cylinder_top + kContactEpsilon) continue;
+  index.findCandidates(candidates, cylinder);
+  for (std::uint32_t face_index : candidates) {
+    std::optional<FootprintHit> hit = footprintHit(index.face(face_index), cylinder);
+    if (!hit) continue;
+    if (hit->min_y >= cylinder_bottom - kContactEpsilon) continue;
+    if (hit->max_y <= cylinder_top + kContactEpsilon) continue;
     blocked = true;
-    target_y = std::min(target_y, hit.min_y);
+    target_y = std::min(target_y, hit->min_y);
   }
 
   if (!blocked) return std::nullopt;
@@ -43,13 +38,14 @@ std::optional<float> verticalPlacementOffset(const StaticCollisionIndex& index, 
 }  // namespace
 
 PlacementResult placeCylinderAt(const StaticCollisionIndex& index, const ArxVector3& position, float radius,
-                                float height, float probe_depth, float tolerance) {
+                                float height, float probe_depth, float tolerance,
+                                std::vector<std::uint32_t>& candidate_scratch) {
   Cylinder cylinder{position, radius, height};
   cylinder.origin.y += probe_depth;
   bool had_contact = false;
   int guard = 32;
   while (guard-- > 0) {
-    std::optional<float> offset = verticalPlacementOffset(index, cylinder);
+    std::optional<float> offset = verticalPlacementOffset(index, cylinder, candidate_scratch);
     if (!offset.has_value()) {
       if (!had_contact) return {CylinderPlacementStatus::kNoSupport, cylinder};
       return std::abs(cylinder.origin.y - position.y) <= tolerance

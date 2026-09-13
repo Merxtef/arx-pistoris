@@ -3,9 +3,9 @@
 
 #include "image.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
-#include "modules/geometry.h"
+#include "utils/encoded_image.h"
 
 #include <cctype>
 #include <cstddef>
@@ -30,9 +30,9 @@ bool asciiEqual(std::string_view first, std::string_view second) noexcept {
   return true;
 }
 
-std::optional<geometry::ImageFormat> mimeFormat(std::string_view mime) noexcept {
-  if (asciiEqual(mime, "image/png")) return geometry::ImageFormat::kPng;
-  if (asciiEqual(mime, "image/jpeg")) return geometry::ImageFormat::kJpeg;
+std::optional<image::Format> mimeFormat(std::string_view mime) noexcept {
+  if (asciiEqual(mime, "image/png")) return image::Format::kPng;
+  if (asciiEqual(mime, "image/jpeg")) return image::Format::kJpeg;
   return std::nullopt;
 }
 
@@ -107,7 +107,7 @@ ArxReturnCode decodePercentEncoded(std::string_view source, std::vector<std::uin
   return out.empty() ? ARX_GLB_BAD_FORMAT : ARX_OK;
 }
 
-ArxReturnCode decodeDataUri(std::string_view uri, std::vector<std::uint8_t>& out, geometry::ImageFormat& expected) {
+ArxReturnCode decodeDataUri(std::string_view uri, std::vector<std::uint8_t>& out, image::Format& expected) {
   const std::size_t comma = uri.find(',');
   if (comma == std::string_view::npos || comma < 5) return ARX_GLB_BAD_FORMAT;
   std::string_view metadata = uri.substr(5, comma - 5);
@@ -116,7 +116,7 @@ ArxReturnCode decodeDataUri(std::string_view uri, std::vector<std::uint8_t>& out
   const bool base64 =
       metadata.size() >= kBase64.size() && asciiEqual(metadata.substr(metadata.size() - kBase64.size()), kBase64);
   if (base64) metadata.remove_suffix(kBase64.size());
-  const std::optional<geometry::ImageFormat> format = mimeFormat(metadata);
+  const std::optional<image::Format> format = mimeFormat(metadata);
   if (!format.has_value()) return ARX_GLB_BAD_FORMAT;
   expected = format.value();
   return base64 ? decodeBase64(payload, out) : decodePercentEncoded(payload, out);
@@ -124,36 +124,15 @@ ArxReturnCode decodeDataUri(std::string_view uri, std::vector<std::uint8_t>& out
 
 }  // namespace
 
-geometry::ImageError prepareImage(std::span<const std::uint8_t> source, PreparedImage& out) {
-  geometry::ImageInfo info;
-  const geometry::ImageError inspected = geometry::inspectImage(source, &info);
-  if (inspected != geometry::ImageError::kNone) return inspected;
-
-  PreparedImage prepared;
-  if (info.format == geometry::ImageFormat::kPng || info.format == geometry::ImageFormat::kJpeg) {
-    try {
-      prepared.encoded.assign(source.begin(), source.end());
-    } catch (const std::bad_alloc&) {
-      return geometry::ImageError::kOutOfMemory;
-    }
-    prepared.info = info;
-  } else {
-    const geometry::ImageError transcoded = geometry::transcodeImageToPng(source, prepared.encoded, &prepared.info);
-    if (transcoded != geometry::ImageError::kNone) return transcoded;
-  }
-  out = std::move(prepared);
-  return geometry::ImageError::kNone;
-}
-
-std::string_view imageMimeType(geometry::ImageFormat format) noexcept {
+std::string_view imageMimeType(image::Format format) noexcept {
   switch (format) {
-    case geometry::ImageFormat::kJpeg:
+    case image::Format::kJpeg:
       return "image/jpeg";
-    case geometry::ImageFormat::kPng:
+    case image::Format::kPng:
       return "image/png";
-    case geometry::ImageFormat::kBmp:
-    case geometry::ImageFormat::kTga:
-    case geometry::ImageFormat::kUnknown:
+    case image::Format::kBmp:
+    case image::Format::kTga:
+    case image::Format::kUnknown:
       return {};
   }
   return {};
@@ -167,20 +146,12 @@ bool isDataUri(std::string_view uri) noexcept {
   return true;
 }
 
-ArxReturnCode readEmbeddedImage(const cgltf_image& source, EmbeddedImageCache& cache,
-                                const std::vector<std::uint8_t>*& out, geometry::ImageFormat& format) {
-  auto existing = cache.find(&source);
-  if (existing != cache.end()) {
-    format = existing->second.format;
-    out = &existing->second.encoded;
-    return ARX_OK;
-  }
-
+ArxReturnCode readEmbeddedImage(const cgltf_image& source, std::vector<std::uint8_t>& out, image::Format& format) {
   std::vector<std::uint8_t> encoded;
-  std::optional<geometry::ImageFormat> expected;
+  std::optional<image::Format> expected;
   ArxReturnCode rc = ARX_OK;
   if (source.uri != nullptr && isDataUri(source.uri)) {
-    geometry::ImageFormat data_format = geometry::ImageFormat::kPng;
+    image::Format data_format = image::Format::kPng;
     rc = decodeDataUri(source.uri, encoded, data_format);
     expected = data_format;
   } else if (source.buffer_view != nullptr && source.mime_type != nullptr) {
@@ -200,18 +171,12 @@ ArxReturnCode readEmbeddedImage(const cgltf_image& source, EmbeddedImageCache& c
   }
   if (rc != ARX_OK) return rc;
 
-  geometry::ImageInfo info;
-  const geometry::ImageError image_error = geometry::inspectImage(encoded, &info);
-  if (image_error == geometry::ImageError::kOutOfMemory) return ARX_BAD_ALLOC;
-  if (image_error != geometry::ImageError::kNone || info.format != *expected) return ARX_GLB_BAD_FORMAT;
+  image::Info info;
+  const image::Error image_error = image::inspect(encoded, &info);
+  if (image_error == image::Error::kOutOfMemory) return ARX_BAD_ALLOC;
+  if (image_error != image::Error::kNone || info.format != *expected) return ARX_GLB_BAD_FORMAT;
   format = info.format;
-  try {
-    auto [entry, inserted] = cache.emplace(&source, EmbeddedImage{std::move(encoded), info.format});
-    (void)inserted;
-    out = &entry->second.encoded;
-  } catch (const std::bad_alloc&) {
-    return ARX_BAD_ALLOC;
-  }
+  out = std::move(encoded);
   return ARX_OK;
 }
 

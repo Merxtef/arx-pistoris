@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Merxtef
 
 cmake_minimum_required(VERSION 3.25)
-project(arx-pistoris VERSION 0.3.0 LANGUAGES C CXX)
+project(arx-pistoris VERSION 0.4.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -22,6 +22,11 @@ option(ARX_SANITIZERS "Build RelWithDebInfo targets with AddressSanitizer and Un
 option(ARX_FUZZING "Build libFuzzer fuzz targets (requires clang -fsanitize=fuzzer)" OFF)
 option(ARX_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
+# MSVC STL annotations clash with clang_rt.fuzzer
+if(WIN32 AND ARX_FUZZING)
+  add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
+endif()
+
 function(arx_target_warnings target)
   target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
   if(ARX_WARNINGS_AS_ERRORS)
@@ -35,11 +40,19 @@ function(arx_target_warnings target)
   endif()
 endfunction()
 
+function(arx_target_fuzz_instrumentation target)
+  # fuzzer-no-link instruments library TUs without replacing the executable entry point
+  target_compile_options(${target} PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer-no-link,address,undefined>
+    $<$<CONFIG:RelWithDebInfo>:-fno-sanitize-recover=undefined>)
+  target_link_options(${target} PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>
+    $<$<CONFIG:RelWithDebInfo>:-fno-sanitize-recover=undefined>)
+endfunction()
+
 function(arx_target_sanitizers target)
   if(ARX_FUZZING)
-    # fuzzer-no-link instruments all TUs for coverage without replacing main
-    target_compile_options(${target} PRIVATE $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer-no-link,address,undefined>)
-    target_link_options(${target}    PRIVATE $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+    arx_target_fuzz_instrumentation(${target})
   elseif(ARX_COVERAGE)
     # ASan interceptors corrupt profile dumps on abnormal exit
     target_compile_options(${target} PRIVATE -fprofile-instr-generate -fcoverage-mapping)
@@ -55,10 +68,23 @@ function(arx_target_defaults target)
   arx_target_sanitizers(${target})
 endfunction()
 
+function(arx_target_vendored target)
+  set_target_properties(${target} PROPERTIES C_CLANG_TIDY "" CXX_CLANG_TIDY "")
+  if(MSVC)
+    target_compile_options(${target} PRIVATE /w)
+  else()
+    target_compile_options(${target} PRIVATE -w)
+  endif()
+endfunction()
+
 function(arx_fuzz_target_defaults target)
   arx_target_warnings(${target})
-  target_compile_options(${target} PRIVATE $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer,address,undefined>)
-  target_link_options(${target}    PRIVATE $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer,address,undefined>)
+  target_compile_options(${target} PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer,address,undefined>
+    $<$<CONFIG:RelWithDebInfo>:-fno-sanitize-recover=undefined>)
+  target_link_options(${target} PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer,address,undefined>
+    $<$<CONFIG:RelWithDebInfo>:-fno-sanitize-recover=undefined>)
 endfunction()
 
 configure_file(src/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
@@ -103,7 +129,7 @@ if(ARX_BUILD_INFO_LIVE)
 else()
   string(TIMESTAMP _arx_stamp "%Y-%m-%dT%H:%M:%SZ" UTC)
   file(WRITE ${ARX_BUILD_INFO_CPP}
-       "namespace pistoris { const char* buildTime() { return \"${_arx_stamp} (reconfig)\"; } }\n")
+       "namespace pistoris { const char* generatedBuildTime() { return \"${_arx_stamp} (reconfig)\"; } }\n")
 endif()
 
 # --- ASan runtime DLL ---
@@ -141,15 +167,11 @@ add_library(arx_pistoris_pkware STATIC
 set_target_properties(arx_pistoris_pkware PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   C_VISIBILITY_PRESET hidden
-  C_CLANG_TIDY ""
-  CXX_CLANG_TIDY ""
 )
+arx_target_vendored(arx_pistoris_pkware)
 target_include_directories(arx_pistoris_pkware SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 if(ARX_FUZZING)
-  target_compile_options(arx_pistoris_pkware PRIVATE
-    $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer-no-link,address,undefined>)
-  target_link_options(arx_pistoris_pkware PRIVATE
-    $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+  arx_target_fuzz_instrumentation(arx_pistoris_pkware)
 elseif(ARX_COVERAGE)
   target_compile_options(arx_pistoris_pkware PRIVATE -fno-coverage-mapping)
 elseif(ARX_SANITIZERS)
@@ -166,14 +188,11 @@ add_library(arx_pistoris_cgltf STATIC src/external/glb/cgltf_impl.cpp)
 set_target_properties(arx_pistoris_cgltf PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   CXX_VISIBILITY_PRESET hidden
-  CXX_CLANG_TIDY ""
 )
-target_include_directories(arx_pistoris_cgltf SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+arx_target_vendored(arx_pistoris_cgltf)
+target_include_directories(arx_pistoris_cgltf SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 if(ARX_FUZZING)
-  target_compile_options(arx_pistoris_cgltf PRIVATE
-    $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer-no-link,address,undefined>)
-  target_link_options(arx_pistoris_cgltf PRIVATE
-    $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+  arx_target_fuzz_instrumentation(arx_pistoris_cgltf)
 elseif(ARX_COVERAGE)
   target_compile_options(arx_pistoris_cgltf PRIVATE -fno-coverage-mapping)
 elseif(ARX_SANITIZERS)
@@ -190,14 +209,11 @@ add_library(arx_pistoris_stb STATIC src/utils/stb_impl.cpp)
 set_target_properties(arx_pistoris_stb PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   CXX_VISIBILITY_PRESET hidden
-  CXX_CLANG_TIDY ""
 )
-target_include_directories(arx_pistoris_stb SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+arx_target_vendored(arx_pistoris_stb)
+target_include_directories(arx_pistoris_stb SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 if(ARX_FUZZING)
-  target_compile_options(arx_pistoris_stb PRIVATE
-    $<$<CONFIG:RelWithDebInfo>:-fsanitize=fuzzer-no-link,address,undefined>)
-  target_link_options(arx_pistoris_stb PRIVATE
-    $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+  arx_target_fuzz_instrumentation(arx_pistoris_stb)
 elseif(ARX_COVERAGE)
   target_compile_options(arx_pistoris_stb PRIVATE -fno-coverage-mapping)
 elseif(ARX_SANITIZERS)
@@ -205,6 +221,32 @@ elseif(ARX_SANITIZERS)
     $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
   target_link_options(arx_pistoris_stb PRIVATE
     $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+endif()
+
+add_library(arx_pistoris_audio_codecs STATIC
+  src/utils/audio_codecs_impl.cpp
+  third_party/stb/stb_vorbis.c
+)
+set_target_properties(arx_pistoris_audio_codecs PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+  C_VISIBILITY_PRESET hidden
+  CXX_VISIBILITY_PRESET hidden
+)
+arx_target_vendored(arx_pistoris_audio_codecs)
+target_compile_definitions(arx_pistoris_audio_codecs PRIVATE STB_VORBIS_NO_STDIO)
+target_include_directories(arx_pistoris_audio_codecs SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+if(ARX_FUZZING)
+  arx_target_fuzz_instrumentation(arx_pistoris_audio_codecs)
+elseif(ARX_COVERAGE)
+  target_compile_options(arx_pistoris_audio_codecs PRIVATE -fno-coverage-mapping)
+elseif(ARX_SANITIZERS)
+  target_compile_options(arx_pistoris_audio_codecs PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+  target_link_options(arx_pistoris_audio_codecs PRIVATE
+    $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+endif()
+if(WIN32)
+  target_compile_definitions(arx_pistoris_audio_codecs PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 if(WIN32)
   target_compile_definitions(arx_pistoris_stb PRIVATE _CRT_SECURE_NO_WARNINGS)
@@ -214,78 +256,8 @@ add_library(doctest INTERFACE)
 target_include_directories(doctest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 include(third_party/doctest/doctest.cmake)
 
-# --- Internal engine (no ARX_API functions defined here) ---
-file(GLOB_RECURSE ARX_INTERNAL_SRCS CONFIGURE_DEPENDS
-     "${CMAKE_CURRENT_SOURCE_DIR}/src/arx/*.cpp"
-     "${CMAKE_CURRENT_SOURCE_DIR}/src/external/*.cpp"
-     "${CMAKE_CURRENT_SOURCE_DIR}/src/level/*.cpp"
-     "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/*.cpp"
-     "${CMAKE_CURRENT_SOURCE_DIR}/src/utils/*.cpp")
-list(REMOVE_ITEM ARX_INTERNAL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/external/glb/cgltf_impl.cpp")
-list(REMOVE_ITEM ARX_INTERNAL_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/src/utils/stb_impl.cpp")
-
-add_library(arx_pistoris_internals OBJECT
-  ${ARX_INTERNAL_SRCS}
-  ${ARX_BUILD_INFO_CPP}
-)
-set_target_properties(arx_pistoris_internals PROPERTIES
-  POSITION_INDEPENDENT_CODE ON
-  CXX_VISIBILITY_PRESET hidden
-  VISIBILITY_INLINES_HIDDEN ON
-)
-if(ARX_BUILD_INFO_LIVE)
-  add_dependencies(arx_pistoris_internals arx_build_info_gen)
-endif()
-target_include_directories(arx_pistoris_internals
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_link_libraries(arx_pistoris_internals PRIVATE nlohmann_json mapbox_earcut arx_pistoris_cgltf arx_pistoris_stb
-                                                      arx_pistoris_pkware)
-target_compile_definitions(arx_pistoris_internals PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
-arx_target_defaults(arx_pistoris_internals)
-
-# strerror sits in its own TU; -fno-coverage-mapping keeps boilerplate dispatch out of the report
-set(ARX_API_COMMON_SRCS src/api/api_helpers.cpp)
-file(GLOB_RECURSE ARX_C_API_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/api/c/*.cpp")
-if(ARX_COVERAGE)
-  set_source_files_properties(src/api/strerror.cpp PROPERTIES COMPILE_OPTIONS "-fno-coverage-mapping")
-endif()
-
-# --- C ABI shared library ---
-add_library(arx_pistoris_c SHARED src/api/c_api.cpp src/api/strerror.cpp ${ARX_C_API_SRCS} ${ARX_API_COMMON_SRCS})
-target_compile_definitions(arx_pistoris_c PRIVATE ARX_PISTORIS_EXPORTS)
-target_include_directories(arx_pistoris_c
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_link_libraries(arx_pistoris_c PRIVATE arx_pistoris_internals)
-set_target_properties(arx_pistoris_c PROPERTIES
-  OUTPUT_NAME arx_pistoris
-  CXX_VISIBILITY_PRESET hidden
-  VISIBILITY_INLINES_HIDDEN ON
-)
-arx_target_defaults(arx_pistoris_c)
-
-# --- C++ API static library ---
-add_library(arx_pistoris_cpp STATIC src/api/cpp_api.cpp src/api/strerror.cpp ${ARX_API_COMMON_SRCS})
-target_compile_definitions(arx_pistoris_cpp PUBLIC ARX_PISTORIS_CPP_API PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
-target_include_directories(arx_pistoris_cpp
-  PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${CMAKE_CURRENT_BINARY_DIR}
-)
-target_link_libraries(arx_pistoris_cpp PRIVATE arx_pistoris_internals)
-arx_target_defaults(arx_pistoris_cpp)
+add_subdirectory(src)
+add_subdirectory(cli)
 
 # --- Tests ---
 # Doctest discovery cannot find the ASan runtime in fuzz builds
@@ -298,25 +270,41 @@ file(GLOB ARX_CPP_TEST_SRCS    CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/te
 file(GLOB ARX_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/*.cpp")
 file(GLOB ARX_CPP_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_corpus/*.cpp")
 
+file(GLOB_RECURSE ARX_PUBLIC_C_HEADERS CONFIGURE_DEPENDS
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/arx_pistoris/*.h"
+)
+file(GLOB_RECURSE ARX_PUBLIC_CPP_HEADERS CONFIGURE_DEPENDS
+  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/arx_pistoris/*.hpp"
+)
+set(ARX_HEADER_CHECK_DIR "${CMAKE_CURRENT_BINARY_DIR}/header-self-containment")
+set(ARX_HEADER_CHECK_SOURCES)
+foreach(header IN LISTS ARX_PUBLIC_C_HEADERS)
+  string(MAKE_C_IDENTIFIER "${header}" source_name)
+  set(source "${ARX_HEADER_CHECK_DIR}/${source_name}.c")
+  file(GENERATE OUTPUT "${source}" CONTENT "#include \"${header}\"\ntypedef int arx_header_self_containment;\n")
+  list(APPEND ARX_HEADER_CHECK_SOURCES "${source}")
+endforeach()
+foreach(header IN LISTS ARX_PUBLIC_CPP_HEADERS)
+  string(MAKE_C_IDENTIFIER "${header}" source_name)
+  set(source "${ARX_HEADER_CHECK_DIR}/${source_name}.cpp")
+  file(GENERATE OUTPUT "${source}" CONTENT "#include \"${header}\"\ntypedef int arx_header_self_containment;\n")
+  list(APPEND ARX_HEADER_CHECK_SOURCES "${source}")
+endforeach()
+add_library(arx_pistoris_header_self_containment OBJECT ${ARX_HEADER_CHECK_SOURCES})
+target_include_directories(arx_pistoris_header_self_containment PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(arx_pistoris_header_self_containment PRIVATE c_std_11 cxx_std_20)
+target_compile_definitions(arx_pistoris_header_self_containment PRIVATE
+  $<$<COMPILE_LANGUAGE:CXX>:ARX_PISTORIS_CPP_API>
+  $<$<COMPILE_LANGUAGE:CXX>:ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API>
+)
+arx_target_defaults(arx_pistoris_header_self_containment)
+set_target_properties(arx_pistoris_header_self_containment PROPERTIES C_CLANG_TIDY "" CXX_CLANG_TIDY "")
+
 # Unit tests: static wrapper + src/ on include path (internal headers)
 add_executable(arx_pistoris_unit_tests ${ARX_UNIT_TEST_SRCS} ${ARX_UNIT_MODULE_TEST_SRCS})
-target_sources(arx_pistoris_unit_tests PRIVATE
-  cli/console/logging.cpp
-  cli/formats/classification.cpp
-  cli/formats/format.cpp
-  cli/io/files.cpp
-  cli/io/mounts.cpp
-  cli/io/native_path.cpp
-  cli/io/paths.cpp
-  cli/io/service.cpp
-  cli/modules/implication.cpp
-  cli/modules/module.cpp
-  cli/pipeline/options.cpp
-  cli/resources/animation_output.cpp
-  cli/resources/selector.cpp
-  cli/routes/level/mounted_textures.cpp
-)
-target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cpp doctest nlohmann_json)
+target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cli_support arx_pistoris_cpp doctest nlohmann_json)
 target_compile_definitions(arx_pistoris_unit_tests PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
 target_include_directories(arx_pistoris_unit_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -348,14 +336,14 @@ arx_target_defaults(arx_pistoris_cpp_tests)
 
 # Corpus tests: real-file and limit tests, slow
 add_executable(arx_pistoris_corpus_tests ${ARX_CORPUS_TEST_SRCS})
-target_link_libraries(arx_pistoris_corpus_tests PRIVATE arx_pistoris_c doctest)
+target_link_libraries(arx_pistoris_corpus_tests PRIVATE arx_pistoris_c doctest nlohmann_json)
 target_include_directories(arx_pistoris_corpus_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
 arx_target_defaults(arx_pistoris_corpus_tests)
 
 add_executable(arx_pistoris_cpp_corpus_tests ${ARX_CPP_CORPUS_TEST_SRCS})
-target_link_libraries(arx_pistoris_cpp_corpus_tests PRIVATE arx_pistoris_cpp doctest)
+target_link_libraries(arx_pistoris_cpp_corpus_tests PRIVATE arx_pistoris_cpp doctest nlohmann_json)
 target_include_directories(arx_pistoris_cpp_corpus_tests PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
@@ -381,31 +369,23 @@ add_test(NAME ReturnCodeCoverage
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_rc_coverage.py
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_tests_properties(ReturnCodeCoverage PROPERTIES LABELS "coverage")
+add_test(NAME HeaderBoundaries
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_header_boundaries.py
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(HeaderBoundaries PROPERTIES LABELS "architecture")
+add_test(NAME CliContract
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/cli_contract_tests.py $<TARGET_FILE:arx_pistoris_cli>
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+set_tests_properties(CliContract PROPERTIES LABELS "cli")
+add_custom_target(regenerate-fixtures
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/regenerate_fixture_mount.py
+    --cli $<TARGET_FILE:arx_pistoris_cli>
+  DEPENDS arx_pistoris_cli
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  USES_TERMINAL
+  VERBATIM)
 
 endif()  # BUILD_TESTING AND NOT ARX_FUZZING
-
-# --- CLI ---
-file(GLOB_RECURSE ARX_CLI_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/cli/*.cpp")
-add_executable(arx_pistoris_cli ${ARX_CLI_SRCS})
-target_link_libraries(arx_pistoris_cli PRIVATE arx_pistoris_cpp)
-target_compile_definitions(arx_pistoris_cli PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
-target_include_directories(arx_pistoris_cli PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/cli
-)
-arx_target_defaults(arx_pistoris_cli)
-target_link_options(arx_pistoris_cli PRIVATE
-  $<$<AND:$<CONFIG:Release>,$<PLATFORM_ID:Linux>>:-static-libstdc++>
-  $<$<AND:$<CONFIG:Release>,$<PLATFORM_ID:Linux>>:-static-libgcc>
-)
-
-set_target_properties(arx_pistoris_cli PROPERTIES OUTPUT_NAME arx-pistor)
-
-if(BUILD_TESTING AND NOT ARX_FUZZING)
-  add_test(NAME CliContract
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/cli_contract_tests.py $<TARGET_FILE:arx_pistoris_cli>
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-  set_tests_properties(CliContract PROPERTIES LABELS "cli")
-endif()
 
 install(TARGETS arx_pistoris_cli
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
@@ -427,6 +407,10 @@ install(FILES third_party/cgltf/LICENSE
 install(FILES third_party/stb/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME stb-LICENSE
+)
+install(FILES third_party/dr_libs/LICENSE
+  DESTINATION ${CMAKE_INSTALL_DOCDIR}
+  RENAME dr_libs-LICENSE
 )
 install(FILES third_party/blast/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
@@ -456,12 +440,15 @@ if(CLANG_FORMAT)
     ${CMAKE_SOURCE_DIR}/cli/*.cpp    ${CMAKE_SOURCE_DIR}/cli/*.h
     ${CMAKE_SOURCE_DIR}/fuzz/*.cpp     ${CMAKE_SOURCE_DIR}/fuzz/*.h
   )
+  string(REPLACE ";" "\n" ARX_FORMAT_FILE_LIST_CONTENT "${ALL_SOURCE_FILES}")
+  set(ARX_FORMAT_FILE_LIST "${CMAKE_CURRENT_BINARY_DIR}/format-files.txt")
+  file(WRITE "${ARX_FORMAT_FILE_LIST}" "${ARX_FORMAT_FILE_LIST_CONTENT}\n")
   add_custom_target(format
-    COMMAND ${CLANG_FORMAT} -i ${ALL_SOURCE_FILES}
+    COMMAND ${CLANG_FORMAT} -i --files=${ARX_FORMAT_FILE_LIST}
     COMMENT "clang-format"
   )
   add_custom_target(format-check
-    COMMAND ${CLANG_FORMAT} --dry-run --Werror ${ALL_SOURCE_FILES}
+    COMMAND ${CLANG_FORMAT} --dry-run --Werror --files=${ARX_FORMAT_FILE_LIST}
     COMMENT "clang-format check"
   )
 else()
@@ -469,21 +456,25 @@ else()
 endif()
 
 # --- Fuzz targets ---
-function(arx_add_fuzz_target name source)
+function(arx_add_fuzz_target name source seed_directory)
   add_executable(${name} ${source})
   target_compile_definitions(${name} PRIVATE ARX_PISTORIS_EXPORTS)
   target_link_libraries(${name} PRIVATE arx_pistoris_fuzz_api)
   arx_fuzz_target_defaults(${name})
+  add_dependencies(${name} arx_fuzz_seeds)
+  if(BUILD_TESTING)
+    add_test(NAME ${name}_smoke
+      COMMAND $<TARGET_FILE:${name}> -runs=1 -verbosity=0 "${FUZZ_SEED_DIR}/${seed_directory}")
+    set_tests_properties(${name}_smoke PROPERTIES
+      LABELS fuzz-smoke
+      TIMEOUT 120
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+  endif()
 endfunction()
 
 if(ARX_FUZZING)
-  if(WIN32)
-    # MSVC STL annotations clash with clang_rt.fuzzer; disable to avoid linker mismatch
-    add_compile_definitions(_DISABLE_STRING_ANNOTATION _DISABLE_VECTOR_ANNOTATION)
-  endif()
-
-  add_library(arx_pistoris_fuzz_api STATIC src/api/c_api.cpp src/api/strerror.cpp ${ARX_C_API_SRCS}
-                                                ${ARX_API_COMMON_SRCS})
+  add_library(arx_pistoris_fuzz_api STATIC src/api/binary.cpp src/api/strerror.cpp ${ARX_PISTORIS_C_API_SOURCES})
   target_compile_definitions(arx_pistoris_fuzz_api PRIVATE ARX_PISTORIS_EXPORTS)
   target_include_directories(arx_pistoris_fuzz_api
     PUBLIC
@@ -492,47 +483,53 @@ if(ARX_FUZZING)
       ${CMAKE_CURRENT_SOURCE_DIR}/src
       ${CMAKE_CURRENT_BINARY_DIR}
   )
-  target_link_libraries(arx_pistoris_fuzz_api PRIVATE arx_pistoris_internals)
+  target_link_libraries(arx_pistoris_fuzz_api PRIVATE ${ARX_PISTORIS_INTERNAL_TARGETS}
+                                                       ${ARX_PISTORIS_INTERNAL_DEPENDENCIES})
   arx_target_defaults(arx_pistoris_fuzz_api)
 
-  arx_add_fuzz_target(arx_pistoris_ftl_fuzz           fuzz/ftl_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_ftl_roundtrip_fuzz fuzz/ftl_roundtrip_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_tea_fuzz           fuzz/tea_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_tea_roundtrip_fuzz fuzz/tea_roundtrip_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_ftl_json_fuzz      fuzz/ftl_json_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_tea_json_fuzz      fuzz/tea_json_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_obj_fuzz           fuzz/obj_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_obj_with_mtl_fuzz  fuzz/obj_with_mtl_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_glb_import_fuzz    fuzz/glb_import_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_fts_fuzz           fuzz/fts_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_fts_roundtrip_fuzz fuzz/fts_roundtrip_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_llf_fuzz           fuzz/llf_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_llf_roundtrip_fuzz fuzz/llf_roundtrip_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_dlf_fuzz           fuzz/dlf_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_dlf_roundtrip_fuzz fuzz/dlf_roundtrip_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_level_native_fts_fuzz          fuzz/level_native_fts_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_level_native_llf_fuzz          fuzz/level_native_llf_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_level_native_dlf_fuzz          fuzz/level_native_dlf_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_level_native_dlf_embedded_fuzz fuzz/level_native_dlf_embedded_fuzz.cpp)
-  arx_add_fuzz_target(arx_pistoris_level_glb_import_fuzz          fuzz/level_glb_import_fuzz.cpp)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  set(FUZZ_SEED_DIR "${CMAKE_BINARY_DIR}/fuzz-seeds")
+  add_custom_target(arx_fuzz_seeds
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/prepare_fixture_seeds.py
+              ${CMAKE_CURRENT_SOURCE_DIR}/data/fixtures/catalog.json ${FUZZ_SEED_DIR}
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
+              ${FUZZ_SEED_DIR}/model-glb-source ${FUZZ_SEED_DIR}/model-glb
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
+              ${FUZZ_SEED_DIR}/level-glb-source ${FUZZ_SEED_DIR}/level-glb
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
+              ${FUZZ_SEED_DIR}/ambiance-glb-source ${FUZZ_SEED_DIR}/ambiance-glb
+      COMMENT "Preparing fixture-derived fuzzer seeds"
+      VERBATIM
+  )
 
-  # --- Seed Generation ---
-  find_package(Python3 COMPONENTS Interpreter QUIET)
-  if(Python3_FOUND)
-    set(MODEL_GLB_SEED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data/fixtures/model/glb")
-    set(MODEL_GLB_OUT_DIR  "${CMAKE_BINARY_DIR}/fuzz-seeds/glb")
-    set(LEVEL_GLB_SEED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/data/fixtures/level/glb")
-    set(LEVEL_GLB_OUT_DIR  "${CMAKE_BINARY_DIR}/fuzz-seeds/level-glb")
-
-    add_custom_target(arx_fuzz_seeds
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
-                ${MODEL_GLB_SEED_DIR} ${MODEL_GLB_OUT_DIR}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
-                ${LEVEL_GLB_SEED_DIR} ${LEVEL_GLB_OUT_DIR}
-        COMMENT "Destructuring GLB assets into fuzzer seeds"
-        VERBATIM
-    )
-    add_dependencies(arx_pistoris_glb_import_fuzz arx_fuzz_seeds)
-    add_dependencies(arx_pistoris_level_glb_import_fuzz arx_fuzz_seeds)
-  endif()
+  arx_add_fuzz_target(arx_pistoris_ftl_fuzz                     fuzz/ftl_fuzz.cpp                     ftl)
+  arx_add_fuzz_target(arx_pistoris_ftl_roundtrip_fuzz           fuzz/ftl_roundtrip_fuzz.cpp           ftl)
+  arx_add_fuzz_target(arx_pistoris_model_native_import_fuzz     fuzz/model_native_import_fuzz.cpp     ftl)
+  arx_add_fuzz_target(arx_pistoris_tea_fuzz                     fuzz/tea_fuzz.cpp                     tea)
+  arx_add_fuzz_target(arx_pistoris_tea_roundtrip_fuzz           fuzz/tea_roundtrip_fuzz.cpp           tea)
+  arx_add_fuzz_target(arx_pistoris_animation_native_import_fuzz fuzz/animation_native_import_fuzz.cpp tea)
+  arx_add_fuzz_target(arx_pistoris_amb_fuzz                     fuzz/amb_fuzz.cpp                     amb)
+  arx_add_fuzz_target(arx_pistoris_amb_roundtrip_fuzz           fuzz/amb_roundtrip_fuzz.cpp           amb)
+  arx_add_fuzz_target(arx_pistoris_ambiance_native_import_fuzz  fuzz/ambiance_native_import_fuzz.cpp  amb)
+  arx_add_fuzz_target(arx_pistoris_obj_fuzz                     fuzz/obj_fuzz.cpp                     obj)
+  arx_add_fuzz_target(arx_pistoris_obj_with_mtl_fuzz            fuzz/obj_with_mtl_fuzz.cpp            obj-mtl)
+  arx_add_fuzz_target(arx_pistoris_glb_container_fuzz           fuzz/glb_container_fuzz.cpp           glb-container)
+  target_include_directories(arx_pistoris_glb_container_fuzz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(arx_pistoris_glb_container_fuzz PRIVATE arx_pistoris_cgltf)
+  arx_add_fuzz_target(arx_pistoris_model_glb_import_fuzz        fuzz/model_glb_import_fuzz.cpp        model-glb)
+  arx_add_fuzz_target(arx_pistoris_ambiance_glb_import_fuzz     fuzz/ambiance_glb_import_fuzz.cpp     ambiance-glb)
+  arx_add_fuzz_target(arx_pistoris_image_fuzz                   fuzz/image_fuzz.cpp                   image)
+  arx_add_fuzz_target(arx_pistoris_audio_fuzz                   fuzz/audio_fuzz.cpp                   audio)
+  arx_add_fuzz_target(arx_pistoris_fts_fuzz                     fuzz/fts_fuzz.cpp                     fts)
+  arx_add_fuzz_target(arx_pistoris_fts_roundtrip_fuzz           fuzz/fts_roundtrip_fuzz.cpp           fts)
+  arx_add_fuzz_target(arx_pistoris_llf_fuzz                     fuzz/llf_fuzz.cpp                     llf)
+  arx_add_fuzz_target(arx_pistoris_llf_roundtrip_fuzz           fuzz/llf_roundtrip_fuzz.cpp           llf)
+  arx_add_fuzz_target(arx_pistoris_dlf_fuzz                     fuzz/dlf_fuzz.cpp                     dlf)
+  arx_add_fuzz_target(arx_pistoris_dlf_roundtrip_fuzz           fuzz/dlf_roundtrip_fuzz.cpp           dlf)
+  arx_add_fuzz_target(arx_pistoris_level_native_fts_fuzz        fuzz/level_native_fts_fuzz.cpp        fts)
+  arx_add_fuzz_target(arx_pistoris_level_native_llf_fuzz        fuzz/level_native_llf_fuzz.cpp        llf)
+  arx_add_fuzz_target(arx_pistoris_level_native_dlf_fuzz        fuzz/level_native_dlf_fuzz.cpp        dlf)
+  arx_add_fuzz_target(arx_pistoris_level_native_dlf_embedded_fuzz
+                                                               fuzz/level_native_dlf_embedded_fuzz.cpp dlf)
+  arx_add_fuzz_target(arx_pistoris_level_glb_import_fuzz        fuzz/level_glb_import_fuzz.cpp        level-glb)
 endif()

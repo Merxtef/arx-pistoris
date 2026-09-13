@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
@@ -24,7 +24,7 @@ SurfaceDebugTriangle debugTriangle(const NavSurface& surface, const NavSurfaceTr
 }
 
 void appendSurfaceDiagnostics(const NavSurface& surface, std::size_t base_count,
-                              NavSurfaceGenDiagnostics& diagnostics) {
+                              NavSurfaceGenerationDiagnostics& diagnostics) {
   for (std::size_t i = 0; i < surface.triangles.size(); ++i) {
     if (i < base_count) {
       diagnostics.base.push_back(debugTriangle(surface, surface.triangles[i]));
@@ -39,8 +39,8 @@ void appendSurfaceDiagnostics(const NavSurface& surface, std::size_t base_count,
 Error buildNavSurface(NavSurface& out, const GeometryData& geometry, const ArxAabb& support_bounds,
                       const geometry::SurfaceSupportIndex& support_index,
                       const geometry::SurfaceSupportIndex& geometry_support,
-                      const SurfaceSupportFilter& final_support_filter, const StaticAnchorTraversal& traversal,
-                      const NavSurfaceGenOptions& options, NavSurfaceGenDiagnostics* diagnostics) {
+                      const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                      const NavSurfaceGenerationOptions& options, NavSurfaceGenerationDiagnostics* diagnostics) {
   NavSurface surface;
   surface::buildSurfaceLattice(
       support_bounds, support_index, geometry_support, geometry, final_support_filter, traversal, options, surface);

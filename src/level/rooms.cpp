@@ -3,11 +3,12 @@
 
 #include "modules/rooms.h"
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
+#include "api/status_boundary.h"
 #include "level/data.h"
 #include "level/debug/access.h"
 #include "level/debug/diagnostics.h"
@@ -50,8 +51,8 @@ bool resolveOptions(const Level::RoomDistanceGenOptions& options, rooms::RoomDis
 }
 
 ArxReturnCode generateRoomDistancesImpl(LevelModules& modules, LevelValidationState& validation,
-                                        const Level::RoomDistanceGenOptions& options,
-                                        rooms::RoomDistanceGenDiagnostics* diagnostics) {
+                                        const Level::RoomDistanceGenOptions& options, RoomDistances& distances,
+                                        rooms::RoomDistanceGenerationDiagnostics* diagnostics) {
   rooms::RoomDistanceOptions effective_options;
   if (!resolveOptions(options, effective_options)) return ARX_INVALID_OPTIONS;
 
@@ -64,37 +65,53 @@ ArxReturnCode generateRoomDistancesImpl(LevelModules& modules, LevelValidationSt
   rc = level_validation::portals(modules, validation);
   if (rc != ARX_OK) return rc;
 
-  RoomDistances distances;
   rc = level_validation::roomsError(
       rooms::generateRoomDistances(distances, modules.rooms, modules.geometry, effective_options, diagnostics));
   if (rc != ARX_OK) return rc;
 
-  modules.rooms.distances = std::move(distances);
-  level_validation::markValid(validation, LevelValidation::kRoomDistances);
+  rc = level_validation::roomsError(rooms::validateRoomDistances(distances, modules.rooms));
+  if (rc != ARX_OK) return rc;
   return ARX_OK;
+}
+
+void commitRoomDistances(LevelModules& modules, LevelValidationState& validation, RoomDistances&& distances) noexcept {
+  rooms::replaceRoomDistances(modules.rooms, std::move(distances));
+  level_validation::markValid(validation, LevelValidation::kRoomDistances);
 }
 
 }  // namespace
 
-ArxReturnCode Level::generateRoomDistances() { return generateRoomDistances(RoomDistanceGenOptions{}); }
+ArxReturnCode Level::generateRoomDistances() noexcept { return generateRoomDistances(RoomDistanceGenOptions{}); }
 
-ArxReturnCode Level::generateRoomDistances(const RoomDistanceGenOptions& options) {
-  return generateRoomDistancesImpl(*data_, data_->validation, options, nullptr);
+ArxReturnCode Level::generateRoomDistances(const RoomDistanceGenOptions& options) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    RoomDistances distances;
+    const ArxReturnCode rc = generateRoomDistancesImpl(*data_, data_->validation, options, distances, nullptr);
+    if (rc == ARX_OK) commitRoomDistances(*data_, data_->validation, std::move(distances));
+    return rc;
+  });
 }
 
 namespace level_debug {
 
-ArxReturnCode generateRoomDistances(Level& level, RoomDistanceGenDiagnostics& diagnostics) {
+ArxReturnCode generateRoomDistances(Level& level, RoomDistanceGenDiagnostics& diagnostics) noexcept {
   return generateRoomDistances(level, Level::RoomDistanceGenOptions{}, diagnostics);
 }
 
 ArxReturnCode generateRoomDistances(Level& level, const Level::RoomDistanceGenOptions& options,
-                                    RoomDistanceGenDiagnostics& diagnostics) {
-  rooms::RoomDistanceGenDiagnostics internal;
-  const ArxReturnCode rc = generateRoomDistancesImpl(
-      LevelDebugAccess::modules(level), LevelDebugAccess::validation(level), options, &internal);
-  detail::copyDiagnostics(internal, diagnostics);
-  return rc;
+                                    RoomDistanceGenDiagnostics& diagnostics) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    LevelModules& modules = LevelDebugAccess::modules(level);
+    LevelValidationState& validation = LevelDebugAccess::validation(level);
+    rooms::RoomDistanceGenerationDiagnostics internal;
+    RoomDistances distances;
+    const ArxReturnCode rc = generateRoomDistancesImpl(modules, validation, options, distances, &internal);
+    RoomDistanceGenDiagnostics next;
+    detail::copyDiagnostics(internal, next);
+    if (rc == ARX_OK) commitRoomDistances(modules, validation, std::move(distances));
+    diagnostics = std::move(next);
+    return rc;
+  });
 }
 
 }  // namespace level_debug

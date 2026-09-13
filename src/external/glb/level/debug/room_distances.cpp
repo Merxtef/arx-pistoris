@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "../coordinates.h"
 #include "../palette.h"
+#include "api/status_boundary.h"
 #include "common.h"
+#include "level/debug/access.h"
+#include "modules/rooms.h"
 #include "utils/log.h"
 
 #include <cstddef>
@@ -28,8 +31,8 @@ namespace {
 using glb_level::Palette;
 using glb_level::PaletteItem;
 
-ArxVector3 portalCentroid(const ArxLevelPortal& portal) {
-  const std::size_t count = portal.shape == ARX_PORTAL_QUAD ? 4U : 3U;
+ArxVector3 portalCentroid(const Portal& portal) {
+  const std::size_t count = portal.shape == PortalShape::kQuad ? 4U : 3U;
   ArxVector3 centroid{};
   for (std::size_t i = 0; i < count; ++i) {
     centroid.x += portal.vertices[i].x;
@@ -40,13 +43,11 @@ ArxVector3 portalCentroid(const ArxLevelPortal& portal) {
   return {centroid.x * scale, centroid.y * scale, centroid.z * scale};
 }
 
-bool hasCompleteRoomDistances(const pistoris::Level& level) {
-  const std::size_t room_count = level.roomCount();
-  if (room_count < 2U) return level.roomDistanceCount() == 0;
-  return level.roomDistanceCount() == room_count * (room_count - 1U) / 2U;
+bool hasCompleteRoomDistances(const RoomsData& rooms_data) {
+  return rooms::hasCompleteRoomDistances(rooms_data.distances, rooms_data.definitions.size());
 }
 
-void addPortalContextNodes(Builder& builder, Palette& palette, int parent, std::span<const ArxLevelPortal> portals) {
+void addPortalContextNodes(Builder& builder, Palette& palette, int parent, std::span<const Portal> portals) {
   if (portals.empty()) return;
   int material = palette.material(PaletteItem::kPortalCentroid);
   int mesh = addMarkerMesh(builder, "room_distance_debug_portal", material, 10.0f);
@@ -56,16 +57,15 @@ void addPortalContextNodes(Builder& builder, Palette& palette, int parent, std::
     addMarkerNode(builder, group, mesh, std::format("room_distance_debug_portal_{:06}", i), portalCentroid(portals[i]));
 }
 
-void addPortalPlaneContextMesh(Builder& builder, Palette& palette, int parent,
-                               std::span<const ArxLevelPortal> portals) {
+void addPortalPlaneContextMesh(Builder& builder, Palette& palette, int parent, std::span<const Portal> portals) {
   if (portals.empty()) return;
   std::vector<GlbVec3> positions;
   std::vector<std::uint32_t> indices;
   positions.reserve(portals.size() * 4);
   indices.reserve(portals.size() * 6);
-  for (const ArxLevelPortal& portal : portals) {
+  for (const Portal& portal : portals) {
     const std::uint32_t base = static_cast<std::uint32_t>(positions.size());
-    const std::size_t count = portal.shape == ARX_PORTAL_QUAD ? 4U : 3U;
+    const std::size_t count = portal.shape == PortalShape::kQuad ? 4U : 3U;
     for (std::size_t i = 0; i < count; ++i) positions.push_back(toVec3(portal.vertices[i]));
     indices.push_back(base);
     indices.push_back(base + 1);
@@ -107,27 +107,21 @@ void addRoomSupportContextMeshes(
   }
 }
 
-void addStoredRoomDistanceContextMesh(Builder& builder, Palette& palette, int parent, const pistoris::Level& level,
-                                      std::span<const ArxLevelPortal> portals) {
-  if (!hasCompleteRoomDistances(level)) return;
+void addStoredRoomDistanceContextMesh(Builder& builder, Palette& palette, int parent, const RoomsData& rooms_data) {
+  if (!hasCompleteRoomDistances(rooms_data)) return;
   constexpr float kHalfWidth = 4.0f;
   std::vector<GlbVec3> positions;
   std::vector<std::uint32_t> indices;
-  positions.reserve(level.roomDistanceCount() * 4);
-  indices.reserve(level.roomDistanceCount() * 6);
-  for (std::size_t room_a = 0; room_a < level.roomCount(); ++room_a) {
-    for (std::size_t room_b = room_a + 1U; room_b < level.roomCount(); ++room_b) {
-      ArxLevelRoomDistance distance;
-      std::uint8_t has_distance = 0;
-      if (level.getRoomDistance(static_cast<pistoris::RoomIndex>(room_a),
-                                static_cast<pistoris::RoomIndex>(room_b),
-                                has_distance,
-                                distance) != ARX_OK ||
-          has_distance == 0)
+  positions.reserve(rooms_data.distances.size() * 4U);
+  indices.reserve(rooms_data.distances.size() * 6U);
+  for (std::size_t room_a = 0; room_a < rooms_data.definitions.size(); ++room_a) {
+    for (std::size_t room_b = room_a + 1U; room_b < rooms_data.definitions.size(); ++room_b) {
+      const RoomDistance& distance = rooms_data.distances[rooms::roomDistancePairIndex(room_a, room_b)];
+      if (distance.low_room_portal >= rooms_data.portals.size() ||
+          distance.high_room_portal >= rooms_data.portals.size())
         continue;
-      if (distance.portal_a >= portals.size() || distance.portal_b >= portals.size()) continue;
-      appendSegmentQuad(portalCentroid(portals[distance.portal_a]),
-                        portalCentroid(portals[distance.portal_b]),
+      appendSegmentQuad(portalCentroid(rooms_data.portals[distance.low_room_portal]),
+                        portalCentroid(rooms_data.portals[distance.high_room_portal]),
                         kHalfWidth,
                         positions,
                         indices);
@@ -293,8 +287,8 @@ namespace pistoris::level_debug {
 
 ArxReturnCode exportRoomDistanceDebugGlb(const Level& level, std::vector<std::uint8_t>& out,
                                          const RoomDistanceGenDiagnostics* diagnostics,
-                                         const Level::GlbExportOptions& options) {
-  return glb_level_debug::guardDebugExport("level_debug::exportRoomDistanceDebugGlb", [&] {
+                                         const Level::GlbExportOptions& options) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
     std::vector<std::uint8_t> tmp;
     ArxReturnCode rc = level.validateMesh();
     if (rc != ARX_OK) return rc;
@@ -306,6 +300,7 @@ ArxReturnCode exportRoomDistanceDebugGlb(const Level& level, std::vector<std::ui
     if (rc != ARX_OK) return rc;
     rc = level.validatePortals();
     if (rc != ARX_OK) return rc;
+    const LevelModules& modules = LevelDebugAccess::modules(level);
 
     glb_level_debug::Builder builder;
     glb_level::Palette palette(builder);
@@ -316,32 +311,29 @@ ArxReturnCode exportRoomDistanceDebugGlb(const Level& level, std::vector<std::ui
 
     int context = builder.addNode("room_distance_debug_context");
     builder.addChild(root, context);
-    glb_level_debug::addGeometryContextMesh(builder, context, level, palette);
+    glb_level_debug::addGeometryContextMesh(builder, context, modules.geometry, palette);
     if (diagnostics)
       glb_level_debug::addRoomSupportContextMeshes(builder, palette, context, diagnostics->support_by_room);
-    std::vector<ArxLevelPortal> portals(level.portalCount());
-    rc = level.copyPortals(0, portals.size(), portals.data());
-    if (rc != ARX_OK) return rc;
-    glb_level_debug::addPortalPlaneContextMesh(builder, palette, context, portals);
-    glb_level_debug::addPortalContextNodes(builder, palette, root, portals);
-    glb_level_debug::addStoredRoomDistanceContextMesh(builder, palette, root, level, portals);
+    glb_level_debug::addPortalPlaneContextMesh(builder, palette, context, modules.rooms.portals);
+    glb_level_debug::addPortalContextNodes(builder, palette, root, modules.rooms.portals);
+    glb_level_debug::addStoredRoomDistanceContextMesh(builder, palette, root, modules.rooms);
     if (diagnostics) glb_level_debug::addRoomDistanceDiagnostics(builder, palette, root, *diagnostics);
 
     log(ARX_LOG_INFO,
-        std::format("Level room distance debug GLB export: {} room(s), {} portal(s), compact distances {}",
-                    level.roomCount(),
-                    level.portalCount(),
-                    glb_level_debug::hasCompleteRoomDistances(level) ? "present" : "missing"));
+        "Level room distance debug GLB export: {} room(s), {} portal(s), compact distances {}",
+        modules.rooms.definitions.size(),
+        modules.rooms.portals.size(),
+        glb_level_debug::hasCompleteRoomDistances(modules.rooms) ? "present" : "missing");
     if (diagnostics) {
       log(ARX_LOG_DEBUG,
-          std::format("Level room distance debug diagnostics: {} portal access point(s), {} sampled point(s), {} "
-                      "portal access segment(s), {} visibility edge(s), {} in-room path(s), {} room-pair path(s)",
-                      glb_level_debug::pointGroupCount(diagnostics->portal_access_points_by_room),
-                      glb_level_debug::pointGroupCount(diagnostics->sampled_points_by_room),
-                      diagnostics->portal_access_segments.size(),
-                      diagnostics->in_room_visibility_edges.size(),
-                      glb_level_debug::pathGroupCount(diagnostics->in_room_portal_paths_by_room),
-                      diagnostics->room_pair_paths.size()));
+          "Level room distance debug diagnostics: {} portal access point(s), {} sampled point(s), {} "
+          "portal access segment(s), {} visibility edge(s), {} in-room path(s), {} room-pair path(s)",
+          glb_level_debug::pointGroupCount(diagnostics->portal_access_points_by_room),
+          glb_level_debug::pointGroupCount(diagnostics->sampled_points_by_room),
+          diagnostics->portal_access_segments.size(),
+          diagnostics->in_room_visibility_edges.size(),
+          glb_level_debug::pathGroupCount(diagnostics->in_room_portal_paths_by_room),
+          diagnostics->room_pair_paths.size());
     }
     rc = builder.write(tmp);
     if (rc == ARX_OK) out = std::move(tmp);

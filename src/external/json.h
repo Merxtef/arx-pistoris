@@ -3,18 +3,21 @@
 
 #pragma once
 
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/amb.hpp"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/llf.hpp"
 #include "arx_pistoris/native/tea.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include <string>
 #include <string_view>
 
 namespace pistoris {
 
+ArxReturnCode exportAmbToJson(const amb::Data& data, bool pretty, std::string& out);
+ArxReturnCode importJsonToAmb(std::string_view text, amb::Data* out);
 ArxReturnCode exportFtlToJson(const ftl::Data& d, bool pretty, std::string& out);
 ArxReturnCode importJsonToFtl(std::string_view text, ftl::Data* out);
 ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, std::string& out);

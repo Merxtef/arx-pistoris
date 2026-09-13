@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/runtime/types.h"
 
 #include "modules/geometry.h"
 #include "modules/lights.h"
+#include "modules/lights/internal.h"
+#include "utils/log.h"
 #include "utils/math/finite.h"
 
 #include <algorithm>
@@ -23,12 +26,7 @@ namespace {
 
 constexpr double kShadowEndpointEpsilon = 1.0e-4;
 
-bool unitColor(const ArxColor3& color) {
-  return math::finite(color) && color.r >= 0.0f && color.r <= 1.0f && color.g >= 0.0f && color.g <= 1.0f &&
-         color.b >= 0.0f && color.b <= 1.0f;
-}
-
-bool validOptions(const StaticLightingGenOptions& options) {
+bool validOptions(const StaticLightingGenerationOptions& options) {
   return unitColor(options.ambient_color) && math::finite(options.global_factor) && options.global_factor >= 0.0f;
 }
 
@@ -52,8 +50,9 @@ bool shadowSegmentIntersectsTriangle(const ArxVector3& start, const ArxVector3& 
 }
 
 bool segmentOccluded(const geometry::TriangleIndex& index, const ArxVector3& start, const ArxVector3& end,
-                     FaceIndex target_face) {
-  for (std::uint32_t candidate : index.candidatesForSegment(start, end)) {
+                     FaceIndex target_face, std::vector<std::uint32_t>& candidates) {
+  index.findCandidatesForSegment(candidates, start, end);
+  for (std::uint32_t candidate : candidates) {
     if (candidate == target_face) continue;
     if (shadowSegmentIntersectsTriangle(start, end, index.triangle(candidate))) return true;
   }
@@ -79,34 +78,43 @@ float normalResponse(const ArxVector3& normal, const ArxVector3& to_light, float
   return std::max(0.0f, math::dotf(normal, to_light / distance));
 }
 
-ArxColor3 clampGeneratedColor(const ArxColor3& value, const ArxColor3& ambient) {
-  return {
-      std::clamp(value.r, ambient.r, 1.0f), std::clamp(value.g, ambient.g, 1.0f), std::clamp(value.b, ambient.b, 1.0f)};
+ArxColor3 clampGeneratedColor(const std::array<double, 3>& value, const ArxColor3& ambient) {
+  return {static_cast<float>(std::clamp(value[0], static_cast<double>(ambient.r), 1.0)),
+          static_cast<float>(std::clamp(value[1], static_cast<double>(ambient.g), 1.0)),
+          static_cast<float>(std::clamp(value[2], static_cast<double>(ambient.b), 1.0))};
 }
 
 }  // namespace
 
 Error generateStaticLighting(std::vector<ArxColor3>& out, const GeometryData& geometry, std::span<const Light> lights,
-                             const StaticLightingGenOptions& options, StaticLightingDiagnostics* diagnostics) {
+                             const StaticLightingGenerationOptions& options, StaticLightingDiagnostics* diagnostics) {
   if (!validOptions(options)) return Error::kInvalidOptions;
-  if (diagnostics) *diagnostics = {};
-
-  const std::vector<geometry::IndexedTriangle> indexed_triangles = indexedGeometryTriangles(geometry);
-  const geometry::TriangleIndex lighting_index(indexed_triangles);
+  StaticLightingDiagnostics collected;
+  const bool log_summary = log_fn != nullptr;
+  StaticLightingDiagnostics* stats = diagnostics != nullptr ? diagnostics : (log_summary ? &collected : nullptr);
+  if (stats) *stats = {};
 
   std::vector<ArxColor3> corner_colors(expectedCornerColorCount(geometry));
+  std::vector<std::uint32_t> shadow_candidates;
   std::size_t skipped_lights = 0;
+  bool needs_shadow_index = false;
   for (const Light& light : lights) {
-    if (!activeStaticLight(light)) ++skipped_lights;
+    if (!activeStaticLight(light)) {
+      ++skipped_lights;
+    } else if (options.use_shadows && (light.flags & kLightFlagNoCasted) == 0) {
+      needs_shadow_index = true;
+    }
   }
-  if (diagnostics) diagnostics->skipped_lights = skipped_lights;
+  if (stats) stats->skipped_lights = skipped_lights;
+  geometry::TriangleIndex lighting_index;
+  if (needs_shadow_index) lighting_index = geometry::TriangleIndex(indexedGeometryTriangles(geometry));
 
   for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
     const Face& face = geometry.faces[face_index];
     for (std::size_t corner_index = 0; corner_index < face.corners.size(); ++corner_index) {
       const Corner& corner = face.corners[corner_index];
       const ArxVector3& position = geometry.vertices[corner.vertex].position;
-      ArxColor3 generated{};
+      std::array<double, 3> generated{};
 
       for (const Light& light : lights) {
         if (!activeStaticLight(light)) continue;
@@ -122,27 +130,44 @@ Error generateStaticLighting(std::vector<ArxColor3>& out, const GeometryData& ge
           if (response <= 0.0f) continue;
         }
 
-        if (options.use_shadows && (light.flags & kLightFlagNoCasted) == 0) {
-          if (diagnostics) ++diagnostics->shadow_rays;
-          if (segmentOccluded(lighting_index, light.position, position, static_cast<FaceIndex>(face_index))) {
-            if (diagnostics) ++diagnostics->occluded_shadow_rays;
+        if (needs_shadow_index && (light.flags & kLightFlagNoCasted) == 0) {
+          if (stats) ++stats->shadow_rays;
+          if (segmentOccluded(
+                  lighting_index, light.position, position, static_cast<FaceIndex>(face_index), shadow_candidates)) {
+            if (stats) ++stats->occluded_shadow_rays;
             continue;
           }
         }
 
-        const float factor = light.intensity * options.global_factor * response * attenuation;
-        generated.r += light.color.r * factor;
-        generated.g += light.color.g * factor;
-        generated.b += light.color.b * factor;
-        if (diagnostics) ++diagnostics->contributing_light_corners;
+        const double factor = static_cast<double>(light.intensity) * options.global_factor * response * attenuation;
+        generated[0] += static_cast<double>(light.color.r) * factor;
+        generated[1] += static_cast<double>(light.color.g) * factor;
+        generated[2] += static_cast<double>(light.color.b) * factor;
+        if (stats) ++stats->contributing_light_corners;
       }
 
       corner_colors[cornerColorIndex(static_cast<FaceIndex>(face_index), corner_index)] =
           clampGeneratedColor(generated, options.ambient_color);
-      if (diagnostics) ++diagnostics->generated_corners;
+      if (stats) ++stats->generated_corners;
     }
   }
 
+  if (log_summary) {
+    log(ARX_LOG_DEBUG,
+        "Static-light generation: {} faces, {} corners, {} lights ({} active, {} skipped), {} contributing "
+        "light-corners, {} shadow rays ({} occluded), normals {}, shadows {}, global factor {}",
+        geometry.faces.size(),
+        stats->generated_corners,
+        lights.size(),
+        lights.size() - skipped_lights,
+        skipped_lights,
+        stats->contributing_light_corners,
+        stats->shadow_rays,
+        stats->occluded_shadow_rays,
+        options.use_normals,
+        options.use_shadows,
+        options.global_factor);
+  }
   out = std::move(corner_colors);
   return Error::kNone;
 }

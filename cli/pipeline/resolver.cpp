@@ -12,6 +12,7 @@
 #include "pipeline/options.h"
 #include "pipeline/parsed.h"
 #include "resources/input.h"
+#include "resources/layout.h"
 #include "resources/selector.h"
 #include "routes/descriptor.h"
 #include "routes/registry.h"
@@ -49,9 +50,11 @@ bool moduleRouteConstraint(const cli::Module& module, cli::RouteMask& out) {
   switch (module.category()) {
     case cli::ModuleCategory::kSystem:
     case cli::ModuleCategory::kTerminalAction:
-    case cli::ModuleCategory::kOutputFormat:
     case cli::ModuleCategory::kFormatModifier:
       return false;
+    case cli::ModuleCategory::kOutputFormat:
+      out = cli::routesSupportingModule(module);
+      return out != cli::kNoRoutes;
     case cli::ModuleCategory::kRoute:
     case cli::ModuleCategory::kSharedConversion:
     case cli::ModuleCategory::kOutputConverter:
@@ -249,6 +252,20 @@ cli::SelectedOutputConverter selectedOutputConverter(std::span<const cli::Module
   return {};
 }
 
+bool requiresIntermediate(std::span<const cli::ModuleInvocation> modules) {
+  return std::ranges::any_of(modules, [](const cli::ModuleInvocation& invocation) {
+    if (!invocation.module) return false;
+    switch (invocation.module->category()) {
+      case cli::ModuleCategory::kRoute:
+      case cli::ModuleCategory::kSharedConversion:
+      case cli::ModuleCategory::kNativeBakeModifier:
+        return true;
+      default:
+        return false;
+    }
+  });
+}
+
 bool validateSelectedProbe(const cli::CliResolution& resolved) {
   if (resolved.route_probe.status != cli::ProbeStatus::kInvalid) return true;
   cli::diagnostic(cli::DiagnosticCode::kRouteInvocationInvalid,
@@ -280,7 +297,7 @@ struct ProbedRoute {
 cli::RouteMask probeRoutes(cli::RouteMask route_candidates, const cli::CliResolution& resolved,
                            std::vector<ProbedRoute>& probed) {
   cli::RouteMask claimed_routes = cli::kNoRoutes;
-  cli::RouteProbeContext ctx{resolved.inputs, resolved.output_target, resolved.output, route_candidates};
+  cli::RouteProbeContext ctx{resolved.inputs, resolved.output_target, resolved.output};
   cli::RouteRegistryView routes = cli::routeRegistry();
   for (std::size_t i = 0; i < routes.count; ++i) {
     const cli::RouteDescriptor& route = routes.routes[i];
@@ -304,14 +321,15 @@ namespace cli {
 bool resolveCli(const ParsedCli& parsed, std::span<const ModuleInvocation> effective_modules, IoService& io,
                 CliResolution& resolved) {
   const ParsedOptions& options = parsed.options;
-  resolved.effective_modules.assign(effective_modules.begin(), effective_modules.end());
-  if (!resolveOutputFormat(
-          parsed, resolved.effective_modules, io, resolved.output_target, resolved.output_resolution)) {
+  if (!resolveOutputFormat(parsed, effective_modules, io, resolved.output_target, resolved.output_resolution)) {
     return false;
   }
   resolved.output = resolved.output_resolution.selected;
+  if (options.auto_mount && options.write_mount.empty() && resolved.output_target.layout == ResourceLayout::kGame &&
+      !io.useDefaultGameWriteMount())
+    return false;
 
-  RouteMask route_candidates = constrainedRouteCandidates(parsed, resolved.effective_modules, resolved.output);
+  RouteMask route_candidates = constrainedRouteCandidates(parsed, effective_modules, resolved.output);
   if (route_candidates == kNoRoutes) {
     RouteKind ignored = RouteKind::kUnknown;
     resolveClaimedRoute(route_candidates, ignored, RouteResolutionPhase::kConstraints);
@@ -341,18 +359,21 @@ bool resolveCli(const ParsedCli& parsed, std::span<const ModuleInvocation> effec
   if (!validateSelectedProbe(resolved)) return false;
 
   resolved.route = {.kind = route_kind, .input = resolved.inputs[0].facts.format, .output = resolved.output};
-  if (!validateFormatModifiers(resolved.effective_modules, resolved.route)) return false;
-  resolved.output_converter = selectedOutputConverter(resolved.effective_modules);
+  if (!validateFormatModifiers(effective_modules, resolved.route)) return false;
+  resolved.output_converter = selectedOutputConverter(effective_modules);
   const RouteDescriptor* descriptor = resolved.route_descriptor;
   if (!descriptor || !descriptor->resolve || !resolved.route_invocation) return false;
   RouteResolveContext ctx{resolved.inputs,
                           resolved.output_target,
-                          resolved.output,
                           resolved.route,
-                          options,
+                          options.conversion,
+                          options.format,
+                          options.format_modifiers,
+                          options.textures,
+                          options.sounds,
                           findRouteOptions(options, *descriptor),
                           resolved.output_converter,
-                          resolved.effective_modules,
+                          requiresIntermediate(effective_modules),
                           io};
   return descriptor->resolve(ctx, *resolved.route_invocation);
 }

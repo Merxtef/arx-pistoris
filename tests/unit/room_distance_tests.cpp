@@ -3,9 +3,9 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 #include "arx_pistoris/pistoris.hpp"
 
 #include "level/data.h"
@@ -39,7 +39,8 @@ void captureLog(ArxLogLevel level, const char* msg, void* userdata) {
   static_cast<LogCapture*>(userdata)->messages.emplace_back(msg);
 }
 
-pistoris::Face makeFace(std::uint32_t a, std::uint32_t b, std::uint32_t c, std::uint32_t room) {
+pistoris::Face makeFace(pistoris::GeometryData&, std::uint32_t a, std::uint32_t b, std::uint32_t c,
+                        std::uint32_t room) {
   constexpr ArxVector3 kNormal{0.0f, -1.0f, 0.0f};
   (void)room;
   return {
@@ -52,9 +53,9 @@ void addFloor(pistoris::LevelModules& level, float min_x, float max_x, float min
   level.geometry.vertices.push_back({{max_x, 0.0f, min_z}});
   level.geometry.vertices.push_back({{max_x, 0.0f, max_z}});
   level.geometry.vertices.push_back({{min_x, 0.0f, max_z}});
-  level.geometry.faces.push_back(makeFace(base + 0, base + 1, base + 2, room));
+  level.geometry.faces.push_back(makeFace(level.geometry, base + 0, base + 1, base + 2, room));
   level.rooms.face_rooms.push_back(room);
-  level.geometry.faces.push_back(makeFace(base + 0, base + 2, base + 3, room));
+  level.geometry.faces.push_back(makeFace(level.geometry, base + 0, base + 2, base + 3, room));
   level.rooms.face_rooms.push_back(room);
 }
 
@@ -65,9 +66,9 @@ void addCeiling(pistoris::LevelModules& level, float min_x, float max_x, float m
   level.geometry.vertices.push_back({{max_x, y, min_z}});
   level.geometry.vertices.push_back({{max_x, y, max_z}});
   level.geometry.vertices.push_back({{min_x, y, max_z}});
-  level.geometry.faces.push_back(makeFace(base + 0, base + 2, base + 1, room));
+  level.geometry.faces.push_back(makeFace(level.geometry, base + 0, base + 2, base + 1, room));
   level.rooms.face_rooms.push_back(room);
-  level.geometry.faces.push_back(makeFace(base + 0, base + 3, base + 2, room));
+  level.geometry.faces.push_back(makeFace(level.geometry, base + 0, base + 3, base + 2, room));
   level.rooms.face_rooms.push_back(room);
 }
 
@@ -113,7 +114,7 @@ pistoris::Level makePublicLevel(const pistoris::LevelModules& src) {
   test::MeshSnapshot mesh;
   mesh.vertices = src.geometry.vertices;
   mesh.faces = src.geometry.faces;
-  mesh.textures = src.geometry.textures;
+  mesh.textures = src.textures.textures;
   mesh.face_rooms = src.rooms.face_rooms;
   mesh.corner_colors = src.lighting.corner_colors;
   REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);

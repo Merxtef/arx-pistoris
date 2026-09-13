@@ -3,15 +3,19 @@
 
 #include "coordinates.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/level/types.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "external/glb/accessor.h"
+#include "external/glb/object_coordinates.h"
 #include "external/glb/writer.h"
 #include "level/data.h"
 #include "modules/geometry.h"
 #include "modules/lights.h"
+#include "modules/minimap.h"
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
@@ -31,7 +35,6 @@ namespace {
 
 constexpr double kAutoPlacementStep = 100.0;
 constexpr double kBoundaryEpsilon = 1.0e-4;
-constexpr ArxQuat kLevelGlbBasisRotation = {0.0f, 1.0f, 0.0f, 0.0f};
 
 struct XzEnvelope {
   double min_x = std::numeric_limits<double>::infinity();
@@ -108,8 +111,8 @@ bool translateLevel(LevelModules& level, const ArxVector3& offset) {
     if (!translate(anchor.position)) return false;
   for (Light& light : level.lighting.lights)
     if (!translate(light.position)) return false;
-  if (!level.scene.player_spawn_is_fallback)
-    if (!translate(level.scene.player_spawn.position)) return false;
+  if (level.scene.player_spawn.has_value())
+    if (!translate(level.scene.player_spawn.value().position)) return false;
   for (Entity& entity : level.scene.entities)
     if (!translate(entity.position)) return false;
   for (Fog& fog : level.scene.fogs)
@@ -118,6 +121,7 @@ bool translateLevel(LevelModules& level, const ArxVector3& offset) {
     if (!translateZone(zone, offset)) return false;
   for (Path& path : level.scene.paths)
     if (!translate(path.position)) return false;
+  if (!minimap::translate(level.minimap, offset)) return false;
   return true;
 }
 
@@ -155,11 +159,11 @@ std::optional<ArxVector3> automaticOffset(const LevelModules& level) {
   std::optional<double> z = autoAxisOffset(bounds.min_z, bounds.max_z);
   if (!x || !z) {
     log(ARX_LOG_ERROR,
-        std::format("GLB -> Level automatic placement failed for XZ bounds [{}, {}] x [{}, {}]",
-                    bounds.min_x,
-                    bounds.max_x,
-                    bounds.min_z,
-                    bounds.max_z));
+        "GLB -> Level automatic placement failed for XZ bounds [{}, {}] x [{}, {}]",
+        bounds.min_x,
+        bounds.max_x,
+        bounds.min_z,
+        bounds.max_z);
     return std::nullopt;
   }
   return ArxVector3{static_cast<float>(*x), 0.0f, static_cast<float>(*z)};
@@ -182,15 +186,12 @@ void snapMapEnvelope(LevelModules& level) {
   for (Anchor& anchor : level.navigation.anchors) snap(anchor.position);
 }
 
-bool validScale(float scale) {
-  return std::isfinite(scale) && scale >= kMinArxUnitsPerGlbUnit && scale <= kMaxArxUnitsPerGlbUnit;
-}
-
 }  // namespace
 
 ArxReturnCode validateGlbImportOptions(const Level::GlbImportOptions& options) {
   const auto& offset = options.arx_offset;
-  if (!validScale(options.arx_units_per_glb_unit) || (offset && !math::finite(*offset))) return ARX_INVALID_OPTIONS;
+  if (!glb_object::validUnits(options.arx_units_per_glb_unit) || (offset && !math::finite(*offset)))
+    return ARX_INVALID_OPTIONS;
   return ARX_OK;
 }
 
@@ -211,7 +212,7 @@ std::optional<float> toArxLength(float value, const ImportUnits& units) noexcept
 }
 
 ArxReturnCode applyGlbImportPlacement(LevelModules& level, const Level::GlbImportOptions& options,
-                                      Level::GlbImportInfo& info) {
+                                      ArxLevelGlbImportInfo& info) {
   ArxReturnCode rc = validateGlbImportOptions(options);
   if (rc != ARX_OK) return rc;
 
@@ -223,12 +224,13 @@ ArxReturnCode applyGlbImportPlacement(LevelModules& level, const Level::GlbImpor
 
   info.applied_arx_offset = *offset;
   if (!options.arx_offset && (offset->x != 0.0f || offset->z != 0.0f))
-    log(ARX_LOG_INFO, std::format("GLB -> Level automatic XZ offset: ({}, {})", offset->x, offset->z));
+    log(ARX_LOG_INFO, "GLB -> Level automatic XZ offset: ({}, {})", offset->x, offset->z);
   return ARX_OK;
 }
 
 ArxReturnCode configureGlbExportCoordinates(glb::Builder& builder, const Level::GlbExportOptions& options) {
-  if (!validScale(options.arx_units_per_glb_unit) || !math::finite(options.arx_offset)) return ARX_INVALID_OPTIONS;
+  if (!glb_object::validUnits(options.arx_units_per_glb_unit) || !math::finite(options.arx_offset))
+    return ARX_INVALID_OPTIONS;
   const double inverse = 1.0 / static_cast<double>(options.arx_units_per_glb_unit);
   const glb::Vec3 translation = {
       static_cast<float>(-static_cast<double>(options.arx_offset.x) * inverse),

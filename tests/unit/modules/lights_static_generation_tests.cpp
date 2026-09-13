@@ -3,21 +3,23 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/lights.h"
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
 using namespace pistoris;
 
 namespace {
 
-Face makeFace(std::uint32_t a, std::uint32_t b, std::uint32_t c, const ArxVector3& normal = {0.0f, -1.0f, 0.0f}) {
+Face makeFace(GeometryData&, std::uint32_t a, std::uint32_t b, std::uint32_t c,
+              const ArxVector3& normal = {0.0f, -1.0f, 0.0f}) {
   return {{{{a, normal, 0.0f, 0.0f}, {b, normal, 0.0f, 0.0f}, {c, normal, 0.0f, 0.0f}}}, kNoTexture, 0, 0.0f};
 }
 
@@ -35,12 +37,12 @@ Light makeLight(ArxVector3 position, ArxColor3 color = {1.0f, 1.0f, 1.0f}) {
 GeometryData makeTriangleGeometry() {
   GeometryData geometry;
   geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{100.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 100.0f}}};
-  geometry.faces.push_back(makeFace(0, 1, 2));
+  geometry.faces.push_back(makeFace(geometry, 0, 1, 2));
   return geometry;
 }
 
 lights::Error generateStaticLighting(LightingData& lighting, const GeometryData& geometry,
-                                     const lights::StaticLightingGenOptions& options = {},
+                                     const lights::StaticLightingGenerationOptions& options = {},
                                      lights::StaticLightingDiagnostics* diagnostics = nullptr) {
   return lights::generateStaticLighting(lighting.corner_colors, geometry, lighting.lights, options, diagnostics);
 }
@@ -50,7 +52,7 @@ void addShadowBlocker(GeometryData& geometry) {
   geometry.vertices.push_back({{-20.0f, -50.0f, -20.0f}});
   geometry.vertices.push_back({{20.0f, -50.0f, -20.0f}});
   geometry.vertices.push_back({{0.0f, -50.0f, 20.0f}});
-  geometry.faces.push_back(makeFace(base + 0, base + 1, base + 2));
+  geometry.faces.push_back(makeFace(geometry, base + 0, base + 1, base + 2));
 }
 
 void addCornerTouchingBlocker(GeometryData& geometry) {
@@ -58,7 +60,7 @@ void addCornerTouchingBlocker(GeometryData& geometry) {
   geometry.vertices.push_back({{0.0f, 0.0f, 0.0f}});
   geometry.vertices.push_back({{20.0f, -50.0f, -20.0f}});
   geometry.vertices.push_back({{-20.0f, -50.0f, -20.0f}});
-  geometry.faces.push_back(makeFace(base + 0, base + 1, base + 2));
+  geometry.faces.push_back(makeFace(geometry, base + 0, base + 1, base + 2));
 }
 
 }  // namespace
@@ -162,6 +164,30 @@ TEST_SUITE("lights::static_generation") {
     CHECK(lighting.corner_colors[0].r == doctest::Approx(1.0f));
     CHECK(lighting.corner_colors[0].g == doctest::Approx(1.0f));
     CHECK(lighting.corner_colors[0].b == doctest::Approx(1.0f));
+  }
+
+  TEST_CASE("Extreme finite light values produce finite clamped colors") {
+    LightingData lighting;
+    GeometryData geometry = makeTriangleGeometry();
+    lighting.lights.push_back(makeLight({0.0f, -100.0f, 0.0f}, {1.0f, 0.0f, 0.5f}));
+    lighting.lights[0].intensity = std::numeric_limits<float>::max();
+
+    REQUIRE(generateStaticLighting(lighting,
+                                   geometry,
+                                   {.ambient_color = {0.0f, 0.0f, 0.0f},
+                                    .global_factor = std::numeric_limits<float>::max(),
+                                    .use_normals = false,
+                                    .use_shadows = false}) == lights::Error::kNone);
+
+    REQUIRE(lighting.corner_colors.size() == 3);
+    for (const ArxColor3& color : lighting.corner_colors) {
+      CHECK(std::isfinite(color.r));
+      CHECK(std::isfinite(color.g));
+      CHECK(std::isfinite(color.b));
+      CHECK(color.r == doctest::Approx(1.0f));
+      CHECK(color.g == doctest::Approx(0.0f));
+      CHECK(color.b == doctest::Approx(1.0f));
+    }
   }
 
   TEST_CASE("Rejects invalid inputs") {

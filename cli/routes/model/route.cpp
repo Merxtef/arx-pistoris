@@ -7,52 +7,30 @@
 #include "formats/classification.h"
 #include "formats/format.h"
 #include "modules/module.h"
+#include "modules/sounds/modules.h"
+#include "modules/textures/modules.h"
 #include "modules/transform/modules.h"
 #include "pipeline/execution_context.h"
-#include "pipeline/options.h"
-#include "resources/selector.h"
+#include "resources/model_input.h"
 #include "routes/descriptor.h"
 #include "routes/model/invocation.h"
-#include "routes/model/load.h"
 #include "routes/model/operations.h"
 #include "routes/model/options.h"
 #include "routes/model/options/modules.h"
+#include "routes/model/resolution.h"
 #include "routes/model/save.h"
 #include "routes/model/state.h"
 #include "routes/options.h"
 #include "routes/types.h"
 
-#include <cstdio>
+#include <cstddef>
 #include <memory>
-#include <vector>
+#include <variant>
 
 namespace cli::model {
 namespace {
 
-bool supportsOutput(Format output) {
-  switch (output) {
-    case Format::kFtl:
-    case Format::kObj:
-    case Format::kJson:
-    case Format::kGlb:
-      return true;
-    default:
-      return false;
-  }
-}
-
-bool isPrimaryCompatible(FileFacts facts) {
-  switch (facts.format) {
-    case Format::kFtl:
-    case Format::kObj:
-    case Format::kGlb:
-      return facts.kind != PayloadKind::kTea;
-    case Format::kJson:
-      return facts.kind == PayloadKind::kFtl || facts.kind == PayloadKind::kUnknown;
-    default:
-      return false;
-  }
-}
+bool isPrimaryCompatible(FileFacts facts) { return isModelInput(facts); }
 
 bool isExtraCompatible(FileFacts facts) {
   if (facts.format == Format::kTea) return true;
@@ -64,84 +42,90 @@ std::unique_ptr<RouteOptions> createRouteOptions() { return std::make_unique<Mod
 
 std::unique_ptr<RouteInvocation> createRouteInvocation() { return std::make_unique<Invocation>(); }
 
-int executeRoute(const ExecutionContext& context, RouteInvocation& invocation) {
+ProbeResult probe(const RouteProbeContext& context, RouteInvocation& route_invocation) {
+  Invocation& invocation = static_cast<Invocation&>(route_invocation);
+  if (context.inputs.empty()) return {ProbeStatus::kInvalid, "Model route requires an input"};
+  if (!isPrimaryCompatible(context.inputs[0].facts)) return {};
+
+  invocation.input = 0;
+  invocation.output = context.output;
+  for (std::size_t index = 1; index < context.inputs.size(); ++index) {
+    if (!isExtraCompatible(context.inputs[index].facts)) {
+      return {ProbeStatus::kInvalid, "Model route accepts only TEA extras"};
+    }
+    invocation.extras.push_back(index);
+  }
+  return {ProbeStatus::kMatch};
+}
+
+bool resolve(const RouteResolveContext& context, RouteInvocation& invocation) {
+  return resolveInvocation(context, static_cast<Invocation&>(invocation));
+}
+
+int dispatch(const ResolvedModelInvocation& resolved) {
+  Invocation& invocation = resolved.invocation;
+  if (resolved.common.route().input == Format::kUnknown || invocation.input == kNoClassifiedPath ||
+      std::holds_alternative<std::monostate>(invocation.state)) {
+    diagnostic(DiagnosticCode::kModelUnsupportedInput, "Unsupported input format");
+    return 1;
+  }
+  if (NativeModelFiles* native = std::get_if<NativeModelFiles>(&invocation.state)) {
+    return writeNativeOutput(*native, resolved.common, invocation) ? 0 : 1;
+  }
+  IntermediateModel* intermediate = std::get_if<IntermediateModel>(&invocation.state);
+  if (!intermediate) {
+    diagnostic(DiagnosticCode::kModelOutputFailed, "Model input state is unavailable");
+    return 1;
+  }
+  if (!operations::apply(*intermediate, invocation.options, invocation.conversion)) return 1;
+  return writeIntermediateOutput(*intermediate, resolved.common, invocation) ? 0 : 1;
+}
+
+int execute(const ExecutionContext& context, RouteInvocation& invocation) {
   ResolvedModelInvocation resolved{context, static_cast<Invocation&>(invocation)};
   return dispatch(resolved);
 }
 
 }  // namespace
 
-ProbeResult probe(const std::vector<ClassifiedPath>& inputs, const OutputTarget& output, Format output_format,
-                  Invocation& inv) {
-  if (!supportsOutput(output_format)) return {};
-  if (inputs.empty()) return {ProbeStatus::kInvalid, "Model route requires an input"};
-  if (!isPrimaryCompatible(inputs[0].facts)) return {};
-
-  inv.input = 0;
-  inv.output = output;
-  for (std::size_t i = 1; i < inputs.size(); ++i) {
-    if (!isExtraCompatible(inputs[i].facts)) return {ProbeStatus::kInvalid, "Model route accepts only TEA extras"};
-    inv.extras.push_back(i);
-  }
-  return {ProbeStatus::kMatch};
-}
-
-ProbeResult probeRoute(const RouteProbeContext& ctx, RouteInvocation& invocation) {
-  return probe(ctx.inputs, ctx.output, ctx.output_format, static_cast<Invocation&>(invocation));
-}
-
-bool resolveRoute(const RouteResolveContext& context, RouteInvocation& invocation) {
-  Invocation& model = static_cast<Invocation&>(invocation);
-  if (context.route_options) model.options = static_cast<const ModelOptions&>(*context.route_options);
-  model.conversion = context.options.conversion;
-  model.format = context.options.format;
-  return true;
-}
-
-bool printHelpSection(std::FILE* output, HelpSection section) {
-  if (section != HelpSection::kConventions) return false;
-  std::fprintf(output, "  Model reference repair modules require --ftl-reference.\n");
-  return true;
-}
-
 const RouteDescriptor& routeDescriptor() {
   static constexpr ModuleRef kSupportedModules[] = {
       modules::transform::rotateModule,
       modules::transform::scaleModule,
       modules::transform::offsetModule,
+      modules::textures::skipTextureExportModule,
+      modules::textures::inputTextureFolderModule,
+      modules::transform::rebaseTexturesModule,
+      modules::sounds::skipSoundExportModule,
+      modules::sounds::inputSoundFolderModule,
+      modules::transform::rebaseSoundsModule,
+  };
+  static constexpr HelpExample kHelpExamples[] = {
+      {"--auto-mount model:npc:human_base anim:npc:human_normal_walk human_base.glb",
+       "Export a mounted Model and Animation to GLB."},
+      {"--auto-mount human_base.glb model:npc:human_base", "Bake an authored GLB into the game resource layout."},
+      {"model.obj model.glb", "Convert a loose static Model to GLB."},
   };
   static const RouteDescriptor kDescriptor{
-      RouteKind::kModel,
-      "model",
-      formatBit(Format::kFtl) | formatBit(Format::kObj) | formatBit(Format::kJson) | formatBit(Format::kGlb),
-      formatBit(Format::kTea) | formatBit(Format::kJson),
-      formatBit(Format::kFtl) | formatBit(Format::kObj) | formatBit(Format::kJson) | formatBit(Format::kGlb),
-      kSupportedModules,
-      options::rootModules(),
-      createRouteOptions,
-      createRouteInvocation,
-      probeRoute,
-      resolveRoute,
-      executeRoute,
-      printHelpSection,
+      .kind = RouteKind::kModel,
+      .name = "model",
+      .primary_input_formats =
+          formatBit(Format::kFtl) | formatBit(Format::kObj) | formatBit(Format::kJson) | formatBit(Format::kGlb),
+      .extra_input_formats = formatBit(Format::kTea) | formatBit(Format::kJson),
+      .output_formats =
+          formatBit(Format::kFtl) | formatBit(Format::kObj) | formatBit(Format::kJson) | formatBit(Format::kGlb),
+      .supported_modules = kSupportedModules,
+      .modules = options::rootModules(),
+      .create_options = createRouteOptions,
+      .create_invocation = createRouteInvocation,
+      .probe = probe,
+      .resolve = resolve,
+      .execute = execute,
+      .help = {.synopsis = "<model> [animations...] <output>",
+               .summary = "Convert editable Models and optional Animation sidecars.",
+               .examples = kHelpExamples},
   };
   return kDescriptor;
-}
-
-int dispatch(const ResolvedModelInvocation& inv) {
-  Invocation& invocation = inv.invocation;
-  if (inv.common.route().input == Format::kUnknown || invocation.input == kNoClassifiedPath) {
-    diagnostic(DiagnosticCode::kModelUnsupportedInput, "Unsupported input format");
-    return 1;
-  }
-
-  Context ctx;
-  if (!loadInput(inv.common.inputs(), invocation, inv.common.route(), ctx)) return 1;
-  if (!loadExtras(inv.common.inputs(), invocation, ctx)) return 1;
-  if (!validateTeaCompatibility(ctx)) return 1;
-  if (invocation.options.reference_ftl && !loadReferenceFtl(invocation.options.reference_ftl, ctx)) return 1;
-  if (!applyModules(ctx, invocation.options, invocation.conversion)) return 1;
-  return saveOutput(ctx, invocation.format, inv.common.io(), invocation, inv.common.route()) ? 0 : 1;
 }
 
 }  // namespace cli::model

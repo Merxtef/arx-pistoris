@@ -5,25 +5,19 @@
 
 #include "arx_pistoris/pistoris.hpp"
 
+#include "support/corpus_checks.h"
 #include "support/corpus_files.h"
 #include "support/native_equivalence.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <ios>
-#include <iterator>
 #include <vector>
 
 namespace fs = std::filesystem;
 
 namespace {
-
-std::vector<std::uint8_t> readBytes(const fs::path& path) {
-  std::ifstream file(path, std::ios::binary);
-  return {std::istreambuf_iterator<char>(file), {}};
-}
 
 template <class T, std::size_t N>
 bool equivalentArray(const T (&lhs)[N], const T (&rhs)[N]) {
@@ -120,8 +114,8 @@ bool equivalent(const pistoris::fts::RoomDistData& lhs, const pistoris::fts::Roo
 
 template <class T>
 void checkEquivalentRange(const std::vector<T>& lhs, const std::vector<T>& rhs) {
-  REQUIRE(lhs.size() == rhs.size());
-  for (std::size_t element_index = 0; element_index < lhs.size(); ++element_index) {
+  CHECK(lhs.size() == rhs.size());
+  for (std::size_t element_index = 0; element_index < std::min(lhs.size(), rhs.size()); ++element_index) {
     CAPTURE(element_index);
     CHECK(equivalent(lhs[element_index], rhs[element_index]));
   }
@@ -132,23 +126,24 @@ void checkEquivalent(const pistoris::Fts& lhs, const pistoris::Fts& rhs) {
   checkEquivalentRange(lhs.unique_headers, rhs.unique_headers);
   CHECK(equivalent(lhs.scene, rhs.scene));
 
-  REQUIRE(lhs.textures.size() == rhs.textures.size());
+  CHECK(lhs.textures.size() == rhs.textures.size());
   for (const auto& [id, texture] : lhs.textures) {
     CAPTURE(id);
     const auto found = rhs.textures.find(id);
-    REQUIRE(found != rhs.textures.end());
+    CHECK(found != rhs.textures.end());
+    if (found == rhs.textures.end()) continue;
     CHECK(equivalent(texture, found->second));
   }
 
-  REQUIRE(lhs.cells.size() == rhs.cells.size());
-  for (std::size_t cell_index = 0; cell_index < lhs.cells.size(); ++cell_index) {
+  CHECK(lhs.cells.size() == rhs.cells.size());
+  for (std::size_t cell_index = 0; cell_index < std::min(lhs.cells.size(), rhs.cells.size()); ++cell_index) {
     CAPTURE(cell_index);
     checkEquivalentRange(lhs.cells[cell_index].polygons, rhs.cells[cell_index].polygons);
     CHECK(lhs.cells[cell_index].anchor_ids == rhs.cells[cell_index].anchor_ids);
   }
 
-  REQUIRE(lhs.anchors.size() == rhs.anchors.size());
-  for (std::size_t anchor_index = 0; anchor_index < lhs.anchors.size(); ++anchor_index) {
+  CHECK(lhs.anchors.size() == rhs.anchors.size());
+  for (std::size_t anchor_index = 0; anchor_index < std::min(lhs.anchors.size(), rhs.anchors.size()); ++anchor_index) {
     CAPTURE(anchor_index);
     CHECK(equivalent(lhs.anchors[anchor_index].data, rhs.anchors[anchor_index].data));
     CHECK(lhs.anchors[anchor_index].linked == rhs.anchors[anchor_index].linked);
@@ -156,8 +151,8 @@ void checkEquivalent(const pistoris::Fts& lhs, const pistoris::Fts& rhs) {
 
   checkEquivalentRange(lhs.portals, rhs.portals);
 
-  REQUIRE(lhs.rooms.size() == rhs.rooms.size());
-  for (std::size_t room_index = 0; room_index < lhs.rooms.size(); ++room_index) {
+  CHECK(lhs.rooms.size() == rhs.rooms.size());
+  for (std::size_t room_index = 0; room_index < std::min(lhs.rooms.size(), rhs.rooms.size()); ++room_index) {
     CAPTURE(room_index);
     CHECK(equivalent(lhs.rooms[room_index].data, rhs.rooms[room_index].data));
     CHECK(lhs.rooms[room_index].portal_ids == rhs.rooms[room_index].portal_ids);
@@ -171,30 +166,32 @@ void checkEquivalent(const pistoris::Fts& lhs, const pistoris::Fts& rhs) {
 
 TEST_SUITE("fts_corpus") {
   TEST_CASE("ArxFtsParse") {
-    for (const fs::path& path :
-         test_support::discoverCorpusFiles({"data/fixtures/level/fts/native", "data/arx/fts"}, ".fts")) {
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kFts)) {
       CAPTURE(path.string());
 
+      std::vector<std::uint8_t> bytes;
+      if (!test_support::readCorpusBytes(path, bytes)) continue;
       pistoris::Fts fts;
-      REQUIRE(pistoris::readFts(readBytes(path), fts) == ARX_OK);
-      CHECK(pistoris::validate(fts) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "read FTS", pistoris::readFts(bytes, fts))) continue;
+      test_support::checkCorpusStatus(path, "validate FTS", pistoris::validate(fts));
     }
   }
 
   TEST_CASE("ArxFtsWriteRoundtrip") {
-    for (const fs::path& path :
-         test_support::discoverCorpusFiles({"data/fixtures/level/fts/native", "data/arx/fts"}, ".fts")) {
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kFts)) {
       CAPTURE(path.string());
 
+      std::vector<std::uint8_t> source_bytes;
+      if (!test_support::readCorpusBytes(path, source_bytes)) continue;
       pistoris::Fts source;
-      REQUIRE(pistoris::readFts(readBytes(path), source) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "read source FTS", pistoris::readFts(source_bytes, source))) continue;
 
       std::vector<std::uint8_t> written;
-      REQUIRE(pistoris::writeFts(source, written) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "write FTS", pistoris::writeFts(source, written))) continue;
 
       pistoris::Fts roundtrip;
-      REQUIRE(pistoris::readFts(written, roundtrip) == ARX_OK);
-      CHECK(pistoris::validate(roundtrip) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "read written FTS", pistoris::readFts(written, roundtrip))) continue;
+      if (!test_support::checkCorpusStatus(path, "validate written FTS", pistoris::validate(roundtrip))) continue;
       checkEquivalent(source, roundtrip);
     }
   }

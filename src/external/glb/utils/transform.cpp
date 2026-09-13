@@ -3,7 +3,7 @@
 
 #include "transform.h"
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "utils/math/mat3.h"
 #include "utils/math/mat4.h"
@@ -12,8 +12,28 @@
 
 namespace pistoris::glb {
 
+namespace {
+constexpr float kTransformTolerance = 1.0e-4f;
+}
+
+bool isAffineTransform(const math::Mat4& transform) noexcept {
+  for (float value : transform.m)
+    if (!std::isfinite(value)) return false;
+  return std::abs(transform(3, 0)) <= kTransformTolerance && std::abs(transform(3, 1)) <= kTransformTolerance &&
+         std::abs(transform(3, 2)) <= kTransformTolerance && std::abs(transform(3, 3) - 1.0f) <= kTransformTolerance;
+}
+
+bool canonicalizeAffineTransform(math::Mat4& transform) noexcept {
+  if (!isAffineTransform(transform)) return false;
+  transform(3, 0) = 0.0f;
+  transform(3, 1) = 0.0f;
+  transform(3, 2) = 0.0f;
+  transform(3, 3) = 1.0f;
+  return true;
+}
+
 bool decomposeTransform(const math::Mat4& world, DecomposedTransform& out) noexcept {
-  constexpr float kTolerance = 1.0e-4f;
+  if (!isAffineTransform(world)) return false;
   ArxVector3 columns[3] = {
       {world(0, 0), world(1, 0), world(2, 0)},
       {world(0, 1), world(1, 1), world(2, 1)},
@@ -23,9 +43,9 @@ bool decomposeTransform(const math::Mat4& world, DecomposedTransform& out) noexc
   if (!std::isfinite(out.scale.x) || !std::isfinite(out.scale.y) || !std::isfinite(out.scale.z) ||
       out.scale.x <= 0.0f || out.scale.y <= 0.0f || out.scale.z <= 0.0f)
     return false;
-  if (std::abs(math::dotf(columns[0], columns[1])) > kTolerance * out.scale.x * out.scale.y ||
-      std::abs(math::dotf(columns[0], columns[2])) > kTolerance * out.scale.x * out.scale.z ||
-      std::abs(math::dotf(columns[1], columns[2])) > kTolerance * out.scale.y * out.scale.z)
+  if (std::abs(math::dotf(columns[0], columns[1])) > kTransformTolerance * out.scale.x * out.scale.y ||
+      std::abs(math::dotf(columns[0], columns[2])) > kTransformTolerance * out.scale.x * out.scale.z ||
+      std::abs(math::dotf(columns[1], columns[2])) > kTransformTolerance * out.scale.y * out.scale.z)
     return false;
   for (int row = 0; row < 3; ++row) {
     out.rotation(row, 0) = world(row, 0) / out.scale.x;

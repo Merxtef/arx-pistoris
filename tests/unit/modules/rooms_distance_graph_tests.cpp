@@ -3,14 +3,16 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/rooms.h"
 #include "modules/rooms/internal.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 using namespace pistoris;
@@ -41,28 +43,31 @@ TEST_SUITE("rooms::distance_graph") {
     CHECK(rooms::addRoomNode(graph, {.position = {1.0f, 2.0f, 3.0f}, .room = 0}) == 0);
     CHECK(rooms::addRoomNode(graph, {.position = {4.0f, 5.0f, 6.0f}, .room = 0}) == 1);
     rooms::addGraphEdge(graph, 0, 1, 12.0f);
+    const rooms::RoomDistanceAdjacency adjacency = rooms::buildAdjacency(graph.nodes.size(), graph.edges);
 
     REQUIRE(graph.nodes.size() == 2);
-    REQUIRE(graph.adjacency.size() == 2);
-    REQUIRE(graph.adjacency[0].size() == 1);
-    REQUIRE(graph.adjacency[1].size() == 1);
-    CHECK(graph.adjacency[0][0].to == 1);
-    CHECK(graph.adjacency[0][0].cost == doctest::Approx(12.0f));
-    CHECK(graph.adjacency[1][0].to == 0);
-    CHECK(graph.adjacency[1][0].cost == doctest::Approx(12.0f));
+    const std::span<const rooms::RoomDistanceEdge> first = rooms::adjacentEdges(adjacency, 0);
+    const std::span<const rooms::RoomDistanceEdge> second = rooms::adjacentEdges(adjacency, 1);
+    REQUIRE(first.size() == 1);
+    REQUIRE(second.size() == 1);
+    CHECK(first[0].to == 1);
+    CHECK(first[0].cost == doctest::Approx(12.0f));
+    CHECK(second[0].to == 0);
+    CHECK(second[0].cost == doctest::Approx(12.0f));
   }
 
   TEST_CASE("Adds global undirected edges") {
-    std::vector<std::vector<rooms::RoomDistanceEdge>> adjacency(3);
+    const std::array<rooms::RoomDistanceUndirectedEdge, 1> edges = {{{0, 2, 5.0f}}};
+    const rooms::RoomDistanceAdjacency adjacency = rooms::buildAdjacency(3, edges);
 
-    rooms::addGlobalEdge(adjacency, 0, 2, 5.0f);
-
-    REQUIRE(adjacency[0].size() == 1);
-    REQUIRE(adjacency[2].size() == 1);
-    CHECK(adjacency[0][0].to == 2);
-    CHECK(adjacency[0][0].cost == doctest::Approx(5.0f));
-    CHECK(adjacency[2][0].to == 0);
-    CHECK(adjacency[2][0].cost == doctest::Approx(5.0f));
+    const std::span<const rooms::RoomDistanceEdge> first = rooms::adjacentEdges(adjacency, 0);
+    const std::span<const rooms::RoomDistanceEdge> second = rooms::adjacentEdges(adjacency, 2);
+    REQUIRE(first.size() == 1);
+    REQUIRE(second.size() == 1);
+    CHECK(first[0].to == 2);
+    CHECK(first[0].cost == doctest::Approx(5.0f));
+    CHECK(second[0].to == 0);
+    CHECK(second[0].cost == doctest::Approx(5.0f));
   }
 
   TEST_CASE("Maps portal sides to global side ids") {
@@ -79,10 +84,11 @@ TEST_SUITE("rooms::distance_graph") {
     data.portals.push_back(makePortal(2, 0));
     data.portals.push_back(makePortal(1, 2));
 
-    CHECK(rooms::portalSidesForRoom(data, 0) == std::vector<std::uint32_t>{0, 3});
-    CHECK(rooms::portalSidesForRoom(data, 1) == std::vector<std::uint32_t>{1, 4});
-    CHECK(rooms::portalSidesForRoom(data, 2) == std::vector<std::uint32_t>{2, 5});
-    CHECK(rooms::portalSidesForRoom(data, 9).empty());
+    const rooms::RoomPortalSideIndex sides(data);
+    CHECK(std::ranges::equal(sides.roomSides(0), std::array<std::uint32_t, 2>{0, 3}));
+    CHECK(std::ranges::equal(sides.roomSides(1), std::array<std::uint32_t, 2>{1, 4}));
+    CHECK(std::ranges::equal(sides.roomSides(2), std::array<std::uint32_t, 2>{2, 5}));
+    CHECK(sides.roomSides(9).empty());
   }
 
   TEST_CASE("Reads portal side positions") {
@@ -118,7 +124,7 @@ TEST_SUITE("rooms::distance_graph") {
     data.portals.push_back(makePortal(0, 1));
     rooms::RoomDistanceGenerationGraph graph;
     graph.rooms.resize(data.definitions.size());
-    rooms::RoomDistanceGenDiagnostics diagnostics;
+    rooms::RoomDistanceGenerationDiagnostics diagnostics;
 
     rooms::addPortalSideAccessPoints(data, {.portal_side_offset = 10.0f}, graph, &diagnostics);
 

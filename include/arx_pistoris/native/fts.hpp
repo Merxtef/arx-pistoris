@@ -52,9 +52,10 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -234,5 +235,7 @@ struct Data {  // NOLINT(bugprone-exception-escape)
 };
 
 }  // namespace fts
+
+using Fts = fts::Data;
 
 }  // namespace pistoris

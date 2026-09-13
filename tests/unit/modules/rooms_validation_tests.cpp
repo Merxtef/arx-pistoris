@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
 
 #include "modules/rooms.h"
 
@@ -43,7 +43,7 @@ TEST_SUITE("rooms::validation") {
   TEST_CASE("Accepts valid room data") {
     RoomsData data = makeValidRooms();
 
-    CHECK(rooms::validateRooms(data) == rooms::Error::kNone);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kNone);
     CHECK(rooms::validateFaceRooms(data, 2) == rooms::Error::kNone);
     CHECK(rooms::validateRoomDistances(data) == rooms::Error::kNone);
     CHECK(rooms::validatePortalDefinitions(data) == rooms::Error::kNone);
@@ -56,25 +56,25 @@ TEST_SUITE("rooms::validation") {
     RoomsData data = makeValidRooms();
     CHECK(rooms::validateRoom(data.definitions[0]) == rooms::Error::kNone);
     data.definitions.clear();
-    CHECK(rooms::validateRooms(data) == rooms::Error::kNoRooms);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kNoRooms);
 
     data = makeValidRooms();
     data.definitions[0].name.clear();
-    CHECK(rooms::validateRooms(data) == rooms::Error::kBadRoomName);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kBadRoomName);
 
     data = makeValidRooms();
     data.definitions[1].name = data.definitions[0].name;
-    CHECK(rooms::validateRooms(data) == rooms::Error::kDuplicateRoomName);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kDuplicateRoomName);
 
     data = makeValidRooms();
     data.definitions[0].name = "room__one";
     CHECK(rooms::validateRoom(data.definitions[0]) == rooms::Error::kBadRoomName);
-    CHECK(rooms::validateRooms(data) == rooms::Error::kBadRoomName);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kBadRoomName);
 
     data = makeValidRooms();
     data.definitions[0].name = std::string("room\0one", 8);
     CHECK(rooms::validateRoom(data.definitions[0]) == rooms::Error::kBadRoomName);
-    CHECK(rooms::validateRooms(data) == rooms::Error::kBadRoomName);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kBadRoomName);
   }
 
   TEST_CASE("Rejects bad face room assignments") {
@@ -157,7 +157,7 @@ TEST_SUITE("rooms::validation") {
     CHECK(rooms::validatePortalDefinitions(data) == rooms::Error::kDuplicatePortalName);
     CHECK(rooms::validatePortals(data) == rooms::Error::kDuplicatePortalName);
     CHECK(rooms::validate(data, 2) == rooms::Error::kDuplicatePortalName);
-    CHECK(rooms::makePortalNamesUnique(data.portals) == 1);
+    CHECK(rooms::repairPortalNames(data.portals) == 1);
     CHECK(data.portals[0].name == "portal");
     CHECK(data.portals[1].name == "portal_1");
     CHECK(rooms::validatePortalDefinitions(data) == rooms::Error::kNone);

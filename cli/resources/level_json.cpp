@@ -3,6 +3,8 @@
 
 #include "resources/level_json.h"
 
+#include "base/ascii.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -10,22 +12,6 @@
 #include <string_view>
 
 namespace cli {
-namespace {
-
-char lowerAscii(char value) {
-  if (value >= 'A' && value <= 'Z') return static_cast<char>(value - 'A' + 'a');
-  return value;
-}
-
-bool endsWithAsciiInsensitive(std::string_view value, std::string_view suffix) {
-  if (value.size() < suffix.size()) return false;
-  value.remove_prefix(value.size() - suffix.size());
-  for (std::size_t index = 0; index < value.size(); ++index)
-    if (lowerAscii(value[index]) != suffix[index]) return false;
-  return true;
-}
-
-}  // namespace
 
 bool parseLevelFtsJsonPath(std::string_view path, LevelJsonPath& out) {
   const std::size_t separator = path.find_last_of("/\\");

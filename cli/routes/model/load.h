@@ -3,21 +3,31 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris.hpp"
-
 #include "routes/model/invocation.h"
+#include "routes/model/options.h"
 #include "routes/model/state.h"
 #include "routes/types.h"
 
 #include <cstdint>
+#include <span>
+#include <string_view>
 #include <vector>
 
 namespace cli::model {
 
-bool loadTeaFile(const ClassifiedPath& input, pistoris::Tea& out);
-bool loadReferenceFtl(const char* path, Context& ctx);
-bool loadInput(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, Route route, Context& ctx);
-bool loadExtras(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, Context& ctx);
-bool validateTeaCompatibility(const Context& ctx);
+struct InputConverterDescriptor {
+  using NativeLoader = bool (*)(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+                                NativeModelFiles& out);
+  using IntermediateLoader = bool (*)(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+                                      const ModelOptions& options, IntermediateModel& out);
+
+  NativeLoader load_native = nullptr;
+  IntermediateLoader load_intermediate = nullptr;
+};
+
+const InputConverterDescriptor* inputConverterDescriptor(Route route);
+bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, const ModelOptions& options, bool native, ModelInput& out);
+bool loadReferenceModel(std::span<const std::uint8_t> data, std::string_view path, IntermediateModel& out);
 
 }  // namespace cli::model

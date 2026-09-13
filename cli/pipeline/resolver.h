@@ -25,7 +25,6 @@ struct CliResolution {
   Format output = Format::kUnknown;
   OutputTarget output_target;
   OutputFormatResolution output_resolution;
-  std::vector<ModuleInvocation> effective_modules;
   std::vector<ClassifiedPath> inputs;
 
   const RouteDescriptor* route_descriptor = nullptr;

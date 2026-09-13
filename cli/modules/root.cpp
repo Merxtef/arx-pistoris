@@ -6,7 +6,9 @@
 #include "modules/format/modules.h"
 #include "modules/module.h"
 #include "modules/output/modules.h"
+#include "modules/sounds/modules.h"
 #include "modules/system/modules.h"
+#include "modules/textures/modules.h"
 #include "modules/transform/modules.h"
 
 #include <span>
@@ -17,8 +19,12 @@ namespace cli::modules {
 std::span<const ModuleRef> rootModules() {
   static const std::vector<ModuleRef> kModules = [] {
     std::vector<ModuleRef> result;
-    for (std::span<const ModuleRef> group :
-         {system::rootModules(), format::rootModules(), output::rootModules(), transform::rootModules()}) {
+    for (std::span<const ModuleRef> group : {system::rootModules(),
+                                             format::rootModules(),
+                                             output::rootModules(),
+                                             sounds::rootModules(),
+                                             textures::rootModules(),
+                                             transform::rootModules()}) {
       result.insert(result.end(), group.begin(), group.end());
     }
     return result;

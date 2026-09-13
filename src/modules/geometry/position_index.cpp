@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
+#include "modules/geometry/internal.h"
+#include "utils/math/finite.h"
 
 #include <algorithm>
 #include <array>
@@ -37,19 +39,6 @@ std::array<PositionKey, 27> nearbyKeys(PositionKey key) {
   return keys;
 }
 
-bool validMetric(PositionWeldMetric metric) noexcept {
-  switch (metric) {
-    case PositionWeldMetric::kEuclidean:
-    case PositionWeldMetric::kAxisAligned:
-      return true;
-  }
-  return false;
-}
-
-bool finitePosition(const ArxVector3& position) noexcept {
-  return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
-}
-
 }  // namespace
 
 std::size_t PositionKeyHash::operator()(const PositionKey& key) const {
@@ -61,6 +50,8 @@ std::size_t PositionKeyHash::operator()(const PositionKey& key) const {
 
 PositionIndex::PositionIndex(float radius, PositionWeldMetric metric) : radius_(radius), metric_(metric) {}
 
+void PositionIndex::reservePositionCapacity(std::size_t capacity) { by_position_.reserve(capacity); }
+
 PositionKey PositionIndex::key(const ArxVector3& position) const {
   double scale = 1.0 / static_cast<double>(radius_);
   return {positionKeyComponent(position.x, scale),
@@ -68,7 +59,9 @@ PositionKey PositionIndex::key(const ArxVector3& position) const {
           positionKeyComponent(position.z, scale)};
 }
 
-bool PositionIndex::valid() const noexcept { return radius_ > 0.0f && std::isfinite(radius_) && validMetric(metric_); }
+bool PositionIndex::valid() const noexcept {
+  return radius_ > 0.0f && std::isfinite(radius_) && validPositionWeldMetric(metric_);
+}
 
 bool PositionIndex::samePosition(const ArxVector3& a, const ArxVector3& b) const noexcept {
   switch (metric_) {
@@ -85,14 +78,15 @@ bool PositionIndex::samePosition(const ArxVector3& a, const ArxVector3& b) const
   return false;
 }
 
-void PositionIndex::add(std::uint32_t index, const ArxVector3& position) {
-  if (!valid() || !finitePosition(position)) return;
+bool PositionIndex::tryAdd(std::uint32_t index, const ArxVector3& position) {
+  if (!valid() || !math::finite(position)) return false;
   by_position_[key(position)].push_back({index, position});
+  return true;
 }
 
-std::vector<std::uint32_t> PositionIndex::candidates(const ArxVector3& position) const {
-  std::vector<std::uint32_t> out;
-  if (!valid() || !finitePosition(position)) return out;
+void PositionIndex::findCandidates(std::vector<std::uint32_t>& out, const ArxVector3& position) const {
+  out.clear();
+  if (!valid() || !math::finite(position)) return;
   for (PositionKey nearby : nearbyKeys(key(position))) {
     auto it = by_position_.find(nearby);
     if (it == by_position_.end()) continue;
@@ -101,21 +95,40 @@ std::vector<std::uint32_t> PositionIndex::candidates(const ArxVector3& position)
   }
   std::sort(out.begin(), out.end());
   out.erase(std::unique(out.begin(), out.end()), out.end());
-  return out;
 }
 
 std::optional<std::uint32_t> PositionIndex::find(const ArxVector3& position) const {
   std::optional<std::uint32_t> best;
-  for (std::uint32_t candidate : candidates(position))
-    if (!best.has_value() || candidate < *best) best = candidate;
+  if (!valid() || !math::finite(position)) return best;
+  for (PositionKey nearby : nearbyKeys(key(position))) {
+    auto it = by_position_.find(nearby);
+    if (it == by_position_.end()) continue;
+    for (const Entry& entry : it->second) {
+      if (!samePosition(entry.position, position)) continue;
+      if (!best.has_value() || entry.index < *best) best = entry.index;
+    }
+  }
   return best;
 }
 
 VertexIndex addOrFindVertex(GeometryData& geometry, PositionIndex& index, const ArxVector3& position) {
-  if (std::optional<std::uint32_t> existing = index.find(position)) return static_cast<VertexIndex>(*existing);
-  VertexIndex vertex_index = addVertex(geometry, position);
-  if (vertex_index == kInvalidVertexIndex) return vertex_index;
-  index.add(vertex_index, position);
+  if (index.enabled()) {
+    if (std::optional<std::uint32_t> existing = index.find(position)) return static_cast<VertexIndex>(*existing);
+  }
+  const Vertex vertex{.position = position};
+  if (geometry.vertices.size() >= static_cast<std::size_t>(kInvalidVertexIndex) ||
+      validateVertex(vertex) != Error::kNone)
+    return kInvalidVertexIndex;
+  const VertexIndex vertex_index = addVertex(geometry, vertex);
+  try {
+    if (index.enabled() && !index.tryAdd(vertex_index, position)) {
+      geometry.vertices.pop_back();
+      return kInvalidVertexIndex;
+    }
+  } catch (...) {
+    geometry.vertices.pop_back();
+    throw;
+  }
   return vertex_index;
 }
 

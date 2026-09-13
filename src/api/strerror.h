@@ -3,8 +3,8 @@
 
 #pragma once
 
-#include "arx_pistoris/api.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/abi.h"
+#include "arx_pistoris/base/status.h"
 
 #ifdef _WIN32
 #if defined(ARX_PISTORIS_EXPORTS)

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "external/glb/accessor.h"
 #include "external/glb/container.h"
@@ -15,6 +16,7 @@
 #include "internal.h"
 #include "level/data.h"
 #include "modules/scene.h"
+#include "paths/ambiance.h"
 #include "utils/log.h"
 #include "utils/math/triangulation.h"
 
@@ -22,6 +24,7 @@
 #include <cstdint>
 #include <format>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <utility>
@@ -80,8 +83,7 @@ ArxReturnCode exportZones(const LevelModules& level, const ArxAabb& referenced_b
     } else {
       const char* reason =
           triangulation == math::TriangulationResult::kNonSimple ? "is not simple" : "could not be triangulated";
-      log(ARX_LOG_WARN,
-          std::format("Level -> GLB: zone '{}' perimeter {}; using fan cap triangulation", zone.name, reason));
+      log(ARX_LOG_WARN, "Level -> GLB: zone '{}' perimeter {}; using fan cap triangulation", zone.name, reason);
       for (std::uint32_t i = 1; i + 1 < count; ++i) {
         indices.insert(indices.end(), {0, i + 1, i});
         indices.insert(indices.end(), {count, count + i, count + i + 1});
@@ -104,13 +106,19 @@ ArxReturnCode exportZones(const LevelModules& level, const ArxAabb& referenced_b
         node, {center_x - parent_position.x, center_y - parent_position.y, center_z - parent_position.z});
     builder.addChild(parent, node);
 
-    Zone exported_zone = zone;
-    auto& farclip = exported_zone.farclip;
-    if (farclip) *farclip = toGlbLength(*farclip, options);
-    const std::string settings = zone_internal::settingsHelperName(exported_zone);
-    if (!settings.empty()) builder.addChild(node, builder.addNode(settings));
     const auto& ambiance = zone.ambiance;
-    if (ambiance) builder.addChild(node, builder.addNode("AMBIANCE_" + ambiance->name + "__" + zone.name));
+    zone_internal::Settings settings{
+        .color = zone.color,
+        .farclip = zone.farclip ? std::optional<float>(toGlbLength(*zone.farclip, options)) : std::nullopt,
+        .volume = ambiance ? std::optional<float>(ambiance->volume) : std::nullopt,
+    };
+    const std::string settings_name = zone_internal::settingsHelperName(settings, zone.name);
+    if (!settings_name.empty()) builder.addChild(node, builder.addNode(settings_name));
+    if (ambiance) {
+      std::string reference;
+      if (!paths::formatZoneAmbianceReference(ambiance->name, reference)) return ARX_GLB_BAD_LEVEL_ZONE;
+      builder.addChild(node, builder.addNode("AMBIANCE_" + reference + "__" + zone.name));
+    }
   }
   return ARX_OK;
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
@@ -26,8 +26,8 @@ SurfaceDebugTriangle debugTriangle(const std::array<ArxVector3, 3>& vertices) { 
 
 }  // namespace
 
-Error generateSurfaceFromFloorPolygons(NavSurface& out, const GeometryData& geometry,
-                                       const NavSurfaceSourceOptions& options, NavSurfaceGenDiagnostics* diagnostics) {
+Error generateSurfaceFromFloor(NavSurface& out, const GeometryData& geometry, const NavSurfaceSourceOptions& options,
+                               NavSurfaceGenerationDiagnostics* diagnostics) {
   if (!validNavSurfaceSourceOptions(options)) return Error::kInvalidOptions;
   if (diagnostics) *diagnostics = {};
 
@@ -35,7 +35,15 @@ Error generateSurfaceFromFloorPolygons(NavSurface& out, const GeometryData& geom
   if (face_indices.empty()) return Error::kEmptyResult;
 
   NavSurface surface;
+  surface.triangles.reserve(face_indices.size());
+  const std::size_t max_vertices = std::numeric_limits<NavSurfaceVertexIndex>::max();
+  if (face_indices.size() <= max_vertices / 3U) surface.vertices.reserve(face_indices.size() * 3U);
+  if (diagnostics) {
+    diagnostics->support.reserve(face_indices.size());
+    diagnostics->base.reserve(face_indices.size());
+  }
   geometry::PositionIndex position_index(kFloorVertexMergeDistance, geometry::PositionWeldMetric::kAxisAligned);
+  position_index.reservePositionCapacity(face_indices.size() * 3U);
   for (FaceIndex face_index : face_indices) {
     if (face_index >= geometry.faces.size()) return Error::kBadFaceVertex;
     const std::array<ArxVector3, 3> positions = geometry::facePositions(geometry, geometry.faces[face_index]);
@@ -51,7 +59,7 @@ Error generateSurfaceFromFloorPolygons(NavSurface& out, const GeometryData& geom
         return Error::kTooManySurfaceVertices;
       NavSurfaceVertexIndex vertex_index = static_cast<NavSurfaceVertexIndex>(surface.vertices.size());
       surface.vertices.push_back({position});
-      position_index.add(vertex_index, position);
+      if (!position_index.tryAdd(vertex_index, position)) return Error::kInvalidOptions;
       triangle.vertices[corner] = vertex_index;
     }
     if (triangle.vertices[0] == triangle.vertices[1] || triangle.vertices[0] == triangle.vertices[2] ||

@@ -21,13 +21,13 @@ struct Token {
   std::uint32_t col;
 };
 
-// each char in special_chars emits its own kSpecialChar
+// One kSpecialChar token per configured character
 struct TextCursor {
   TextCursor(std::string_view text, std::string_view special_chars = {}) noexcept;
 
   Token next() noexcept;
 
-  // current pos to end of line, whitespace-trimmed; kEnd if blank
+  // Trimmed line remainder; kEnd when blank
   Token restOfLine() noexcept;
 
  private:

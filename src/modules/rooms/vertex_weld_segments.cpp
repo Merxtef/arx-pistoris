@@ -1,65 +1,100 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
 
 #include "modules/geometry.h"
 #include "modules/rooms.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <utility>
 #include <vector>
 
 namespace pistoris::rooms {
 
 Error collectVertexWeldSegments(const GeometryData& geometry, const RoomsData& rooms, float radius,
-                                std::vector<std::vector<VertexIndex>>& room_vertices,
-                                std::vector<VertexIndex>& protected_vertices) {
-  room_vertices.clear();
-  protected_vertices.clear();
+                                VertexWeldSegments& out) {
+  if (!(radius > 0.0f) || !std::isfinite(radius)) return Error::kInvalidOptions;
   Error error = rooms::validateFaceRooms(rooms, geometry.faces.size());
   if (error != Error::kNone) return error;
 
-  room_vertices.resize(rooms.definitions.size());
+  VertexWeldSegments collected;
+  collected.offsets.assign(rooms.definitions.size() + 1U, 0);
   for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
     const RoomIndex room = rooms.face_rooms[face_index];
     for (const Corner& corner : geometry.faces[face_index].corners) {
       if (corner.vertex >= geometry.vertices.size()) return Error::kBadFaceVertex;
-      room_vertices[room].push_back(corner.vertex);
+      ++collected.offsets[static_cast<std::size_t>(room) + 1U];
     }
+  }
+  for (std::size_t room = 1; room < collected.offsets.size(); ++room)
+    collected.offsets[room] += collected.offsets[room - 1U];
+  collected.vertices.resize(collected.offsets.back());
+  std::vector<std::size_t> room_write = collected.offsets;
+  for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
+    const RoomIndex room = rooms.face_rooms[face_index];
+    for (const Corner& corner : geometry.faces[face_index].corners)
+      collected.vertices[room_write[room]++] = corner.vertex;
   }
 
   std::vector<std::uint8_t> protected_mask(geometry.vertices.size(), 0);
   std::vector<RoomIndex> first_room(geometry.vertices.size(), kInvalidRoomIndex);
-  for (std::size_t room = 0; room < room_vertices.size(); ++room) {
-    std::vector<VertexIndex>& vertices = room_vertices[room];
-    std::sort(vertices.begin(), vertices.end());
-    vertices.erase(std::unique(vertices.begin(), vertices.end()), vertices.end());
-    for (VertexIndex vertex : vertices) {
+  std::size_t source_begin = 0;
+  std::size_t compact_write = 0;
+  for (std::size_t room = 0; room < rooms.definitions.size(); ++room) {
+    const std::size_t source_end = collected.offsets[room + 1U];
+    auto begin = collected.vertices.begin() + static_cast<std::ptrdiff_t>(source_begin);
+    auto end = collected.vertices.begin() + static_cast<std::ptrdiff_t>(source_end);
+    std::sort(begin, end);
+    const auto unique_end = std::unique(begin, end);
+    collected.offsets[room] = compact_write;
+    for (auto current = begin; current != unique_end; ++current) {
+      const VertexIndex vertex = *current;
+      collected.vertices[compact_write++] = vertex;
       if (first_room[vertex] == kInvalidRoomIndex) {
         first_room[vertex] = static_cast<RoomIndex>(room);
       } else if (first_room[vertex] != room) {
         protected_mask[vertex] = 1;
       }
     }
+    source_begin = source_end;
   }
+  collected.offsets.back() = compact_write;
+  collected.vertices.resize(compact_write);
 
-  std::vector<std::vector<PortalIndex>> room_portals(rooms.definitions.size());
+  std::vector<std::size_t> portal_offsets(rooms.definitions.size() + 1U, 0);
   if (rooms.portals.size() > static_cast<std::size_t>(kInvalidPortalIndex)) return Error::kTooManyPortals;
   for (std::size_t portal_index = 0; portal_index < rooms.portals.size(); ++portal_index) {
     const Portal& portal = rooms.portals[portal_index];
     error = rooms::validatePortal(portal, rooms.definitions.size());
     if (error != Error::kNone) return error;
-    const PortalIndex index = static_cast<PortalIndex>(portal_index);
-    room_portals[portal.room_1].push_back(index);
-    room_portals[portal.room_2].push_back(index);
+    ++portal_offsets[static_cast<std::size_t>(portal.room_1) + 1U];
+    ++portal_offsets[static_cast<std::size_t>(portal.room_2) + 1U];
+  }
+  for (std::size_t room = 1; room < portal_offsets.size(); ++room) portal_offsets[room] += portal_offsets[room - 1U];
+  std::vector<PortalIndex> room_portals(portal_offsets.back());
+  std::vector<std::size_t> portal_write = portal_offsets;
+  for (std::size_t portal_index = 0; portal_index < rooms.portals.size(); ++portal_index) {
+    const Portal& portal = rooms.portals[portal_index];
+    const PortalIndex value = static_cast<PortalIndex>(portal_index);
+    room_portals[portal_write[portal.room_1]++] = value;
+    room_portals[portal_write[portal.room_2]++] = value;
   }
 
   const double radius_squared = static_cast<double>(radius) * radius;
-  for (std::size_t room = 0; room < room_vertices.size(); ++room) {
-    for (VertexIndex vertex : room_vertices[room]) {
-      for (PortalIndex portal : room_portals[room]) {
+  for (std::size_t room = 0; room < rooms.definitions.size(); ++room) {
+    const std::span<const VertexIndex> vertices =
+        std::span<const VertexIndex>(collected.vertices)
+            .subspan(collected.offsets[room], collected.offsets[room + 1U] - collected.offsets[room]);
+    const std::span<const PortalIndex> portals =
+        std::span<const PortalIndex>(room_portals)
+            .subspan(portal_offsets[room], portal_offsets[room + 1U] - portal_offsets[room]);
+    for (VertexIndex vertex : vertices) {
+      for (PortalIndex portal : portals) {
         if (pointPortalDistanceSquared(geometry.vertices[vertex].position, rooms.portals[portal]) <= radius_squared) {
           protected_mask[vertex] = 1;
           break;
@@ -68,9 +103,12 @@ Error collectVertexWeldSegments(const GeometryData& geometry, const RoomsData& r
     }
   }
 
+  collected.protected_vertices.reserve(
+      static_cast<std::size_t>(std::count(protected_mask.begin(), protected_mask.end(), std::uint8_t{1})));
   for (std::size_t vertex = 0; vertex < protected_mask.size(); ++vertex) {
-    if (protected_mask[vertex] != 0) protected_vertices.push_back(static_cast<VertexIndex>(vertex));
+    if (protected_mask[vertex] != 0) collected.protected_vertices.push_back(static_cast<VertexIndex>(vertex));
   }
+  out = std::move(collected);
   return Error::kNone;
 }
 

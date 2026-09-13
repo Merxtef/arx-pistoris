@@ -54,8 +54,9 @@ writing Arkane Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 2
  */
 
 #pragma once
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -103,5 +104,7 @@ struct Data {
 };
 
 }  // namespace tea
+
+using Tea = tea::Data;
 
 }  // namespace pistoris

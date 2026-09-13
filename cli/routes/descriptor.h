@@ -8,7 +8,7 @@
 #include "resources/selector.h"
 #include "routes/types.h"
 
-#include <cstdio>
+#include <cstddef>
 #include <memory>
 #include <span>
 #include <vector>
@@ -17,8 +17,12 @@ namespace cli {
 
 class IoService;
 class ExecutionContext;
-struct ParsedOptions;
+struct FormatModifierOptions;
+struct FormatOptions;
+struct SharedConversionOptions;
+struct SoundIoOptions;
 struct SelectedOutputConverter;
+struct TextureIoOptions;
 
 struct RouteInvocation {
   virtual ~RouteInvocation() = default;
@@ -28,18 +32,20 @@ struct RouteProbeContext {
   const std::vector<ClassifiedPath>& inputs;
   const OutputTarget& output;
   Format output_format;
-  RouteMask route_constraints;
 };
 
 struct RouteResolveContext {
   std::vector<ClassifiedPath>& inputs;
   const OutputTarget& output;
-  Format output_format;
   Route route;
-  const ParsedOptions& options;
+  const SharedConversionOptions& conversion;
+  const FormatOptions& format_options;
+  const FormatModifierOptions& format_modifiers;
+  const TextureIoOptions& texture_options;
+  const SoundIoOptions& sound_options;
   const RouteOptions* route_options;
   const SelectedOutputConverter& output_converter;
-  std::span<const ModuleInvocation> modules;
+  bool requires_intermediate;
   IoService& io;
 };
 
@@ -48,7 +54,18 @@ using RouteInvocationFactoryFn = std::unique_ptr<RouteInvocation> (*)();
 using RouteProbeFn = ProbeResult (*)(const RouteProbeContext& ctx, RouteInvocation& invocation);
 using RouteResolveFn = bool (*)(const RouteResolveContext& ctx, RouteInvocation& invocation);
 using RouteExecuteFn = int (*)(const ExecutionContext& context, RouteInvocation& invocation);
-using RouteHelpProviderFn = bool (*)(std::FILE* output, HelpSection section);
+struct HelpExample {
+  const char* arguments;
+  const char* description;
+};
+
+inline constexpr std::size_t kMaxRouteHelpExamples = 3;
+
+struct RouteHelp {
+  const char* synopsis;
+  const char* summary;
+  std::span<const HelpExample> examples;
+};
 
 struct RouteDescriptor {
   RouteKind kind;
@@ -63,7 +80,7 @@ struct RouteDescriptor {
   RouteProbeFn probe;
   RouteResolveFn resolve;
   RouteExecuteFn execute;
-  RouteHelpProviderFn help_provider;
+  RouteHelp help;
 };
 
 }  // namespace cli

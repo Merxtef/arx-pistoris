@@ -3,8 +3,8 @@
 
 #pragma once
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "cgltf/cgltf.h"
 #include "modules/lights.h"

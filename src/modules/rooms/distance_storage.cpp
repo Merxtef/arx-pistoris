@@ -19,7 +19,7 @@ bool hasCompleteRoomDistances(const RoomDistances& distances, std::size_t room_c
   return distances.size() == expected;
 }
 
-void initializeRoomDistances(RoomDistances& distances, std::size_t room_count) {
+void resetRoomDistances(RoomDistances& distances, std::size_t room_count) {
   const std::size_t expected = roomDistancePairCount(room_count);
   distances.assign(expected, {});
 }

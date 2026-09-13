@@ -10,8 +10,8 @@
 #include "formats/format.h"
 #include "io/path_location.h"
 #include "io/service.h"
+#include "resources/layout.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -20,37 +20,9 @@
 namespace cli {
 namespace {
 
-char lowerAscii(char value) {
-  if (value >= 'A' && value <= 'Z') return static_cast<char>(value - 'A' + 'a');
-  return value;
-}
-
-bool equalAsciiInsensitive(std::string_view lhs, std::string_view rhs) {
-  if (lhs.size() != rhs.size()) return false;
-  for (std::size_t i = 0; i < lhs.size(); ++i)
-    if (lowerAscii(lhs[i]) != lowerAscii(rhs[i])) return false;
-  return true;
-}
-
-bool registeredExtension(std::string_view extension) {
-  static constexpr std::string_view kExtensions[] = {
-      ".ftl",
-      ".fts",
-      ".dlf",
-      ".llf",
-      ".tea",
-      ".obj",
-      ".json",
-      ".glb",
-  };
-  for (std::string_view candidate : kExtensions)
-    if (equalAsciiInsensitive(extension, candidate)) return true;
-  return false;
-}
-
 bool parseLevelSelector(std::string_view argument, ResourceSelector& out, std::string& error) {
   std::uint32_t level = 0;
-  if (!pistoris::paths::levelFromShorthand(argument, level)) {
+  if (!pistoris::paths::levelFromSelector(argument, level)) {
     error = "level selector must be level:<uint32>";
     return false;
   }
@@ -63,7 +35,7 @@ bool parseLevelSelector(std::string_view argument, ResourceSelector& out, std::s
 
 bool parseModelSelector(std::string_view argument, ResourceSelector& out, std::string& error) {
   pistoris::paths::ModelPathView model;
-  if (!pistoris::paths::modelFromShorthand(argument, model) || !pistoris::paths::modelFtl(model, out.logical_path)) {
+  if (!pistoris::paths::modelFromSelector(argument, model) || !pistoris::paths::modelFtl(model, out.logical_path)) {
     error = "model selector must be model:<type>:<name>[:<tweak>]";
     return false;
   }
@@ -76,7 +48,7 @@ bool parseModelSelector(std::string_view argument, ResourceSelector& out, std::s
 
 bool parseAnimationSelector(std::string_view argument, ResourceSelector& out, std::string& error) {
   pistoris::paths::AnimationPathView animation;
-  if (!pistoris::paths::animationFromShorthand(argument, animation) ||
+  if (!pistoris::paths::animationFromSelector(argument, animation) ||
       !pistoris::paths::animationTea(animation, out.logical_path)) {
     error = "animation selector must be anim:<npc|fix_inter>:<name>";
     return false;
@@ -89,8 +61,8 @@ bool parseAnimationSelector(std::string_view argument, ResourceSelector& out, st
 
 bool parseCinematicSelector(std::string_view argument, ResourceSelector& out, std::string& error) {
   pistoris::paths::CinematicPathView cinematic;
-  if (!pistoris::paths::cinematicFromShorthand(argument, cinematic) ||
-      !pistoris::paths::cinematicFile(cinematic, out.logical_path)) {
+  if (!pistoris::paths::cinematicFromSelector(argument, cinematic) ||
+      !pistoris::paths::cinematicCin(cinematic, out.logical_path)) {
     error = "cinematic selector must be cinematic:<name>";
     return false;
   }
@@ -101,8 +73,8 @@ bool parseCinematicSelector(std::string_view argument, ResourceSelector& out, st
 
 bool parseAmbianceSelector(std::string_view argument, ResourceSelector& out, std::string& error) {
   pistoris::paths::AmbiancePathView ambiance;
-  if (!pistoris::paths::ambianceFromShorthand(argument, ambiance) ||
-      !pistoris::paths::ambianceFile(ambiance, out.logical_path)) {
+  if (!pistoris::paths::ambianceFromSelector(argument, ambiance) ||
+      !pistoris::paths::ambianceAmb(ambiance, out.logical_path)) {
     error = "ambiance selector must be ambiance:<name>";
     return false;
   }
@@ -115,6 +87,7 @@ Format selectorFormat(ArxResourceKind kind) {
   if (kind == ARX_RESOURCE_KIND_LEVEL) return Format::kDlf;
   if (kind == ARX_RESOURCE_KIND_MODEL) return Format::kFtl;
   if (kind == ARX_RESOURCE_KIND_ANIMATION) return Format::kTea;
+  if (kind == ARX_RESOURCE_KIND_AMBIANCE) return Format::kAmb;
   return Format::kUnknown;
 }
 
@@ -124,7 +97,7 @@ SelectorParseStatus parseResourceSelector(std::string_view argument, ResourceSel
   out = {};
   error = {};
   bool valid = false;
-  switch (pistoris::paths::resourceShorthandKind(argument)) {
+  switch (pistoris::paths::resourceSelectorKind(argument)) {
     case ARX_RESOURCE_KIND_LEVEL:
       valid = parseLevelSelector(argument, out, error);
       break;
@@ -159,33 +132,20 @@ bool resolveOutputTarget(const char* argument, const IoService& io, OutputTarget
   if (status == SelectorParseStatus::kValid) {
     out.path = out.selector.logical_path;
     out.format = selectorFormat(out.selector.kind);
+    out.layout = ResourceLayout::kGame;
     return true;
   }
 
   std::string path_error;
   OutputLocation location;
   if (!io.resolveOutputLocation(argument, location, path_error)) {
-    diagnostic(DiagnosticCode::kIoCreateFailed, "Invalid output path '%s': %s", argument, path_error.c_str());
+    diagnostic(DiagnosticCode::kIoPathInvalid, "Invalid output path '%s': %s", argument, path_error.c_str());
     return false;
   }
   static_cast<OutputLocation&>(out) = std::move(location);
   out.format = formatFromPath(argument);
+  out.layout = primaryResourceLayout(out.format, out.address);
   return true;
-}
-
-std::string resourceParentPath(std::string_view path) {
-  std::size_t separator = path.find_last_of("/\\");
-  return separator == std::string_view::npos ? std::string{} : std::string(path.substr(0, separator + 1));
-}
-
-std::string resourceStem(std::string_view path, bool strip_any_extension) {
-  std::size_t separator = path.find_last_of("/\\");
-  if (separator != std::string_view::npos) path.remove_prefix(separator + 1);
-  std::size_t dot = path.find_last_of('.');
-  if (dot != std::string_view::npos && (strip_any_extension || registeredExtension(path.substr(dot)))) {
-    path = path.substr(0, dot);
-  }
-  return std::string(path);
 }
 
 }  // namespace cli

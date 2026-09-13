@@ -3,12 +3,13 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/fts.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
-#include "arx/fts.h"
 #include "helpers.h"
+#include "native/fts.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
 
@@ -269,6 +270,11 @@ TEST_SUITE("fts") {
       pistoris::fts::Data in = makeMinimalFtsData();
       in.header.version = 0.0f;
       CHECK(pistoris::validateFts(&in) == ARX_FTS_BAD_VERSION);
+    }
+    {
+      pistoris::fts::Data in = makeMinimalFtsData();
+      in.scene.Mscenepos.x = std::numeric_limits<float>::infinity();
+      CHECK(pistoris::validateFts(&in) == ARX_FTS_BAD_SCENE_OFFSET);
     }
     {
       pistoris::fts::Header header;

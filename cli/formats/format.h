@@ -4,6 +4,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace cli {
 
@@ -15,12 +17,15 @@ enum class Format : std::uint8_t {
   kDlf,
   kLlf,
   kTea,
+  kAmb,
   kObj,
   kJson,
   kGlb,
 };
 
 const char* formatName(Format format);
-Format formatFromPath(const char* path);
+Format formatFromExtension(std::string_view extension) noexcept;
+Format formatFromPath(std::string_view path) noexcept;
+std::string resourceFormatStem(std::string_view path);
 
 }  // namespace cli

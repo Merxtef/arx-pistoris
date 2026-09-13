@@ -3,9 +3,9 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/lights.h"
@@ -13,6 +13,7 @@
 #include <array>
 #include <limits>
 #include <string>
+#include <utility>
 
 using namespace pistoris;
 
@@ -38,13 +39,14 @@ LightingData makeLighting() {
 GeometryData makeGeometry() {
   GeometryData geometry;
   geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{100.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 100.0f}}};
+  constexpr ArxVector3 kNormal = {0.0f, -1.0f, 0.0f};
   Face face;
   face.corners[0].vertex = 0;
-  face.corners[0].normal = {0.0f, -1.0f, 0.0f};
+  face.corners[0].normal = kNormal;
   face.corners[1].vertex = 1;
-  face.corners[1].normal = {0.0f, -1.0f, 0.0f};
+  face.corners[1].normal = kNormal;
   face.corners[2].vertex = 2;
-  face.corners[2].normal = {0.0f, -1.0f, 0.0f};
+  face.corners[2].normal = kNormal;
   geometry.faces.push_back(face);
   return geometry;
 }
@@ -54,8 +56,8 @@ GeometryData makeGeometry() {
 TEST_SUITE("lights::validation") {
   TEST_CASE("Accepts valid lights") {
     LightingData lighting = makeLighting();
-    CHECK(lights::validateLightSource(lighting.lights[0]) == lights::Error::kNone);
-    CHECK(lights::validateLightSources(lighting) == lights::Error::kNone);
+    CHECK(lights::validateLight(lighting.lights[0]) == lights::Error::kNone);
+    CHECK(lights::validateLights(lighting) == lights::Error::kNone);
     CHECK(lights::validate(lighting) == lights::Error::kNone);
   }
 
@@ -75,12 +77,12 @@ TEST_SUITE("lights::validation") {
 
     lighting = makeLighting();
     lighting.lights[0].name = "light__one";
-    CHECK(lights::validateLightSource(lighting.lights[0]) == lights::Error::kBadLightName);
+    CHECK(lights::validateLight(lighting.lights[0]) == lights::Error::kBadLightName);
     CHECK(lights::validate(lighting) == lights::Error::kBadLightName);
 
     lighting = makeLighting();
     lighting.lights[0].name = std::string("light\0one", 9);
-    CHECK(lights::validateLightSource(lighting.lights[0]) == lights::Error::kBadLightName);
+    CHECK(lights::validateLight(lighting.lights[0]) == lights::Error::kBadLightName);
     CHECK(lights::validate(lighting) == lights::Error::kBadLightName);
   }
 
@@ -88,11 +90,33 @@ TEST_SUITE("lights::validation") {
     LightingData lighting = makeLighting();
     lighting.lights.push_back(lighting.lights.front());
 
-    CHECK(lights::validateLightSources(lighting) == lights::Error::kDuplicateLightName);
-    CHECK(lights::makeLightNamesUnique(lighting.lights) == 1);
+    CHECK(lights::validateLights(lighting) == lights::Error::kDuplicateLightName);
+    CHECK(lights::repairLightNames(lighting.lights) == 1);
     CHECK(lighting.lights[0].name == "light");
     CHECK(lighting.lights[1].name == "light_1");
-    CHECK(lights::validateLightSources(lighting) == lights::Error::kNone);
+    CHECK(lights::validateLights(lighting) == lights::Error::kNone);
+  }
+
+  TEST_CASE("Light candidates validate before publishing") {
+    LightingData lighting;
+    Light candidate = makeLight();
+    REQUIRE(lights::validateLightCount(1) == lights::Error::kNone);
+    lights::repairLightName(lighting, candidate);
+    REQUIRE(lights::validateLight(candidate) == lights::Error::kNone);
+    LightIndex index = lights::addLight(lighting, std::move(candidate));
+    REQUIRE(index == 0);
+
+    Light invalid = makeLight();
+    invalid.intensity = -1.0f;
+    CHECK(lights::validateLight(invalid) == lights::Error::kBadLightIntensity);
+    CHECK(lighting.lights[index].intensity == doctest::Approx(2.0f));
+
+    candidate = makeLight();
+    lights::repairLightName(lighting, candidate);
+    CHECK(candidate.name == "light_1");
+    CHECK(lights::validateLight(candidate) == lights::Error::kNone);
+    lights::removeLight(lighting, 0);
+    CHECK(lighting.lights.empty());
   }
 
   TEST_CASE("Rejects bad positions") {
@@ -235,7 +259,7 @@ TEST_SUITE("lights::validation") {
     GeometryData geometry = makeGeometry();
     lighting.corner_colors = {{0.1f, 0.2f, 0.3f}, {0.4f, 1.1f, 0.6f}, {0.7f, 0.8f, 0.9f}};
 
-    CHECK(lights::validateLightSources(lighting) == lights::Error::kNone);
+    CHECK(lights::validateLights(lighting) == lights::Error::kNone);
     CHECK(lights::validateCornerColors(lighting) == lights::Error::kBadCornerColor);
     CHECK(lights::validate(lighting) == lights::Error::kBadCornerColor);
     CHECK(lights::validate(lighting, geometry) == lights::Error::kBadCornerColor);
@@ -262,7 +286,7 @@ TEST_SUITE("lights::validation") {
     lighting.lights[0].name.clear();
     lighting.corner_colors = {{0.1f, 0.2f, 0.3f}};
 
-    CHECK(lights::validateLightSources(lighting) == lights::Error::kBadLightName);
+    CHECK(lights::validateLights(lighting) == lights::Error::kBadLightName);
     CHECK(lights::validateCornerColors(lighting) == lights::Error::kNone);
   }
 }

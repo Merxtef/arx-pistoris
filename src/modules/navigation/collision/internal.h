@@ -3,16 +3,15 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 #include "modules/navigation/traversal.h"
-#include "utils/spatial/arx_level_grid.h"
+#include "utils/spatial/arx_level_grid_index.h"
 
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 namespace pistoris::navigation::collision {
@@ -52,17 +51,18 @@ class StaticCollisionIndex {
   explicit StaticCollisionIndex(const GeometryData& geometry);
 
   [[nodiscard]] const TraversalFace& face(std::uint32_t index) const;
-  [[nodiscard]] std::vector<std::uint32_t> candidates(const Cylinder& cylinder) const;
+  void findCandidates(std::vector<std::uint32_t>& out, const Cylinder& cylinder) const;
 
  private:
   std::vector<TraversalFace> faces_;
-  std::unordered_map<spatial::ArxLevelGrid::Key, std::vector<std::uint32_t>> buckets_;
+  spatial::ArxLevelGridIndex grid_index_;
 };
 
 std::optional<FootprintHit> footprintHit(const TraversalFace& face, const Cylinder& cylinder);
 float broadphaseRadius(const Cylinder& cylinder);
 
 PlacementResult placeCylinderAt(const StaticCollisionIndex& index, const ArxVector3& position, float radius,
-                                float height, float probe_depth, float tolerance);
+                                float height, float probe_depth, float tolerance,
+                                std::vector<std::uint32_t>& candidate_scratch);
 
 }  // namespace pistoris::navigation::collision

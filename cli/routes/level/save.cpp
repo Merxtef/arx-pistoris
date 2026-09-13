@@ -3,30 +3,37 @@
 
 #include "routes/level/save.h"
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 #include "arx_pistoris/level.hpp"
 #include "arx_pistoris/level/bake.hpp"
-#include "arx_pistoris/pistoris.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/level/types.h"
+#include "arx_pistoris/native.hpp"
+#include "arx_pistoris/runtime.hpp"
+#include "arx_pistoris/runtime/types.h"
+#include "arx_pistoris/texture.hpp"
 
 #include "console/diagnostics.h"
 #include "console/logging.h"
 #include "formats/format.h"
-#include "io/path_location.h"
-#include "io/paths.h"
 #include "io/service.h"
 #include "modules/module.h"
 #include "pipeline/execution_context.h"
+#include "resources/layout.h"
+#include "resources/level_image_io.h"
 #include "resources/output.h"
+#include "resources/resource_output.h"
 #include "resources/selector.h"
+#include "resources/texture_io.h"
 #include "routes/level/invocation.h"
-#include "routes/level/native_input.h"
+#include "routes/level/native_carriers.h"
 #include "routes/level/operations.h"
 #include "routes/level/options/modules.h"
 #include "routes/level/state.h"
 
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -65,41 +72,84 @@ bool writeText(IoService& io, const OutputTarget& target, const std::string& dat
   return writeOutput(io, target, data.data(), data.size());
 }
 
+void reserveLevelOutputs(ResourceOutputPlan& plan, const Invocation& invocation) {
+  switch (invocation.output.format) {
+    case Format::kFts:
+    case Format::kDlf:
+      plan.reserveOutput(invocation.native_output.fts);
+      plan.reserveOutput(invocation.native_output.llf);
+      plan.reserveOutput(invocation.native_output.dlf);
+      break;
+    case Format::kJson:
+      plan.reserveOutput(invocation.json_output.fts);
+      plan.reserveOutput(invocation.json_output.llf);
+      plan.reserveOutput(invocation.json_output.dlf);
+      break;
+    default:
+      plan.reserveOutput(invocation.output);
+      break;
+  }
+}
+
+bool prepareRawResourceOutputs(ResourceOutputPlan& plan, std::span<const pistoris::NativeTextureFile> texture_files,
+                               GeneratedLevelImages& generated, const ExecutionContext& execution,
+                               const Invocation& invocation) {
+  reserveLevelOutputs(plan, invocation);
+  const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
+  if (!addNativeTextureFileOutputs(plan,
+                                   execution.io(),
+                                   invocation.native_output.textures,
+                                   texture_files,
+                                   asset,
+                                   DiagnosticCode::kLevelOutputFailed,
+                                   "Level")) {
+    return false;
+  }
+  if (!invocation.options.dlf_only &&
+      !addDirectLevelImageOutputs(
+          plan, invocation.image_input, invocation.image_output, invocation.loaded_images, generated, asset))
+    return false;
+  return execution.resourceOutputs().resolve(plan);
+}
+
+bool prepareProjectedResourceOutputs(ResourceOutputPlan& plan,
+                                     std::span<const pistoris::NativeTextureFile> texture_files,
+                                     const pistoris::Level& level, GeneratedLevelImages& generated,
+                                     const ExecutionContext& execution, const Invocation& invocation) {
+  reserveLevelOutputs(plan, invocation);
+  const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
+  if (!addNativeTextureFileOutputs(plan,
+                                   execution.io(),
+                                   invocation.native_output.textures,
+                                   texture_files,
+                                   asset,
+                                   DiagnosticCode::kLevelOutputFailed,
+                                   "Level")) {
+    return false;
+  }
+  if (!invocation.options.dlf_only &&
+      !addIntermediateLevelImageOutputs(plan, invocation.image_output, level, generated, asset)) {
+    return false;
+  }
+  return execution.resourceOutputs().resolve(plan);
+}
+
 template <typename Native>
 bool writeNativeJson(IoService& io, const OutputTarget& target, const Native& native, bool pretty,
                      const char* description, std::string_view signer = {}) {
   std::string json;
   ArxReturnCode rc = ARX_OK;
   if constexpr (std::same_as<Native, pistoris::Dlf> || std::same_as<Native, pistoris::Llf>) {
-    rc = pistoris::exportJson(native, json, pretty, signer);
+    rc = pistoris::toJson(native, json, pretty, signer);
   } else {
-    rc = pistoris::exportJson(native, json, pretty);
+    rc = pistoris::toJson(native, json, pretty);
   }
   if (rc != ARX_OK) return outputFailure(description, rc);
   return writeText(io, target, json);
 }
 
-bool writeTextureFiles(IoService& io, const NativeOutput& output, std::span<const pistoris::NativeTextureFile> files) {
-  for (const pistoris::NativeTextureFile& file : files) {
-    PathLocation location;
-    std::string error;
-    const char* filename = pathFilename(file.resource_path.c_str());
-    if (!io.appendPathLocation(output.texture_folder, filename, location, error)) {
-      diagnostic(DiagnosticCode::kLevelOutputFailed,
-                 "Cannot resolve texture output '%s': %s",
-                 file.resource_path.c_str(),
-                 error.c_str());
-      return false;
-    }
-    OutputTarget target;
-    static_cast<PathLocation&>(target) = std::move(location);
-    if (!writeOutput(io, target, file.encoded_image.data(), file.encoded_image.size())) return false;
-  }
-  return true;
-}
-
 void logDetachedLayout(const NativeOutput& output) {
-  if (!output.detached_layout) return;
+  if (output.fts.layout != ResourceLayout::kLoose) return;
   log(ARX_LOG_INFO,
       "loose Level output uses physical FTS '%s'; DLF runtime FTS reference is '%s'",
       output.fts.path.c_str(),
@@ -110,32 +160,42 @@ std::string jsonLevelName(const Invocation& invocation) {
   return "level" + std::to_string(invocation.json_output.level);
 }
 
-bool nativeBake(IntermediateLevel& source, const Invocation& invocation, NativeEncoding encoding,
-                bool include_texture_files, NativeLevelFiles& out) {
-  if (invocation.options.dlf_only) {
-    const std::string level_name = encoding == NativeEncoding::kJson ? jsonLevelName(invocation) : std::string{};
-    pistoris::Level::NativeDlfBakeOptions options;
-    options.level_name = level_name;
-    options.target_fts_offset = source.source_fts_offset;
-    if (encoding == NativeEncoding::kBinary || invocation.options.fts_scene_directory_specified)
-      options.dlf_scene_path = invocation.native_output.dlf_scene_path;
+bool prepareFullOutput(IntermediateLevel& source, const Invocation& invocation) {
+  std::size_t removed = 0;
+  ArxReturnCode rc = source.level.compactTextures(&removed);
+  if (rc != ARX_OK) return outputFailure("Level texture compaction", rc);
+  if (removed != 0) log(ARX_LOG_INFO, "removed %zu unused Level texture(s)", removed);
 
-    pistoris::Dlf dlf;
-    const ArxReturnCode rc = source.level.bakeNativeDlf(options, dlf);
-    if (rc != ARX_OK) return outputFailure("Level DLF output", rc);
-    out.dlf = std::move(dlf);
-    return true;
+  if (invocation.rebase_textures) {
+    rc = source.level.rebaseTexturePaths(invocation.texture_rebase_directory);
+    if (rc != ARX_OK) return outputFailure("Level texture rebasing", rc);
   }
+  return true;
+}
 
+bool bakeDlf(IntermediateLevel& source, const Invocation& invocation, NativeEncoding encoding, NativeLevelFiles& out) {
+  const std::string level_name = encoding == NativeEncoding::kJson ? jsonLevelName(invocation) : std::string{};
+  pistoris::Level::DlfBakeOptions options;
+  options.level_name = level_name;
+  options.target_fts_offset = source.source_fts_offset;
+  if (encoding == NativeEncoding::kBinary || invocation.options.fts_scene_directory_specified)
+    options.dlf_scene_path = invocation.native_output.dlf_scene_path;
+
+  pistoris::Dlf dlf;
+  const ArxReturnCode rc = source.level.bakeDlf(options, dlf);
+  if (rc != ARX_OK) return outputFailure("Level DLF output", rc);
+  out.dlf = std::move(dlf);
+  return true;
+}
+
+bool bakeNativeBundle(IntermediateLevel& source, const Invocation& invocation, NativeEncoding encoding,
+                      bool include_texture_files, NativeLevelFiles& out,
+                      std::vector<pistoris::NativeTextureFile>& texture_files) {
   const std::string level_name = encoding == NativeEncoding::kJson ? jsonLevelName(invocation) : std::string{};
   pistoris::Level::NativeBakeOptions options;
   options.level_name = level_name;
   options.reconstruct_quads = invocation.options.reconstruct_quads;
-  options.include_texture_files = include_texture_files;
-  if (encoding == NativeEncoding::kBinary || invocation.options.output_texture_folder_specified) {
-    options.texture_folder = invocation.native_output.texture_resource_directory;
-    options.texture_path_mode = pistoris::NativeTexturePathMode::kRebase;
-  }
+  options.textures.include_files = include_texture_files;
   if (encoding == NativeEncoding::kBinary || invocation.options.fts_scene_directory_specified)
     options.dlf_scene_path = invocation.native_output.dlf_scene_path;
 
@@ -145,7 +205,7 @@ bool nativeBake(IntermediateLevel& source, const Invocation& invocation, NativeE
   out.fts = std::move(bundle.fts);
   out.llf = std::move(bundle.llf);
   out.dlf = std::move(bundle.dlf);
-  out.texture_files = std::move(bundle.texture_files);
+  texture_files = std::move(bundle.texture_files);
   return true;
 }
 
@@ -171,7 +231,6 @@ bool writeBinaryFiles(NativeLevelFiles& files, const ExecutionContext& execution
     if (rc != ARX_OK) return outputFailure("DLF output", rc);
     if (!writeBytes(io, invocation.native_output.dlf, bytes)) return false;
   }
-  if (!writeTextureFiles(io, invocation.native_output, files.texture_files)) return false;
   if (files.fts) logDetachedLayout(invocation.native_output);
   return true;
 }
@@ -196,32 +255,77 @@ bool writeJsonFiles(NativeLevelFiles& files, const ExecutionContext& execution, 
                                     invocation.options.signer)) {
     return false;
   }
-  return !files.dlf || writeNativeJson(io,
-                                       invocation.json_output.dlf,
-                                       *files.dlf,
-                                       invocation.format.pretty,
-                                       "DLF JSON output",
-                                       invocation.options.signer);
+  if (files.dlf && !writeNativeJson(io,
+                                    invocation.json_output.dlf,
+                                    *files.dlf,
+                                    invocation.format.pretty,
+                                    "DLF JSON output",
+                                    invocation.options.signer)) {
+    return false;
+  }
+  return true;
+}
+
+void prepareNativeTextureOutput(const NativeLevelFiles& files, const ExecutionContext& execution,
+                                const Invocation& invocation, std::vector<pistoris::NativeTextureFile>& texture_files) {
+  if (invocation.texture_options.export_files && files.fts)
+    loadNativeTextureFiles(*files.fts, execution.io(), invocation.textures, texture_files);
+}
+
+bool writeNativeBinaryNative(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
+  std::vector<pistoris::NativeTextureFile> texture_files;
+  prepareNativeTextureOutput(files, execution, invocation, texture_files);
+  GeneratedLevelImages generated;
+  ResourceOutputPlan resources;
+  if (!prepareRawResourceOutputs(resources, texture_files, generated, execution, invocation)) return false;
+  return writeBinaryFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
 }
 
 bool writeNativeBinaryIntermediate(IntermediateLevel& source, const ExecutionContext& execution,
                                    const Invocation& invocation, const operations::OperationDiagnostics&) {
-  const bool include_texture_files = invocation.options.export_textures && !invocation.options.dlf_only;
-
   NativeLevelFiles files;
-  if (!nativeBake(source, invocation, NativeEncoding::kBinary, include_texture_files, files)) return false;
-  return writeBinaryFiles(files, execution, invocation);
+  std::vector<pistoris::NativeTextureFile> texture_files;
+  if (invocation.options.dlf_only) {
+    if (!bakeDlf(source, invocation, NativeEncoding::kBinary, files)) return false;
+  } else {
+    const bool include_texture_files = invocation.texture_options.export_files;
+    if (!prepareFullOutput(source, invocation)) return false;
+    if (!bakeNativeBundle(source, invocation, NativeEncoding::kBinary, include_texture_files, files, texture_files))
+      return false;
+  }
+  GeneratedLevelImages projected;
+  ResourceOutputPlan resources;
+  if (!prepareProjectedResourceOutputs(resources, texture_files, source.level, projected, execution, invocation))
+    return false;
+  return writeBinaryFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
 }
 
 bool writeJsonNative(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
-  return writeJsonFiles(files, execution, invocation);
+  std::vector<pistoris::NativeTextureFile> texture_files;
+  prepareNativeTextureOutput(files, execution, invocation, texture_files);
+  GeneratedLevelImages generated;
+  ResourceOutputPlan resources;
+  if (!prepareRawResourceOutputs(resources, texture_files, generated, execution, invocation)) return false;
+  return writeJsonFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
 }
 
 bool writeJsonIntermediate(IntermediateLevel& source, const ExecutionContext& execution, const Invocation& invocation,
                            const operations::OperationDiagnostics&) {
   NativeLevelFiles files;
-  if (!nativeBake(source, invocation, NativeEncoding::kJson, false, files)) return false;
-  return writeJsonFiles(files, execution, invocation);
+  std::vector<pistoris::NativeTextureFile> texture_files;
+  if (invocation.options.dlf_only) {
+    if (!bakeDlf(source, invocation, NativeEncoding::kJson, files)) return false;
+  } else {
+    const bool include_texture_files = invocation.texture_options.export_files;
+    if (!prepareFullOutput(source, invocation)) return false;
+    if (!bakeNativeBundle(source, invocation, NativeEncoding::kJson, include_texture_files, files, texture_files))
+      return false;
+  }
+  GeneratedLevelImages projected;
+  ResourceOutputPlan resources;
+  if (!prepareProjectedResourceOutputs(resources, texture_files, source.level, projected, execution, invocation))
+    return false;
+  return writeJsonFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
 }
 
 bool writeDebugCellsNative(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
@@ -241,7 +345,7 @@ bool writeDebugCellsIntermediate(IntermediateLevel& source, const ExecutionConte
   pistoris::Level::NativeBakeOptions options;
   options.level_name = "debug";
   options.reconstruct_quads = false;
-  options.include_texture_files = false;
+  options.textures.include_files = false;
   pistoris::NativeLevelBundle bundle;
   ArxReturnCode rc = source.level.bakeNativeBundle(options, bundle);
   if (rc != ARX_OK) return outputFailure("Level native bundle output", rc);
@@ -274,18 +378,29 @@ bool writeRoomDistancesIntermediate(IntermediateLevel& source, const ExecutionCo
 
 bool writeGlbIntermediate(IntermediateLevel& source, const ExecutionContext& execution, const Invocation& invocation,
                           const operations::OperationDiagnostics&) {
+  if (!prepareFullOutput(source, invocation)) return false;
+  std::vector<const pistoris::Model*> previews;
+  previews.reserve(invocation.model_previews.size());
+  for (const auto& preview : invocation.model_previews) previews.push_back(preview.get());
   std::vector<std::uint8_t> out;
-  const ArxReturnCode rc = source.level.exportGlb(out, invocation.options.glb_export);
+  ArxLevelModelPreviewReport report{};
+  const ArxReturnCode rc = source.level.exportGlb(out, previews, invocation.options.glb_export, &report);
   if (rc != ARX_OK) return outputFailure("GLB output", rc);
-  return writeOutput(execution.io(), invocation.output, out.data(), out.size());
+  if (report.previewed_entities != 0)
+    log(ARX_LOG_INFO, "attached Model previews to %zu Level entity instance(s)", report.previewed_entities);
+  GeneratedLevelImages projected;
+  ResourceOutputPlan resources;
+  if (!prepareProjectedResourceOutputs(resources, {}, source.level, projected, execution, invocation)) return false;
+  return writeOutput(execution.io(), invocation.output, out.data(), out.size()) &&
+         execution.resourceOutputs().write(resources);
 }
 
 }  // namespace
 
 const OutputConverterDescriptor* outputConverterDescriptor(Format output, const Module* module) {
   static constexpr OutputConverterDescriptor kNativeBinary{
+      .write_native = writeNativeBinaryNative,
       .write_intermediate = writeNativeBinaryIntermediate,
-      .requires_texture_images = true,
   };
   static constexpr OutputConverterDescriptor kJson{
       .write_native = writeJsonNative,
@@ -293,7 +408,7 @@ const OutputConverterDescriptor* outputConverterDescriptor(Format output, const 
   };
   static constexpr OutputConverterDescriptor kGlb{
       .write_intermediate = writeGlbIntermediate,
-      .requires_texture_images = true,
+      .supports_model_previews = true,
   };
   static constexpr OutputConverterDescriptor kDebugCells{
       .write_native = writeDebugCellsNative,

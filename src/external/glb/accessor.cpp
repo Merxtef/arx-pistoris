@@ -3,7 +3,7 @@
 
 #include "accessor.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
 #include "external/glb/container.h"
 
@@ -51,6 +51,23 @@ ArxReturnCode getAccessor(const Asset&, const cgltf_accessor* accessor, Accessor
       if (!std::isfinite(value)) return ARX_GLB_BAD_FORMAT;
   }
   out = std::move(tmp);
+  return ARX_OK;
+}
+
+AccessorCache::AccessorCache(const Asset& asset, std::size_t expected_accessors) : asset_(asset) {
+  views_.reserve(expected_accessors);
+}
+
+ArxReturnCode AccessorCache::get(const cgltf_accessor* accessor, const AccessorView*& out) {
+  if (const auto found = views_.find(accessor); found != views_.end()) {
+    out = &found->second;
+    return ARX_OK;
+  }
+  AccessorView view;
+  const ArxReturnCode rc = getAccessor(asset_, accessor, view);
+  if (rc != ARX_OK) return rc;
+  const auto inserted = views_.emplace(accessor, std::move(view)).first;
+  out = &inserted->second;
   return ARX_OK;
 }
 

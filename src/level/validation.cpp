@@ -3,17 +3,20 @@
 
 #include "level/validation.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "level/anchor_bounds.h"
 #include "level/data.h"
 #include "modules/geometry.h"
 #include "modules/lights.h"
+#include "modules/loading_screen.h"
+#include "modules/minimap.h"
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
+#include "modules/textures.h"
 
 #include <cstddef>
 #include <span>
@@ -69,6 +72,8 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
       return ARX_OK;
     case geometry::Error::kInvalidOptions:
       return ARX_INVALID_OPTIONS;
+    case geometry::Error::kBadIndex:
+      return ARX_INDEX_OUT_OF_RANGE;
     case geometry::Error::kNoGeometry:
       return ARX_LEVEL_NO_GEOMETRY;
     case geometry::Error::kTooManyVertices:
@@ -79,12 +84,8 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
       return ARX_LEVEL_TOO_MANY_FACES;
     case geometry::Error::kBadFaceVertex:
       return ARX_LEVEL_BAD_FACE_VERTEX;
-    case geometry::Error::kTooManyTextures:
-      return ARX_LEVEL_TOO_MANY_TEXTURES;
-    case geometry::Error::kBadTexture:
-      return ARX_LEVEL_BAD_TEXTURE_PATH;
-    case geometry::Error::kBadTextureImage:
-      return ARX_LEVEL_BAD_TEXTURE_IMAGE;
+    case geometry::Error::kBadCornerNormal:
+      return ARX_LEVEL_BAD_CORNER_NORMAL;
     case geometry::Error::kOutOfMemory:
       return ARX_BAD_ALLOC;
     case geometry::Error::kBadFaceTexture:
@@ -94,7 +95,7 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
     case geometry::Error::kBadFaceTransval:
       return ARX_LEVEL_BAD_FACE_TRANSVAL;
     case geometry::Error::kBadFaceNormal:
-      return ARX_LEVEL_BAD_FACE_NORMAL;
+      return ARX_INTERNAL_ERROR;
     case geometry::Error::kBadFaceUv:
       return ARX_LEVEL_BAD_FACE_UV;
     case geometry::Error::kDegenerateFace:
@@ -107,13 +108,22 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
   return ARX_INTERNAL_ERROR;
 }
 
-ArxReturnCode imageError(geometry::ImageError error) noexcept {
+ArxReturnCode textureError(textures::Error error) noexcept {
   switch (error) {
-    case geometry::ImageError::kNone:
+    case textures::Error::kNone:
       return ARX_OK;
-    case geometry::ImageError::kMalformed:
+    case textures::Error::kInvalidOptions:
+      return ARX_INVALID_OPTIONS;
+    case textures::Error::kBadIndex:
+      return ARX_INDEX_OUT_OF_RANGE;
+    case textures::Error::kTooManyTextures:
+      return ARX_LEVEL_TOO_MANY_TEXTURES;
+    case textures::Error::kBadTexture:
+    case textures::Error::kDuplicateTexture:
+      return ARX_LEVEL_BAD_TEXTURE_PATH;
+    case textures::Error::kBadImage:
       return ARX_LEVEL_BAD_TEXTURE_IMAGE;
-    case geometry::ImageError::kOutOfMemory:
+    case textures::Error::kOutOfMemory:
       return ARX_BAD_ALLOC;
   }
   return ARX_INTERNAL_ERROR;
@@ -163,6 +173,8 @@ ArxReturnCode roomsError(rooms::Error error) noexcept {
       return ARX_LEVEL_SELF_INTERSECTING_PORTAL;
     case rooms::Error::kBadFaceVertex:
       return ARX_LEVEL_BAD_FACE_VERTEX;
+    case rooms::Error::kBadIndex:
+      return ARX_INDEX_OUT_OF_RANGE;
   }
   return ARX_INTERNAL_ERROR;
 }
@@ -207,8 +219,12 @@ ArxReturnCode navigationError(navigation::Error error) noexcept {
       return ARX_LEVEL_TOO_MANY_ANCHOR_CONNECTIONS;
     case navigation::Error::kBadConnectionIndex:
       return ARX_LEVEL_BAD_ANCHOR_CONNECTION_INDEX;
+    case navigation::Error::kDuplicateConnection:
+      return ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION;
     case navigation::Error::kBadConnectionOrder:
       return ARX_LEVEL_BAD_ANCHOR_CONNECTION_ORDER;
+    case navigation::Error::kBadIndex:
+      return ARX_INDEX_OUT_OF_RANGE;
   }
   return ARX_INTERNAL_ERROR;
 }
@@ -241,6 +257,8 @@ ArxReturnCode lightingError(lights::Error error) noexcept {
       return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
     case lights::Error::kBadCornerColor:
       return ARX_LEVEL_BAD_CORNER_COLOR;
+    case lights::Error::kBadIndex:
+      return ARX_INDEX_OUT_OF_RANGE;
   }
   return ARX_INTERNAL_ERROR;
 }
@@ -311,6 +329,36 @@ ArxReturnCode sceneError(scene::Error error) noexcept {
       return ARX_LEVEL_BAD_PATH_NODE_TYPE;
     case scene::Error::kBadPathFirstNode:
       return ARX_LEVEL_BAD_PATH_FIRST_NODE;
+    case scene::Error::kBadIndex:
+      return ARX_INDEX_OUT_OF_RANGE;
+  }
+  return ARX_INTERNAL_ERROR;
+}
+
+ArxReturnCode minimapError(minimap::Error error) noexcept {
+  switch (error) {
+    case minimap::Error::kNone:
+      return ARX_OK;
+    case minimap::Error::kInvalidOptions:
+      return ARX_INVALID_OPTIONS;
+    case minimap::Error::kBadImage:
+      return ARX_LEVEL_BAD_MINIMAP_IMAGE;
+    case minimap::Error::kBadBounds:
+      return ARX_LEVEL_BAD_MINIMAP_BOUNDS;
+    case minimap::Error::kOutOfMemory:
+      return ARX_BAD_ALLOC;
+  }
+  return ARX_INTERNAL_ERROR;
+}
+
+ArxReturnCode loadingScreenError(loading_screen::Error error) noexcept {
+  switch (error) {
+    case loading_screen::Error::kNone:
+      return ARX_OK;
+    case loading_screen::Error::kBadImage:
+      return ARX_LEVEL_BAD_LOADING_SCREEN_IMAGE;
+    case loading_screen::Error::kOutOfMemory:
+      return ARX_BAD_ALLOC;
   }
   return ARX_INTERNAL_ERROR;
 }
@@ -343,7 +391,7 @@ ArxReturnCode vertices(const LevelModules& modules, LevelValidationState& state)
 ArxReturnCode textures(const LevelModules& modules, LevelValidationState& state) {
   if (has(state, LevelValidation::kTextures)) return ARX_OK;
   return recordValidationResult(
-      state, LevelValidation::kTextures, geometryError(geometry::validateTextures(modules.geometry.textures)));
+      state, LevelValidation::kTextures, textureError(pistoris::textures::validate(modules.textures.textures)));
 }
 
 ArxReturnCode faces(const LevelModules& modules, LevelValidationState& state) {
@@ -355,7 +403,7 @@ ArxReturnCode faces(const LevelModules& modules, LevelValidationState& state) {
 
   ArxAabb referenced_bounds;
   rc = geometryError(geometry::validateFaces(
-      modules.geometry.faces, modules.geometry.vertices, modules.geometry.textures.size(), &referenced_bounds));
+      modules.geometry.faces, modules.geometry.vertices, modules.textures.textures.size(), &referenced_bounds));
   if (rc != ARX_OK) return recordValidationResult(state, LevelValidation::kFaces, rc);
   rc = faceTypes(modules.geometry.faces);
   if (rc != ARX_OK) return recordValidationResult(state, LevelValidation::kFaces, rc);
@@ -365,7 +413,7 @@ ArxReturnCode faces(const LevelModules& modules, LevelValidationState& state) {
 
 ArxReturnCode rooms(const LevelModules& modules, LevelValidationState& state) {
   if (has(state, LevelValidation::kRooms)) return ARX_OK;
-  ArxReturnCode rc = roomsError(pistoris::rooms::validateRooms(modules.rooms));
+  ArxReturnCode rc = roomsError(pistoris::rooms::validateRoomDefinitions(modules.rooms));
   if (rc == ARX_OK && modules.rooms.definitions.size() > kMaxRooms) rc = ARX_LEVEL_TOO_MANY_ROOMS;
   return recordValidationResult(state, LevelValidation::kRooms, rc);
 }
@@ -444,7 +492,7 @@ ArxReturnCode anchorConnections(const LevelModules& modules, LevelValidationStat
 ArxReturnCode lightSources(const LevelModules& modules, LevelValidationState& state) {
   if (has(state, LevelValidation::kLightSources)) return ARX_OK;
   return recordValidationResult(
-      state, LevelValidation::kLightSources, lightingError(lights::validateLightSources(modules.lighting.lights)));
+      state, LevelValidation::kLightSources, lightingError(lights::validateLights(modules.lighting.lights)));
 }
 
 ArxReturnCode playerSpawn(const LevelModules& modules, LevelValidationState& state) {
@@ -472,6 +520,19 @@ ArxReturnCode zones(const LevelModules& modules, LevelValidationState& state) {
 ArxReturnCode paths(const LevelModules& modules, LevelValidationState& state) {
   if (has(state, LevelValidation::kPaths)) return ARX_OK;
   return recordValidationResult(state, LevelValidation::kPaths, sceneError(scene::validatePaths(modules.scene.paths)));
+}
+
+ArxReturnCode minimap(const LevelModules& modules, LevelValidationState& state) {
+  if (has(state, LevelValidation::kMinimap)) return ARX_OK;
+  return recordValidationResult(
+      state, LevelValidation::kMinimap, minimapError(pistoris::minimap::validate(modules.minimap)));
+}
+
+ArxReturnCode loadingScreen(const LevelModules& modules, LevelValidationState& state) {
+  if (has(state, LevelValidation::kLoadingScreen)) return ARX_OK;
+  return recordValidationResult(state,
+                                LevelValidation::kLoadingScreen,
+                                loadingScreenError(pistoris::loading_screen::validate(modules.loading_screen)));
 }
 
 ArxReturnCode mesh(const LevelModules& modules, LevelValidationState& state) {
@@ -515,7 +576,39 @@ ArxReturnCode all(const LevelModules& modules, LevelValidationState& state) {
   if (rc != ARX_OK) return rc;
   rc = zones(modules, state);
   if (rc != ARX_OK) return rc;
-  return paths(modules, state);
+  rc = paths(modules, state);
+  if (rc != ARX_OK) return rc;
+  rc = minimap(modules, state);
+  if (rc != ARX_OK) return rc;
+  return loadingScreen(modules, state);
 }
 
 }  // namespace pistoris::level_validation
+
+namespace pistoris {
+
+ArxReturnCode validateLevelModules(const LevelModules& modules, ArxAabb* out_bounds, ArxAabb* out_referenced_bounds) {
+  LevelValidationState state;
+  ArxReturnCode rc = validateLevelModules(modules, state);
+  if (rc != ARX_OK) return rc;
+  const auto& bounds = state.derived.bounds;
+  if (out_bounds) {
+    if (!bounds.has_value()) return ARX_INTERNAL_ERROR;
+    *out_bounds = *bounds;
+  }
+  const auto& referenced_bounds = state.derived.referenced_bounds;
+  if (out_referenced_bounds) {
+    if (!referenced_bounds.has_value()) return ARX_INTERNAL_ERROR;
+    *out_referenced_bounds = *referenced_bounds;
+  }
+  return ARX_OK;
+}
+
+ArxReturnCode validateLevelModules(const LevelModules& modules, LevelValidationState& out_state) {
+  LevelValidationState state;
+  ArxReturnCode rc = level_validation::all(modules, state);
+  if (rc == ARX_OK) out_state = state;
+  return rc;
+}
+
+}  // namespace pistoris

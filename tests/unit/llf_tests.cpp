@@ -3,11 +3,11 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/llf.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
-#include "arx/llf.h"
+#include "native/llf.h"
 #include "utils/cursor.h"
 
 #include <cstdint>

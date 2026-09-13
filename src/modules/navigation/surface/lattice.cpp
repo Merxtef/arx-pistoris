@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/indices.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/runtime/types.h"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
@@ -18,9 +18,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <format>
-#include <map>
 #include <optional>
+#include <span>
 #include <vector>
 
 namespace pistoris::navigation::surface {
@@ -32,17 +31,21 @@ constexpr float kNavSqrt3Over2 = 0.8660254037844386f;
 struct LatticeKey {
   int row = 0;
   int col = 0;
-
-  friend bool operator<(const LatticeKey& a, const LatticeKey& b) {
-    if (a.row != b.row) return a.row < b.row;
-    return a.col < b.col;
-  }
 };
 
 struct NavSample {
-  LatticeKey key{};
   std::uint32_t vertex = 0;
   ArxVector3 support{};
+};
+
+struct LatticeCell {
+  std::size_t first_sample = 0;
+  std::size_t sample_count = 0;
+};
+
+struct LatticeRow {
+  std::size_t first_cell = 0;
+  std::size_t cell_count = 0;
 };
 
 struct NavLatticeDiagnostics {
@@ -55,90 +58,110 @@ struct NavLatticeDiagnostics {
   std::size_t added = 0;
 };
 
-std::optional<NavSample> addNavigationSample(
-    const StaticAnchorTraversal& traversal, const geometry::SurfaceSupportIndex& geometry_support,
-    const GeometryData& geometry, const SurfaceSupportFilter& final_support_filter, const NavSurfaceGenOptions& options,
-    const geometry::SurfaceSupportHit& hit, const LatticeKey& key, NavSurface& surface, std::vector<NavSample>& samples,
-    std::map<LatticeKey, std::vector<std::uint32_t>>& by_key) {
+bool tryAddNavigationSample(StaticAnchorTraversal& traversal, const geometry::SurfaceSupportIndex& geometry_support,
+                            const GeometryData& geometry, const SurfaceSupportFilter& final_support_filter,
+                            const NavSurfaceGenerationOptions& options, const geometry::SurfaceSupportHit& hit,
+                            NavSurface& surface, geometry::PositionIndex& vertex_index, std::vector<NavSample>& samples,
+                            std::size_t first_sample) {
   if (!usableSurfaceSupport(geometry_support, geometry, final_support_filter, traversal, hit.position, options))
-    return std::nullopt;
+    return false;
 
   ArxVector3 vertex_position = navigationVertexPosition(hit.position, options.clearance);
-  std::uint32_t vertex = kInvalidNavSurfaceVertexIndex;
-  for (std::uint32_t i = 0; i < surface.vertices.size(); ++i) {
-    if (math::lengthSquared(surface.vertices[i].position - vertex_position) <= kNavMergeDistance * kNavMergeDistance) {
-      vertex = i;
-      break;
-    }
-  }
-  if (vertex == kInvalidNavSurfaceVertexIndex) {
+  std::optional<std::uint32_t> existing = vertex_index.find(vertex_position);
+  std::uint32_t vertex = existing.value_or(kInvalidNavSurfaceVertexIndex);
+  if (!existing.has_value()) {
+    if (surface.vertices.size() >= static_cast<std::size_t>(kInvalidNavSurfaceVertexIndex)) return false;
     vertex = static_cast<std::uint32_t>(surface.vertices.size());
     surface.vertices.push_back({vertex_position});
-  }
-
-  for (std::uint32_t sample_index : by_key[key]) {
-    if (samples[sample_index].vertex == vertex) return std::nullopt;
-  }
-
-  std::uint32_t sample_index = static_cast<std::uint32_t>(samples.size());
-  samples.push_back({key, vertex, hit.position});
-  by_key[key].push_back(sample_index);
-  return samples.back();
-}
-
-void addNavigationSamplesAt(const geometry::SurfaceSupportIndex& index, const StaticAnchorTraversal& traversal,
-                            const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                            const SurfaceSupportFilter& final_support_filter, const NavSurfaceGenOptions& options,
-                            const LatticeKey& key, float x, float z, NavSurface& surface,
-                            std::vector<NavSample>& samples, std::map<LatticeKey, std::vector<std::uint32_t>>& by_key) {
-  std::size_t before = by_key[key].size();
-  for (const ArxVector3& offset : navigationProbeOffsets(options.radius)) {
-    std::vector<geometry::SurfaceSupportHit> hits = index.hitsAt(x + offset.x, z + offset.z);
-    geometry::mergeSurfaceSupportHits(hits);
-    for (const geometry::SurfaceSupportHit& hit : hits) {
-      addNavigationSample(
-          traversal, geometry_support, geometry, final_support_filter, options, hit, key, surface, samples, by_key);
+    if (!vertex_index.tryAdd(vertex, vertex_position)) {
+      surface.vertices.pop_back();
+      return false;
     }
-    if (by_key[key].size() != before) return;
   }
+
+  for (std::size_t sample = first_sample; sample < samples.size(); ++sample)
+    if (samples[sample].vertex == vertex) return false;
+
+  samples.push_back({vertex, hit.position});
+  return true;
 }
 
-bool navigationHeightDeltaWithinCylinder(const NavSurfaceGenOptions& options, const NavSample& a, const NavSample& b) {
+LatticeCell addNavigationSamplesAt(const geometry::SurfaceSupportIndex& index, StaticAnchorTraversal& traversal,
+                                   const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
+                                   const SurfaceSupportFilter& final_support_filter,
+                                   const NavSurfaceGenerationOptions& options, float x, float z, NavSurface& surface,
+                                   geometry::PositionIndex& vertex_index, std::vector<NavSample>& samples,
+                                   std::vector<geometry::SurfaceSupportHit>& hits) {
+  const std::size_t first_sample = samples.size();
+  for (const ArxVector3& offset : navigationProbeOffsets(options.radius)) {
+    index.findHitsAt(hits, x + offset.x, z + offset.z);
+    geometry::mergeSortedSurfaceSupportHits(hits);
+    for (const geometry::SurfaceSupportHit& hit : hits) {
+      tryAddNavigationSample(traversal,
+                             geometry_support,
+                             geometry,
+                             final_support_filter,
+                             options,
+                             hit,
+                             surface,
+                             vertex_index,
+                             samples,
+                             first_sample);
+    }
+    if (samples.size() != first_sample) break;
+  }
+  return {first_sample, samples.size() - first_sample};
+}
+
+bool navigationHeightDeltaWithinCylinder(const NavSurfaceGenerationOptions& options, const NavSample& a,
+                                         const NavSample& b) {
   return std::abs(a.support.y - b.support.y) <= std::abs(options.height);
 }
 
-void addLatticeTrianglesForKeys(const NavSurfaceGenOptions& options, const std::vector<NavSample>& samples,
-                                const std::map<LatticeKey, std::vector<std::uint32_t>>& by_key,
+const LatticeCell* findLatticeCell(std::span<const LatticeRow> rows, std::span<const LatticeCell> cells,
+                                   const LatticeKey& key) {
+  if (key.row < 0 || key.col < 0 || static_cast<std::size_t>(key.row) >= rows.size()) return nullptr;
+  const LatticeRow& row = rows[static_cast<std::size_t>(key.row)];
+  if (static_cast<std::size_t>(key.col) >= row.cell_count) return nullptr;
+  return &cells[row.first_cell + static_cast<std::size_t>(key.col)];
+}
+
+std::span<const NavSample> cellSamples(std::span<const NavSample> samples, const LatticeCell& cell) {
+  return samples.subspan(cell.first_sample, cell.sample_count);
+}
+
+void addLatticeTrianglesForKeys(const NavSurfaceGenerationOptions& options, std::span<const NavSample> samples,
+                                std::span<const LatticeRow> rows, std::span<const LatticeCell> cells,
                                 const std::array<LatticeKey, 3>& keys, NavSurface& surface,
                                 NavLatticeDiagnostics& diagnostics) {
   ++diagnostics.key_triangles;
-  auto ia = by_key.find(keys[0]);
-  auto ib = by_key.find(keys[1]);
-  auto ic = by_key.find(keys[2]);
-  if (ia == by_key.end() || ib == by_key.end() || ic == by_key.end()) {
+  const LatticeCell* cell_a = findLatticeCell(rows, cells, keys[0]);
+  const LatticeCell* cell_b = findLatticeCell(rows, cells, keys[1]);
+  const LatticeCell* cell_c = findLatticeCell(rows, cells, keys[2]);
+  if (cell_a == nullptr || cell_b == nullptr || cell_c == nullptr) {
     ++diagnostics.missing_key;
     return;
   }
 
-  for (std::uint32_t a : ia->second) {
-    for (std::uint32_t b : ib->second) {
-      for (std::uint32_t c : ic->second) {
+  for (const NavSample& a : cellSamples(samples, *cell_a)) {
+    for (const NavSample& b : cellSamples(samples, *cell_b)) {
+      for (const NavSample& c : cellSamples(samples, *cell_c)) {
         ++diagnostics.candidate_triangles;
-        std::uint32_t va = samples[a].vertex;
-        std::uint32_t vb = samples[b].vertex;
-        std::uint32_t vc = samples[c].vertex;
+        std::uint32_t va = a.vertex;
+        std::uint32_t vb = b.vertex;
+        std::uint32_t vc = c.vertex;
         if (va == vb || va == vc || vb == vc) {
           ++diagnostics.duplicate_vertex;
           continue;
         }
 
-        if (!navigationHeightDeltaWithinCylinder(options, samples[a], samples[b]) ||
-            !navigationHeightDeltaWithinCylinder(options, samples[b], samples[c]) ||
-            !navigationHeightDeltaWithinCylinder(options, samples[a], samples[c])) {
+        if (!navigationHeightDeltaWithinCylinder(options, a, b) ||
+            !navigationHeightDeltaWithinCylinder(options, b, c) ||
+            !navigationHeightDeltaWithinCylinder(options, a, c)) {
           ++diagnostics.edge_height;
           continue;
         }
-        if (!appendNavigationTriangle(surface, va, vb, vc)) {
+        if (!tryAppendNavigationTriangle(surface, va, vb, vc)) {
           ++diagnostics.degenerate;
           continue;
         }
@@ -152,79 +175,91 @@ void addLatticeTrianglesForKeys(const NavSurfaceGenOptions& options, const std::
 
 void buildSurfaceLattice(const ArxAabb& support_bounds, const geometry::SurfaceSupportIndex& support_index,
                          const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                         const SurfaceSupportFilter& final_support_filter, const StaticAnchorTraversal& traversal,
-                         const NavSurfaceGenOptions& options, NavSurface& surface) {
+                         const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                         const NavSurfaceGenerationOptions& options, NavSurface& surface) {
   std::vector<NavSample> samples;
-  std::map<LatticeKey, std::vector<std::uint32_t>> by_key;
+  std::vector<LatticeCell> cells;
+  std::vector<LatticeRow> rows;
+  std::vector<geometry::SurfaceSupportHit> support_hits;
+  geometry::PositionIndex vertex_index(kNavMergeDistance, geometry::PositionWeldMetric::kEuclidean);
+  vertex_index.reservePositionCapacity(support_index.size());
 
   const float sample_spacing = options.radius;
   const float row_spacing = sample_spacing * kNavSqrt3Over2;
   int row = 0;
-  // The lattice must preserve its established floating-point sampling sequence
+  // Float accumulation order affects generated topology
   // NOLINTBEGIN(bugprone-float-loop-counter)
   for (float z = spatial::firstCellCenter(support_bounds.min.z, row_spacing); z <= support_bounds.max.z;
        z += row_spacing, ++row) {
+    const std::size_t first_cell = cells.size();
     float x_offset = (row % 2 == 0) ? 0.0f : sample_spacing * 0.5f;
-    int col = 0;
     for (float x = spatial::firstCellCenter(support_bounds.min.x, sample_spacing) + x_offset; x <= support_bounds.max.x;
-         x += sample_spacing, ++col) {
-      addNavigationSamplesAt(support_index,
-                             traversal,
-                             geometry_support,
-                             geometry,
-                             final_support_filter,
-                             options,
-                             {row, col},
-                             x,
-                             z,
-                             surface,
-                             samples,
-                             by_key);
+         x += sample_spacing) {
+      cells.push_back(addNavigationSamplesAt(support_index,
+                                             traversal,
+                                             geometry_support,
+                                             geometry,
+                                             final_support_filter,
+                                             options,
+                                             x,
+                                             z,
+                                             surface,
+                                             vertex_index,
+                                             samples,
+                                             support_hits));
     }
+    rows.push_back({first_cell, cells.size() - first_cell});
   }
   // NOLINTEND(bugprone-float-loop-counter)
 
   NavLatticeDiagnostics lattice_diagnostics;
-  for (const auto& [key, sample_indices] : by_key) {
-    (void)sample_indices;
-    if (key.row % 2 == 0) {
-      addLatticeTrianglesForKeys(options,
-                                 samples,
-                                 by_key,
-                                 {key, {key.row, key.col + 1}, {key.row + 1, key.col}},
-                                 surface,
-                                 lattice_diagnostics);
-      addLatticeTrianglesForKeys(options,
-                                 samples,
-                                 by_key,
-                                 {key, {key.row + 1, key.col}, {key.row + 1, key.col - 1}},
-                                 surface,
-                                 lattice_diagnostics);
-    } else {
-      addLatticeTrianglesForKeys(options,
-                                 samples,
-                                 by_key,
-                                 {key, {key.row, key.col + 1}, {key.row + 1, key.col + 1}},
-                                 surface,
-                                 lattice_diagnostics);
-      addLatticeTrianglesForKeys(options,
-                                 samples,
-                                 by_key,
-                                 {key, {key.row + 1, key.col}, {key.row + 1, key.col + 1}},
-                                 surface,
-                                 lattice_diagnostics);
+  for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+    const LatticeRow& lattice_row = rows[row_index];
+    for (std::size_t col_index = 0; col_index < lattice_row.cell_count; ++col_index) {
+      const LatticeKey key{static_cast<int>(row_index), static_cast<int>(col_index)};
+      if (key.row % 2 == 0) {
+        addLatticeTrianglesForKeys(options,
+                                   samples,
+                                   rows,
+                                   cells,
+                                   {key, {key.row, key.col + 1}, {key.row + 1, key.col}},
+                                   surface,
+                                   lattice_diagnostics);
+        addLatticeTrianglesForKeys(options,
+                                   samples,
+                                   rows,
+                                   cells,
+                                   {key, {key.row + 1, key.col}, {key.row + 1, key.col - 1}},
+                                   surface,
+                                   lattice_diagnostics);
+      } else {
+        addLatticeTrianglesForKeys(options,
+                                   samples,
+                                   rows,
+                                   cells,
+                                   {key, {key.row, key.col + 1}, {key.row + 1, key.col + 1}},
+                                   surface,
+                                   lattice_diagnostics);
+        addLatticeTrianglesForKeys(options,
+                                   samples,
+                                   rows,
+                                   cells,
+                                   {key, {key.row + 1, key.col}, {key.row + 1, key.col + 1}},
+                                   surface,
+                                   lattice_diagnostics);
+      }
     }
   }
   log(ARX_LOG_DEBUG,
-      std::format("Level navigation surface lattice triangles: key_triangles={}, missing_key={}, candidates={}, "
-                  "added={}, duplicate_vertex={}, edge_height={}, degenerate={}",
-                  lattice_diagnostics.key_triangles,
-                  lattice_diagnostics.missing_key,
-                  lattice_diagnostics.candidate_triangles,
-                  lattice_diagnostics.added,
-                  lattice_diagnostics.duplicate_vertex,
-                  lattice_diagnostics.edge_height,
-                  lattice_diagnostics.degenerate));
+      "Navigation surface lattice triangles: key_triangles={}, missing_key={}, candidates={}, "
+      "added={}, duplicate_vertex={}, edge_height={}, degenerate={}",
+      lattice_diagnostics.key_triangles,
+      lattice_diagnostics.missing_key,
+      lattice_diagnostics.candidate_triangles,
+      lattice_diagnostics.added,
+      lattice_diagnostics.duplicate_vertex,
+      lattice_diagnostics.edge_height,
+      lattice_diagnostics.degenerate);
 }
 
 }  // namespace pistoris::navigation::surface

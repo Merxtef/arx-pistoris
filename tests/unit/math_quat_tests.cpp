@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "utils/math/quat.h"
 
@@ -104,6 +104,27 @@ TEST_SUITE("math::quat") {
   TEST_CASE("RotationMatrixRoundtripPreservesQuaternion") {
     ArxQuat rotation = math::angleToQuat({-15.0f, 70.0f, 12.0f});
     checkSameRotation(math::rotationToQuat(math::quatToRotation(rotation)), rotation);
+  }
+
+  TEST_CASE("SlerpUsesShortestSphericalArc") {
+    const ArxQuat target = math::axisAngle(1.0f, 0.0f, 0.0f, 120.0f * math::kRadiansPerDegree);
+    const ArxQuat expected = math::axisAngle(1.0f, 0.0f, 0.0f, 30.0f * math::kRadiansPerDegree);
+    checkSameRotation(math::slerp(math::kIdentityQuat, target, 0.25f), expected);
+
+    const ArxQuat opposite_sign{-target.w, -target.x, -target.y, -target.z};
+    checkSameRotation(math::slerp(math::kIdentityQuat, opposite_sign, 0.25f), expected);
+    checkSameRotation(math::slerp(math::kIdentityQuat, target, 0.0f), math::kIdentityQuat);
+    checkSameRotation(math::slerp(math::kIdentityQuat, target, 1.0f), target);
+  }
+
+  TEST_CASE("SlerpRemainsStableForNearbyRotations") {
+    const ArxQuat target = math::axisAngle(0.0f, 1.0f, 0.0f, 0.001f * math::kRadiansPerDegree);
+    const ArxQuat result = math::slerp(math::kIdentityQuat, target, 0.5f);
+    CHECK(std::isfinite(result.w));
+    CHECK(std::isfinite(result.x));
+    CHECK(std::isfinite(result.y));
+    CHECK(std::isfinite(result.z));
+    CHECK(math::norm(result) == doctest::Approx(1.0f).epsilon(1.0e-6));
   }
 
   TEST_CASE("RotateAppliesQuaternion") {

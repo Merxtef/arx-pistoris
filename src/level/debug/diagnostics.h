@@ -3,9 +3,10 @@
 
 #pragma once
 
-#include "arx_pistoris/debug/level_diagnostics.hpp"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 
 #include "modules/lights.h"
+#include "modules/minimap.h"
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 
@@ -13,11 +14,11 @@
 
 namespace pistoris::level_debug::detail {
 
-inline AnchorGenDebugStatus convert(navigation::AnchorGenDebugStatus value) {
+inline AnchorGenDebugStatus convert(navigation::AnchorGenerationDebugStatus value) {
   switch (value) {
-    case navigation::AnchorGenDebugStatus::kRepaired:
+    case navigation::AnchorGenerationDebugStatus::kRepaired:
       return AnchorGenDebugStatus::kRepaired;
-    case navigation::AnchorGenDebugStatus::kRejected:
+    case navigation::AnchorGenerationDebugStatus::kRejected:
       return AnchorGenDebugStatus::kRejected;
   }
   return AnchorGenDebugStatus::kRejected;
@@ -79,7 +80,8 @@ inline AnchorConnectionTraversalAttemptDebugKind convert(navigation::AnchorConne
   return AnchorConnectionTraversalAttemptDebugKind::kStart;
 }
 
-inline void copyDiagnostics(const navigation::NavSurfaceGenDiagnostics& source, NavSurfaceGenDiagnostics& target) {
+inline void copyDiagnostics(const navigation::NavSurfaceGenerationDiagnostics& source,
+                            NavSurfaceGenDiagnostics& target) {
   const auto copy_triangles = [](const std::vector<navigation::SurfaceDebugTriangle>& from,
                                  std::vector<SurfaceDebugTriangle>& to) {
     to.resize(from.size());
@@ -95,7 +97,7 @@ inline void copyDiagnostics(const navigation::NavSurfacePruneDiagnostics& source
   for (std::size_t i = 0; i < source.pruned.size(); ++i) target.pruned[i].vertices = source.pruned[i].vertices;
 }
 
-inline void copyDiagnostics(const navigation::AnchorGenDiagnostics& source, AnchorGenDiagnostics& target) {
+inline void copyDiagnostics(const navigation::AnchorGenerationDiagnostics& source, AnchorGenDiagnostics& target) {
   target.points.resize(source.points.size());
   for (std::size_t i = 0; i < source.points.size(); ++i) {
     target.points[i] = {
@@ -111,7 +113,7 @@ inline void copyDiagnostics(const navigation::AnchorComponentPruneDiagnostics& s
   target.pruned = source.pruned;
 }
 
-inline void copyDiagnostics(const navigation::AnchorConnectionGenDiagnostics& source,
+inline void copyDiagnostics(const navigation::AnchorConnectionGenerationDiagnostics& source,
                             AnchorConnectionGenDiagnostics& target) {
   target.skipped_endpoints.resize(source.skipped_endpoints.size());
   for (std::size_t i = 0; i < source.skipped_endpoints.size(); ++i) {
@@ -155,7 +157,8 @@ inline RoomDistanceDebugPath convert(const rooms::RoomDistanceDebugPath& source)
   };
 }
 
-inline void copyDiagnostics(const rooms::RoomDistanceGenDiagnostics& source, RoomDistanceGenDiagnostics& target) {
+inline void copyDiagnostics(const rooms::RoomDistanceGenerationDiagnostics& source,
+                            RoomDistanceGenDiagnostics& target) {
   target.support_by_room.resize(source.support_by_room.size());
   for (std::size_t room = 0; room < source.support_by_room.size(); ++room) {
     target.support_by_room[room].resize(source.support_by_room[room].size());
@@ -195,13 +198,26 @@ inline void copyDiagnostics(const rooms::RoomDistanceGenDiagnostics& source, Roo
     target.room_pair_paths[i] = convert(source.room_pair_paths[i]);
 }
 
-inline void copyDiagnostics(const lights::StaticLightingDiagnostics& source, StaticLightingDiagnostics& target) {
+inline void copyDiagnostics(const lights::StaticLightingDiagnostics& source,
+                            StaticLightingDiagnostics& target) noexcept {
   target = {
       .generated_corners = source.generated_corners,
       .contributing_light_corners = source.contributing_light_corners,
       .skipped_lights = source.skipped_lights,
       .shadow_rays = source.shadow_rays,
       .occluded_shadow_rays = source.occluded_shadow_rays,
+  };
+}
+
+inline void copyDiagnostics(const minimap::GenerationDiagnostics& source,
+                            MinimapGenerationDiagnostics& target) noexcept {
+  target = {
+      .sampled_cells = source.sampled_cells,
+      .skipped_cells = source.skipped_cells,
+      .foreground_pixels = source.foreground_pixels,
+      .water_pixels = source.water_pixels,
+      .lava_pixels = source.lava_pixels,
+      .halo_pixels = source.halo_pixels,
   };
 }
 

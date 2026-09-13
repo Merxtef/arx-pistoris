@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/pistoris.hpp"
 
 #include "modules/geometry.h"
@@ -35,7 +35,8 @@ void captureLog(ArxLogLevel level, const char* message, void* userdata) {
   static_cast<LogCapture*>(userdata)->messages.emplace_back(message);
 }
 
-Face makeFace(VertexIndex a, VertexIndex b, VertexIndex c, const ArxVector3& normal = {0.0f, -1.0f, 0.0f}) {
+Face makeFace(GeometryData&, VertexIndex a, VertexIndex b, VertexIndex c,
+              const ArxVector3& normal = {0.0f, -1.0f, 0.0f}) {
   Face face;
   face.corners[0].vertex = a;
   face.corners[1].vertex = b;
@@ -51,8 +52,8 @@ void addFloor(GeometryData& geometry, RoomsData& rooms, RoomIndex room, float mi
   geometry.vertices.push_back({{max_x, 0.0f, min_z}});
   geometry.vertices.push_back({{max_x, 0.0f, max_z}});
   geometry.vertices.push_back({{min_x, 0.0f, max_z}});
-  geometry.faces.push_back(makeFace(base + 0, base + 1, base + 2));
-  geometry.faces.push_back(makeFace(base + 0, base + 2, base + 3));
+  geometry.faces.push_back(makeFace(geometry, base + 0, base + 1, base + 2));
+  geometry.faces.push_back(makeFace(geometry, base + 0, base + 2, base + 3));
   rooms.face_rooms.push_back(room);
   rooms.face_rooms.push_back(room);
 }
@@ -83,15 +84,15 @@ void addThreeRoomGeometry(GeometryData& geometry, RoomsData& rooms) {
 
 TEST_SUITE("rooms::distance_generation") {
   TEST_CASE("Validates effective room distance options") {
-    CHECK(rooms::validateRoomDistanceOptions({}));
+    CHECK(rooms::validRoomDistanceOptions({}));
 
     rooms::RoomDistanceOptions options;
     options.sample_spacing = 0.0f;
-    CHECK_FALSE(rooms::validateRoomDistanceOptions(options));
+    CHECK_FALSE(rooms::validRoomDistanceOptions(options));
 
     options = {};
     options.max_link_distance = 20.0f;
-    CHECK_FALSE(rooms::validateRoomDistanceOptions(options));
+    CHECK_FALSE(rooms::validRoomDistanceOptions(options));
   }
 
   TEST_CASE("Generates direct and indirect room distances") {
@@ -101,7 +102,7 @@ TEST_SUITE("rooms::distance_generation") {
     rooms.portals.push_back(makePortal("portal_1_2", 0, 1, 0.0f, 0.0f));
     rooms.portals.push_back(makePortal("portal_2_3", 1, 2, 80.0f, 0.0f));
     RoomDistances distances;
-    rooms::RoomDistanceGenDiagnostics diagnostics;
+    rooms::RoomDistanceGenerationDiagnostics diagnostics;
 
     CHECK(rooms::generateRoomDistances(distances, rooms, geometry, {}, &diagnostics) == rooms::Error::kNone);
 

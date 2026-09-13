@@ -18,13 +18,13 @@ namespace {
 class GenerateRoomDistancesModule final : public RouteModule {
  public:
   std::span<const char* const> keywords() const noexcept override {
-    static constexpr const char* kKeywords[] = {"--generate-room-distances"};
+    static constexpr const char* kKeywords[] = {"--gen-room-distances"};
     return kKeywords;
   }
 
   ModuleHelp help(const RouteDescriptor*) const noexcept override {
     return {HelpSection::kOptions,
-            "--generate-room-distances",
+            "--gen-room-distances",
             "Generate Level room-distance data from portals and static geometry."};
   }
 

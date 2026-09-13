@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include <optional>
 
@@ -26,8 +26,17 @@ inline ArxVector3 translation(const Mat4& m) { return {m(0, 3), m(1, 3), m(2, 3)
 
 ArxVector3 xformPoint(const Mat4& m, const ArxVector3& p);
 
-// 3x3 linear only; valid for direction vectors under rotation + uniform scale
+// 3x3 linear part only
 ArxVector3 xformDir(const Mat4& m, const ArxVector3& v);
+
+inline double linearDeterminant(const Mat4& m) {
+  return static_cast<double>(m(0, 0)) *
+             (static_cast<double>(m(1, 1)) * m(2, 2) - static_cast<double>(m(1, 2)) * m(2, 1)) -
+         static_cast<double>(m(0, 1)) *
+             (static_cast<double>(m(1, 0)) * m(2, 2) - static_cast<double>(m(1, 2)) * m(2, 0)) +
+         static_cast<double>(m(0, 2)) *
+             (static_cast<double>(m(1, 0)) * m(2, 1) - static_cast<double>(m(1, 1)) * m(2, 0));
+}
 
 // q must be unit
 Mat4 fromQuat(const ArxQuat& q);
@@ -35,10 +44,10 @@ Mat4 fromQuat(const ArxQuat& q);
 // T * R(quat) * S(diag); quat must be unit
 Mat4 fromTrs(const ArxVector3& t, const ArxQuat& r, const ArxVector3& s);
 
-// assumes bottom row [0,0,0,1]; nullopt if 3x3 is singular
+// assumes bottom row [0,0,0,1]; nullopt if singular, non-finite, or not representable as float
 std::optional<Mat4> inverseAffine(const Mat4& m);
 
-// equal-length, mutually orthogonal columns
+// finite equal-length, mutually orthogonal columns
 bool isRotationUniformScale(const Mat4& m, float tol = 1e-3f);
 
 }  // namespace pistoris::math

@@ -3,12 +3,13 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "utils/math/mat4.h"
 #include "utils/math/quat.h"
 
 #include <cmath>
+#include <limits>
 
 using namespace pistoris;
 using math::Mat4;
@@ -136,6 +137,16 @@ TEST_SUITE("math::mat4") {
     CHECK_FALSE(inv.has_value());
   }
 
+  TEST_CASE("InverseRejectsNonFiniteAndUnrepresentableResults") {
+    Mat4 non_finite = math::kIdentityMat4;
+    non_finite(0, 0) = std::numeric_limits<float>::infinity();
+    CHECK_FALSE(math::inverseAffine(non_finite).has_value());
+
+    Mat4 too_small = math::kIdentityMat4;
+    too_small(0, 0) = std::numeric_limits<float>::denorm_min();
+    CHECK_FALSE(math::inverseAffine(too_small).has_value());
+  }
+
   TEST_CASE("IsRotationUniformScaleAcceptsIdentity") { CHECK(math::isRotationUniformScale(math::kIdentityMat4)); }
 
   TEST_CASE("IsRotationUniformScaleAcceptsUniformScaledRotation") {
@@ -157,5 +168,24 @@ TEST_SUITE("math::mat4") {
     Mat4 m = math::kIdentityMat4;
     m(0, 1) = 0.5f;  // X column has a Y component -> not orthogonal
     CHECK_FALSE(math::isRotationUniformScale(m));
+  }
+
+  TEST_CASE("IsRotationUniformScaleRejectsNonFiniteValues") {
+    Mat4 infinite = math::kIdentityMat4;
+    infinite(0, 0) = std::numeric_limits<float>::infinity();
+    CHECK_FALSE(math::isRotationUniformScale(infinite));
+
+    Mat4 nan = math::kIdentityMat4;
+    nan(0, 3) = std::numeric_limits<float>::quiet_NaN();
+    CHECK_FALSE(math::isRotationUniformScale(nan));
+  }
+
+  TEST_CASE("ExtremeFiniteUniformScaleRemainsRepresentable") {
+    Mat4 m = math::kIdentityMat4;
+    m(0, 0) = std::numeric_limits<float>::max();
+    m(1, 1) = std::numeric_limits<float>::max();
+    m(2, 2) = std::numeric_limits<float>::max();
+    CHECK(math::isRotationUniformScale(m));
+    CHECK(math::inverseAffine(m).has_value());
   }
 }

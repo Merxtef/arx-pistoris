@@ -16,9 +16,6 @@ const Module& weldDegenerateFacesModule();
 
 const Module& dlfOnlyModule();
 const Module& noQuadReconstructionModule();
-const Module& skipTextureExportModule();
-const Module& outputTextureFolderModule();
-const Module& inputTextureFolderModule();
 const Module& ftsSceneDirectoryModule();
 const Module& signLevelModule();
 
@@ -57,9 +54,23 @@ const Module& lightGlobalFactorModule();
 const Module& lightNoNormalsModule();
 const Module& lightNoShadowsModule();
 
+const Module& generateMinimapModule();
+const Module& minimapBorderColorModule();
+const Module& minimapForegroundColorModule();
+const Module& minimapForegroundImageModule();
+const Module& minimapBackgroundColorModule();
+const Module& minimapBackgroundImageModule();
+const Module& minimapWaterColorModule();
+const Module& minimapWaterImageModule();
+const Module& minimapLavaColorModule();
+const Module& minimapLavaImageModule();
+const Module& minimapHaloColorModule();
+const Module& minimapHaloRadiusModule();
+
 const Module& debugCellsModule();
 const Module& debugNavigationModule();
 const Module& debugRoomDistancesModule();
+const Module& loadPreviewsModule();
 
 std::span<const ModuleRef> rootModules();
 

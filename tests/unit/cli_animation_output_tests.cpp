@@ -9,6 +9,7 @@
 #include "formats/format.h"
 #include "io/path_location.h"
 #include "resources/animation_output.h"
+#include "resources/layout.h"
 #include "resources/selector.h"
 
 #include <algorithm>
@@ -29,10 +30,23 @@ void setName(pistoris::tea::Data& tea, const char* name) {
 }  // namespace
 
 TEST_SUITE("CLI animation output") {
+  TEST_CASE("Native animation output identities borrow native strings") {
+    pistoris::tea::Data tea;
+    setName(tea, "walk");
+    const std::string resource_path = "graph/obj3d/anims/npc/walk.tea";
+
+    const cli::AnimationOutputIdentity identity = cli::nativeAnimationOutputIdentity(tea, resource_path);
+    CHECK(identity.name.compare("walk") == 0);
+    CHECK(identity.name.data() == tea.name);
+    CHECK(identity.resource_path.compare(resource_path) == 0);
+    CHECK(identity.resource_path.data() == resource_path.data());
+  }
+
   TEST_CASE("Unnamed native animations derive numbered fallback paths") {
     const std::vector<pistoris::tea::Data> teas(3);
     cli::OutputTarget base;
     base.path = "exports/provided.tea";
+    base.layout = cli::ResourceLayout::kLoose;
 
     std::vector<cli::OutputTarget> targets;
     std::string error;
@@ -41,6 +55,7 @@ TEST_SUITE("CLI animation output") {
     CHECK(targets[0].path == "exports/provided.tea");
     CHECK(targets[1].path == "exports/provided2.tea");
     CHECK(targets[2].path == "exports/provided3.tea");
+    CHECK(targets[0].layout == cli::ResourceLayout::kLoose);
   }
 
   TEST_CASE("Native animation targets disambiguate duplicate internal names case insensitively") {
@@ -111,7 +126,9 @@ TEST_SUITE("CLI animation output") {
     base.format = cli::Format::kJson;
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildAnimationTargets(teas, base, {}, cli::Format::kJson, std::span(&base, 1), targets, error));
+    const std::string_view reserved_path = base.path;
+    REQUIRE(
+        cli::buildAnimationTargets(teas, base, {}, cli::Format::kJson, std::span(&reserved_path, 1), targets, error));
     REQUIRE(targets.size() == 1);
     CHECK(targets[0].path == "exports/model2.json");
   }
@@ -122,6 +139,7 @@ TEST_SUITE("CLI animation output") {
 
     cli::OutputTarget base;
     base.path = "graph/obj3d/anims/npc/provided.tea";
+    base.layout = cli::ResourceLayout::kGame;
     base.selector.kind = ARX_RESOURCE_KIND_ANIMATION;
     base.selector.name = "provided";
     std::vector<cli::OutputTarget> targets;
@@ -130,5 +148,36 @@ TEST_SUITE("CLI animation output") {
     REQUIRE(targets.size() == 1);
     CHECK(targets[0].path == "graph/obj3d/anims/npc/Walk.tea");
     CHECK(targets[0].address == cli::OutputAddress::kMountRelative);
+    CHECK(targets[0].layout == cli::ResourceLayout::kGame);
+  }
+
+  TEST_CASE("Game animation targets preserve explicit resource paths") {
+    const std::vector<cli::AnimationOutputIdentity> animations = {
+        {"generated", {}},
+        {"explicit", "GRAPH/OBJ3D/ANIMS/NPC/Walk.TEA"},
+    };
+    std::vector<cli::OutputTarget> targets;
+    std::string error;
+    REQUIRE(cli::buildGameAnimationTargets(animations, "npc", {}, targets, error));
+    REQUIRE(targets.size() == 2);
+    CHECK(targets[0].path == "graph/obj3d/anims/npc/generated.tea");
+    CHECK(targets[1].path == "graph/obj3d/anims/npc/Walk.tea");
+    CHECK(targets[0].address == cli::OutputAddress::kMountRelative);
+    CHECK(targets[1].address == cli::OutputAddress::kMountRelative);
+    CHECK(targets[0].layout == cli::ResourceLayout::kGame);
+    CHECK(targets[1].layout == cli::ResourceLayout::kGame);
+  }
+
+  TEST_CASE("Explicit game animation identities win collisions with inferred paths") {
+    const std::vector<cli::AnimationOutputIdentity> animations = {
+        {"walk", {}},
+        {"different internal name", "graph/obj3d/anims/npc/walk.tea"},
+    };
+    std::vector<cli::OutputTarget> targets;
+    std::string error;
+    REQUIRE(cli::buildGameAnimationTargets(animations, "npc", {}, targets, error));
+    REQUIRE(targets.size() == 2);
+    CHECK(targets[0].path == "graph/obj3d/anims/npc/walk2.tea");
+    CHECK(targets[1].path == "graph/obj3d/anims/npc/walk.tea");
   }
 }

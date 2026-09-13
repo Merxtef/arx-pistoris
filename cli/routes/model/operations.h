@@ -3,14 +3,12 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris.hpp"
-
 #include "conversion/options.h"
 #include "routes/model/options.h"
 #include "routes/model/state.h"
 
-namespace cli::model {
+namespace cli::model::operations {
 
-bool applyModules(Context& ctx, const ModelOptions& options, const SharedConversionOptions& conversion);
+bool apply(IntermediateModel& model, const ModelOptions& options, const SharedConversionOptions& conversion);
 
-}  // namespace cli::model
+}  // namespace cli::model::operations

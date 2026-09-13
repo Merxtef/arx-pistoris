@@ -1,126 +1,187 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "modules/scene.h"
-#include "utils/unique_name.h"
+#include "arx_pistoris/base/indices.h"
 
+#include "modules/scene.h"
+#include "utils/identifier.h"
+#include "utils/path.h"
+
+#include <cassert>
 #include <cstddef>
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace pistoris::scene {
 namespace {
 
-char lowerAscii(char value) noexcept {
-  return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
-}
-
-std::string nameKey(std::string_view name, bool ascii_insensitive) {
-  std::string key(name);
-  if (ascii_insensitive) {
-    for (char& value : key) value = lowerAscii(value);
-  }
-  return key;
-}
-
-std::string uniqueName(std::string_view requested, const std::unordered_set<std::string>& unavailable,
-                       bool ascii_insensitive) {
-  if (!unavailable.contains(nameKey(requested, ascii_insensitive))) return std::string(requested);
-
-  std::string prefix(requested);
-  if (!prefix.ends_with('_')) prefix.push_back('_');
-  for (std::size_t suffix = 1;; ++suffix) {
-    std::string candidate = prefix + std::to_string(suffix);
-    if (!unavailable.contains(nameKey(candidate, ascii_insensitive))) return candidate;
-  }
+template <class Value>
+std::size_t repairNames(std::span<Value> values, IdentifierPolicy policy, bool preserve_empty = false) {
+  IdentifierUniquifier names(policy);
+  names.reserve(values.size());
+  for (Value& value : values)
+    if (!preserve_empty || !value.name.empty()) names.add(value.name);
+  const IdentifierRepairSummary summary = names.apply();
+  assert(!summary.exhausted);
+  return summary.changed;
 }
 
 template <class Value>
-std::size_t makeNamesUnique(std::span<Value> values, bool ascii_insensitive, bool ignore_empty = false) {
-  std::unordered_set<std::string> unavailable;
-  unavailable.reserve(values.size());
-  for (const Value& value : values) {
-    if (!ignore_empty || !value.name.empty()) unavailable.insert(nameKey(value.name, ascii_insensitive));
+void repairName(const std::vector<Value>& existing, Value& candidate, std::size_t ignored, IdentifierPolicy policy,
+                bool preserve_empty = false) {
+  if (preserve_empty && candidate.name.empty()) return;
+  IdentifierUniquifier names(policy);
+  names.reserve(1, existing.size());
+  for (std::size_t index = 0; index < existing.size(); ++index) {
+    if (index == ignored || (preserve_empty && existing[index].name.empty())) continue;
+    names.occupy(existing[index].name);
   }
-
-  std::unordered_set<std::string> assigned;
-  assigned.reserve(values.size());
-  std::size_t renamed = 0;
-  for (Value& value : values) {
-    if (ignore_empty && value.name.empty()) continue;
-    const std::string key = nameKey(value.name, ascii_insensitive);
-    if (assigned.insert(key).second) continue;
-    value.name = uniqueName(value.name, unavailable, ascii_insensitive);
-    const std::string unique_key = nameKey(value.name, ascii_insensitive);
-    unavailable.insert(unique_key);
-    assigned.insert(unique_key);
-    ++renamed;
-  }
-  return renamed;
+  names.add(candidate.name);
+  [[maybe_unused]] const IdentifierRepairSummary summary = names.apply();
+  assert(!summary.exhausted);
 }
 
 std::string entityNameCandidate(const Entity& entity) {
   if (!entity.name.empty()) return entity.name;
 
-  std::string_view name = entity.class_path;
-  const std::size_t separator = name.find_last_of("/\\");
-  if (separator != std::string_view::npos) name.remove_prefix(separator + 1);
+  std::string_view name = pathFilename(entity.class_path);
   constexpr std::string_view kBaseSuffix = "_base";
   if (name.size() > kBaseSuffix.size() && name.ends_with(kBaseSuffix)) name.remove_suffix(kBaseSuffix.size());
   return std::string(name);
 }
 
-void makeEntityNameUniqueImpl(Entity& entity, std::span<const Entity> entities, std::size_t ignored_index) {
-  std::unordered_set<std::string> unavailable;
-  unavailable.reserve(entities.size());
+void repairEntityNameImpl(Entity& entity, std::span<const Entity> entities, std::size_t ignored_index) {
+  IdentifierUniquifier names;
+  names.reserve(1, entities.size());
   for (std::size_t i = 0; i < entities.size(); ++i) {
-    if (i != ignored_index) unavailable.insert(entityNameCandidate(entities[i]));
+    if (i != ignored_index) names.occupy(entityNameCandidate(entities[i]));
   }
-  entity.name = makeUniqueName(entityNameCandidate(entity), unavailable);
+  std::string candidate = entityNameCandidate(entity);
+  names.add(candidate);
+  [[maybe_unused]] const IdentifierRepairSummary summary = names.apply();
+  assert(!summary.exhausted);
+  entity.name = std::move(candidate);
 }
 
 }  // namespace
 
-void makeEntityNameUnique(Entity& entity, std::span<const Entity> entities) {
-  makeEntityNameUniqueImpl(entity, entities, entities.size());
+void setPlayerSpawn(SceneData& scene, PlayerSpawn player_spawn) noexcept { scene.player_spawn = player_spawn; }
+
+void clearPlayerSpawn(SceneData& scene) noexcept { scene.player_spawn.reset(); }
+
+void repairEntityName(const SceneData& scene, Entity& entity, EntityIndex ignored) {
+  repairEntityNameImpl(entity, scene.entities, ignored);
 }
 
-void makeEntityNameUnique(Entity& entity, std::span<const Entity> entities, std::size_t ignored_index) {
-  makeEntityNameUniqueImpl(entity, entities, ignored_index);
+void setEntity(SceneData& scene, EntityIndex index, Entity entity) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.entities.size());
+  scene.entities[index] = std::move(entity);
 }
 
-void makeEntityNamesUnique(std::span<Entity> entities) {
+EntityIndex addEntity(SceneData& scene, Entity entity) {
+  assert(scene.entities.size() < static_cast<std::size_t>(kInvalidEntityIndex));
+  const EntityIndex index = static_cast<EntityIndex>(scene.entities.size());
+  scene.entities.push_back(std::move(entity));
+  return index;
+}
+
+void removeEntity(SceneData& scene, EntityIndex index) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.entities.size());
+  scene.entities.erase(scene.entities.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+std::size_t repairEntityNames(std::span<Entity> entities) {
   std::vector<std::string> candidates;
   candidates.reserve(entities.size());
-  std::unordered_set<std::string> unavailable;
-  unavailable.reserve(entities.size());
-  for (const Entity& entity : entities) {
-    candidates.push_back(entityNameCandidate(entity));
-    unavailable.insert(candidates.back());
-  }
+  for (const Entity& entity : entities) candidates.push_back(entityNameCandidate(entity));
 
-  std::unordered_set<std::string> assigned;
-  assigned.reserve(entities.size());
-  for (std::size_t i = 0; i < entities.size(); ++i) {
-    std::string& candidate = candidates[i];
-    if (assigned.insert(candidate).second) {
-      entities[i].name = std::move(candidate);
-      continue;
-    }
-    entities[i].name = makeUniqueName(candidate, unavailable);
-    unavailable.insert(entities[i].name);
-    assigned.insert(entities[i].name);
+  IdentifierUniquifier names;
+  names.reserve(entities.size());
+  for (std::string& candidate : candidates) names.add(candidate);
+  [[maybe_unused]] const IdentifierRepairSummary summary = names.apply();
+  assert(!summary.exhausted);
+  std::size_t changed = 0;
+  for (std::size_t index = 0; index < entities.size(); ++index) {
+    changed += static_cast<std::size_t>(entities[index].name != candidates[index]);
+    entities[index].name = std::move(candidates[index]);
   }
+  return changed;
 }
 
-std::size_t makeFogNamesUnique(std::span<Fog> fogs) { return makeNamesUnique(fogs, false, true); }
+void repairFogName(const SceneData& scene, Fog& fog, FogIndex ignored) {
+  repairName(scene.fogs, fog, ignored, {.allow_empty = true}, true);
+}
 
-std::size_t makeZoneNamesUnique(std::span<Zone> zones) { return makeNamesUnique(zones, true); }
+std::size_t repairFogNames(std::span<Fog> fogs) { return repairNames(fogs, {.allow_empty = true}, true); }
 
-std::size_t makePathNamesUnique(std::span<Path> paths) { return makeNamesUnique(paths, true); }
+void setFog(SceneData& scene, FogIndex index, Fog fog) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.fogs.size());
+  scene.fogs[index] = std::move(fog);
+}
+
+FogIndex addFog(SceneData& scene, Fog fog) {
+  assert(scene.fogs.size() < static_cast<std::size_t>(kInvalidFogIndex));
+  const FogIndex index = static_cast<FogIndex>(scene.fogs.size());
+  scene.fogs.push_back(std::move(fog));
+  return index;
+}
+
+void removeFog(SceneData& scene, FogIndex index) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.fogs.size());
+  scene.fogs.erase(scene.fogs.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+void repairZoneName(const SceneData& scene, Zone& zone, ZoneIndex ignored) {
+  repairName(scene.zones, zone, ignored, {.letter_case = IdentifierCase::kLower});
+}
+
+std::size_t repairZoneNames(std::span<Zone> zones) {
+  return repairNames(zones, {.letter_case = IdentifierCase::kLower});
+}
+
+void setZone(SceneData& scene, ZoneIndex index, Zone zone) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.zones.size());
+  scene.zones[index] = std::move(zone);
+}
+
+ZoneIndex addZone(SceneData& scene, Zone zone) {
+  assert(scene.zones.size() < static_cast<std::size_t>(kInvalidZoneIndex));
+  const ZoneIndex index = static_cast<ZoneIndex>(scene.zones.size());
+  scene.zones.push_back(std::move(zone));
+  return index;
+}
+
+void removeZone(SceneData& scene, ZoneIndex index) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.zones.size());
+  scene.zones.erase(scene.zones.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+void repairPathName(const SceneData& scene, Path& path, PathIndex ignored) {
+  repairName(scene.paths, path, ignored, {.letter_case = IdentifierCase::kLower});
+}
+
+std::size_t repairPathNames(std::span<Path> paths) {
+  return repairNames(paths, {.letter_case = IdentifierCase::kLower});
+}
+
+void setPath(SceneData& scene, PathIndex index, Path path) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.paths.size());
+  scene.paths[index] = std::move(path);
+}
+
+PathIndex addPath(SceneData& scene, Path path) {
+  assert(scene.paths.size() < static_cast<std::size_t>(kInvalidPathIndex));
+  const PathIndex index = static_cast<PathIndex>(scene.paths.size());
+  scene.paths.push_back(std::move(path));
+  return index;
+}
+
+void removePath(SceneData& scene, PathIndex index) noexcept {
+  assert(static_cast<std::size_t>(index) < scene.paths.size());
+  scene.paths.erase(scene.paths.begin() + static_cast<std::ptrdiff_t>(index));
+}
 
 }  // namespace pistoris::scene

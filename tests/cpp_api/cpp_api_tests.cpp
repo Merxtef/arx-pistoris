@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/level/types.h"
 #include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/texture.h"
 
 #include <utility>
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -18,24 +19,16 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 TEST_SUITE("cpp_api") {
-  auto make_tri_data = [] {
-    pistoris::Ftl ftl = makeData(3);
-    ftl.vertices[0].position = {0.0f, 0.0f, 0.0f};
-    ftl.vertices[1].position = {1.0f, 0.0f, 0.0f};
-    ftl.vertices[2].position = {0.0f, 1.0f, 0.0f};
-    ftl.faces.push_back(makeFace(0, 1, 2));
-    return ftl;
-  };
-
   TEST_CASE("Metadata") {
     CHECK(pistoris::version() != nullptr);
     CHECK(std::string_view(pistoris::version()).size() > 0);
-    CHECK(pistoris::buildTimeString() != nullptr);
-    CHECK(std::string_view(pistoris::buildTimeString()).size() > 0);
+    CHECK(pistoris::buildTime() != nullptr);
+    CHECK(std::string_view(pistoris::buildTime()).size() > 0);
     CHECK(pistoris::errorString(ARX_OK) != nullptr);
     CHECK(std::string_view(pistoris::errorString(ARX_OK)) == "ok");
   }
@@ -185,12 +178,12 @@ TEST_SUITE("cpp_api") {
     CHECK(llf_bytes[kLastUserOffset + utf8_expected.size()] == 0);
 
     std::string dlf_json;
-    REQUIRE(pistoris::exportJson(dlf, dlf_json, false, "editor") == ARX_OK);
+    REQUIRE(pistoris::toJson(dlf, dlf_json, false, "editor") == ARX_OK);
     CHECK(dlf_json.find("\"lastModifiedBy\":\"arx-pistoris/editor\"") != std::string::npos);
     CHECK(dlf_json.find("\"lastModifiedAt\":0") == std::string::npos);
 
     std::string llf_json;
-    REQUIRE(pistoris::exportJson(llf, llf_json, false, "editor") == ARX_OK);
+    REQUIRE(pistoris::toJson(llf, llf_json, false, "editor") == ARX_OK);
     CHECK(llf_json.find("\"lastModifiedBy\":\"arx-pistoris/editor\"") != std::string::npos);
     CHECK(llf_json.find("\"lastModifiedAt\":0") == std::string::npos);
   }
@@ -267,11 +260,11 @@ TEST_SUITE("cpp_api") {
     REQUIRE(pistoris::readFtl(makeTriangleFtlWithTexture(), ftl) == ARX_OK);
 
     std::string json;
-    REQUIRE(pistoris::exportJson(ftl, json, true) == ARX_OK);
+    REQUIRE(pistoris::toJson(ftl, json, true) == ARX_OK);
     CHECK(json.find("\"vertices\"") != std::string::npos);
 
     pistoris::Ftl imported;
-    CHECK(pistoris::importJson(json, imported) == ARX_OK);
+    CHECK(pistoris::fromJson(json, imported) == ARX_OK);
     CHECK(!imported.vertices.empty());
   }
 
@@ -280,12 +273,12 @@ TEST_SUITE("cpp_api") {
     REQUIRE(pistoris::readTea(makeKeyframeTea(), tea) == ARX_OK);
 
     std::string json;
-    REQUIRE(pistoris::exportJson(tea, json, true) == ARX_OK);
+    REQUIRE(pistoris::toJson(tea, json, true) == ARX_OK);
     CHECK(json.find("\"keyframes\"") != std::string::npos);
     CHECK(json.find("\"totalNumberOfFrames\"") != std::string::npos);
 
     pistoris::Tea imported;
-    CHECK(pistoris::importJson(json, imported) == ARX_OK);
+    CHECK(pistoris::fromJson(json, imported) == ARX_OK);
     CHECK(!imported.keyframes.empty());
   }
 
@@ -297,24 +290,24 @@ TEST_SUITE("cpp_api") {
     fts.cells.resize(160 * 160);
 
     std::string fts_json;
-    REQUIRE(pistoris::exportJson(fts, fts_json, true) == ARX_OK);
+    REQUIRE(pistoris::toJson(fts, fts_json, true) == ARX_OK);
     CHECK(fts_json.find("https://arx-tools.github.io/schemas/fts.schema.json") != std::string::npos);
     CHECK(fts_json.find("\"levelIdx\": 7") != std::string::npos);
 
     fts.scene.sizex = 1;
     fts.cells.resize(160);
-    CHECK(pistoris::exportJson(fts, fts_json, true) == ARX_JSON_BAD_SCHEMA);
+    CHECK(pistoris::toJson(fts, fts_json, true) == ARX_JSON_BAD_SCHEMA);
     fts.scene.sizex = 160;
     fts.cells.resize(160 * 160);
 
     std::memset(fts.header.path, 0, sizeof(fts.header.path));
     std::memcpy(fts.header.path, "custom/fast.fts", sizeof("custom/fast.fts"));
-    CHECK(pistoris::exportJson(fts, fts_json, true) == ARX_JSON_BAD_SCHEMA);
+    CHECK(pistoris::toJson(fts, fts_json, true) == ARX_JSON_BAD_SCHEMA);
     std::memset(fts.header.path, 0, sizeof(fts.header.path));
     std::memcpy(fts.header.path, "game/graph/levels/level7/fast.fts", sizeof("game/graph/levels/level7/fast.fts"));
 
     pistoris::Fts imported_fts;
-    REQUIRE(pistoris::importJson(fts_json, imported_fts) == ARX_OK);
+    REQUIRE(pistoris::fromJson(fts_json, imported_fts) == ARX_OK);
     CHECK(imported_fts.cells.size() == 160 * 160);
     REQUIRE(imported_fts.cells[0].polygons.size() == 1);
     CHECK(imported_fts.cells[0].polygons[0].room == 1);
@@ -334,13 +327,13 @@ TEST_SUITE("cpp_api") {
     unchanged_zone.height = 5;
     dlf.zones.push_back(std::move(unchanged_zone));
     std::string dlf_json;
-    REQUIRE(pistoris::exportJson(dlf, dlf_json, true) == ARX_OK);
+    REQUIRE(pistoris::toJson(dlf, dlf_json, true) == ARX_OK);
     CHECK(dlf_json.find("https://arx-tools.github.io/schemas/dlf.schema.json") != std::string::npos);
     dlf.scene_path = "custom/scene";
-    CHECK(pistoris::exportJson(dlf, dlf_json, true) == ARX_JSON_BAD_SCHEMA);
+    CHECK(pistoris::toJson(dlf, dlf_json, true) == ARX_JSON_BAD_SCHEMA);
     dlf.scene_path = "graph/levels/level7/";
     pistoris::Dlf imported_dlf;
-    REQUIRE(pistoris::importJson(dlf_json, imported_dlf) == ARX_OK);
+    REQUIRE(pistoris::fromJson(dlf_json, imported_dlf) == ARX_OK);
     REQUIRE(imported_dlf.entities.size() == 1);
     CHECK(imported_dlf.entities[0].class_path == dlf.entities[0].class_path);
     REQUIRE(imported_dlf.zones.size() == 2);
@@ -358,55 +351,68 @@ TEST_SUITE("cpp_api") {
     llf.lights.push_back(light);
     llf.colors.push_back({0.5f, 0.5f, 0.5f});
     std::string llf_json;
-    REQUIRE(pistoris::exportJson(llf, llf_json, true) == ARX_OK);
+    REQUIRE(pistoris::toJson(llf, llf_json, true) == ARX_OK);
     CHECK(llf_json.find("https://arx-tools.github.io/schemas/llf.schema.json") != std::string::npos);
     pistoris::Llf imported_llf;
-    REQUIRE(pistoris::importJson(llf_json, imported_llf) == ARX_OK);
+    REQUIRE(pistoris::fromJson(llf_json, imported_llf) == ARX_OK);
     CHECK(imported_llf.lights.size() == 1);
     CHECK(imported_llf.colors.size() == 1);
-  }
-
-  TEST_CASE("ObjRoundtrip") {
-    pistoris::Ftl ftl;
-    REQUIRE(pistoris::readFtl(makeTriangleFtlWithTexture(), ftl) == ARX_OK);
-
-    pistoris::Obj obj;
-    REQUIRE(pistoris::exportObj(ftl, "test", obj) == ARX_OK);
-    CHECK(obj.text.find("v ") != std::string::npos);
-    CHECK(obj.mtl.find("newmtl") != std::string::npos);
-
-    pistoris::Ftl imported;
-    CHECK(pistoris::importObj(obj, "test.obj", imported) == ARX_OK);
-    CHECK(!imported.vertices.empty());
-    CHECK(!imported.faces.empty());
-  }
-
-  TEST_CASE("GlbRoundtrip") {
-    pistoris::Ftl ftl = make_tri_data();
-
-    std::vector<std::uint8_t> glb;
-    REQUIRE(pistoris::exportGlb(ftl, {}, glb) == ARX_OK);
-    CHECK(glb.size() > 12);
-
-    pistoris::Ftl imported;
-    std::vector<pistoris::Tea> teas;
-    CHECK(pistoris::importGlb(glb, "test.glb", imported, teas) == ARX_OK);
-    CHECK(!imported.vertices.empty());
-    CHECK(teas.empty());
   }
 
   TEST_CASE("FtsLevelGlbRoundtrip") {
     pistoris::Fts fts = makeTriangleFtsData();
 
     pistoris::Level level;
-    REQUIRE(pistoris::Level::fromNative(level, fts) == ARX_OK);
+    REQUIRE(pistoris::Level::importNative(level, fts) == ARX_OK);
     std::vector<std::uint8_t> glb;
     REQUIRE(level.exportGlb(glb) == ARX_OK);
     CHECK(glb.size() > 12);
 
     pistoris::Level imported;
-    CHECK(pistoris::Level::fromGlb(imported, glb) == ARX_OK);
+    CHECK(pistoris::Level::importGlb(imported, glb) == ARX_OK);
     CHECK(imported.validate() == ARX_OK);
+  }
+
+  TEST_CASE("Failed Level GLB conversions preserve result information") {
+    pistoris::Level level;
+    pistoris::Level::GlbImportOptions options;
+    ArxLevelGlbImportInfo info{{1.0f, 2.0f, 3.0f}};
+    const std::vector<std::uint8_t> invalid;
+
+    CHECK(pistoris::Level::importGlb(level, invalid, options, &info) != ARX_OK);
+    CHECK(info.applied_arx_offset.x == 1.0f);
+    CHECK(info.applied_arx_offset.y == 2.0f);
+    CHECK(info.applied_arx_offset.z == 3.0f);
+
+    ArxLevelModelPreviewReport report{1, 2, 3, 4, 5, 6};
+    std::vector<std::uint8_t> encoded;
+    const std::span<const pistoris::Model* const> no_previews;
+    CHECK(level.exportGlb(encoded, no_previews, &report) != ARX_OK);
+    CHECK(report.mapped_models == 1);
+    CHECK(report.previewed_entities == 2);
+    CHECK(report.skipped_anonymous_models == 3);
+    CHECK(report.skipped_unmappable_models == 4);
+    CHECK(report.skipped_duplicate_models == 5);
+    CHECK(report.skipped_invalid_models == 6);
+  }
+
+  TEST_CASE("Returns the first raw FTS texture path for each normalized Level texture") {
+    pistoris::Fts fts = makeTriangleFtsData();
+    pistoris::fts::Texture first{};
+    std::memcpy(first.fic, "GRAPH\\OBJ3D\\TEXTURES\\WALL.BMP", sizeof("GRAPH\\OBJ3D\\TEXTURES\\WALL.BMP"));
+    pistoris::fts::Texture second{};
+    std::memcpy(second.fic, "graph/obj3d/textures/wall.tga", sizeof("graph/obj3d/textures/wall.tga"));
+    fts.textures.emplace(1, first);
+    fts.textures.emplace(2, second);
+    fts.scene.num_textures = 2;
+    fts.cells[0].polygons[0].tex = 1;
+
+    pistoris::Level level;
+    std::vector<std::string> sources;
+    REQUIRE(pistoris::Level::importNative(level, fts, nullptr, nullptr, &sources) == ARX_OK);
+    CHECK(level.textureCount() == 1);
+    REQUIRE(sources.size() == 1);
+    CHECK(sources[0] == "GRAPH\\OBJ3D\\TEXTURES\\WALL.BMP");
   }
 
   TEST_CASE("Level public values preserve semantic defaults") {
@@ -417,6 +423,13 @@ TEST_SUITE("cpp_api") {
     CHECK(ArxLevelLight{}.fallend == 1.0f);
     CHECK(ArxLevelEntity{}.ident == -1);
     CHECK(ArxLevelZoneAmbiance{}.volume == 100.0f);
+  }
+
+  TEST_CASE("Level exposes canonical resource identity") {
+    pistoris::Level level;
+    REQUIRE(level.setResourcePath("level:3") == ARX_OK);
+    CHECK((level.resourcePath() == "graph/levels/level3/level3.dlf"));
+    CHECK(level.setResourcePath("model:npc:human_base") == ARX_LEVEL_BAD_RESOURCE_PATH);
   }
 
   TEST_CASE("Level generation convenience overloads preserve explicit defaults") {
@@ -467,6 +480,12 @@ TEST_SUITE("cpp_api") {
       CHECK(defaults.generateStaticLighting() ==
             explicit_options.generateStaticLighting(pistoris::Level::StaticLightingGenOptions{}));
     }
+    SUBCASE("minimap") {
+      pistoris::Level defaults;
+      pistoris::Level explicit_options;
+      CHECK(defaults.generateMinimap() ==
+            explicit_options.generateMinimap(pistoris::Level::MinimapGenerationOptions{}));
+    }
   }
 
   TEST_CASE("Level editing accepts its borrowed texture image") {
@@ -489,7 +508,7 @@ TEST_SUITE("cpp_api") {
 
     const std::vector<std::uint8_t> image = makeTestBmp();
     const char texture_path[] = "graph/obj3d/textures/test.bmp";
-    const ArxLevelTextureView texture = {
+    const ArxTextureView texture = {
         {texture_path, sizeof(texture_path) - 1},
         {image.data(), image.size()},
     };
@@ -503,11 +522,11 @@ TEST_SUITE("cpp_api") {
     };
     REQUIRE(level.replaceMesh(mesh) == ARX_OK);
 
-    ArxLevelTextureView borrowed{};
+    ArxTextureView borrowed{};
     REQUIRE(level.copyTextureViews(0, 1, &borrowed) == ARX_OK);
     REQUIRE(level.setTextureImage(0, borrowed.encoded_image) == ARX_OK);
 
-    ArxLevelTextureView copied{};
+    ArxTextureView copied{};
     REQUIRE(level.copyTextureViews(0, 1, &copied) == ARX_OK);
     REQUIRE(copied.encoded_image.size == image.size());
     CHECK(std::memcmp(copied.encoded_image.data, image.data(), image.size()) == 0);
@@ -516,7 +535,7 @@ TEST_SUITE("cpp_api") {
   TEST_CASE("LevelConversionAndDebugExport") {
     pistoris::Fts fts = makeTriangleFtsData();
     pistoris::Level level;
-    REQUIRE(pistoris::Level::fromNative(level, fts) == ARX_OK);
+    REQUIRE(pistoris::Level::importNative(level, fts) == ARX_OK);
 
     std::vector<std::uint8_t> navigation_glb;
     REQUIRE(pistoris::level_debug::exportNavigationDebugGlb(level, navigation_glb) == ARX_OK);
@@ -541,30 +560,19 @@ TEST_SUITE("cpp_api") {
     pistoris::Fts invalid_fts = makeMinimalFtsData();
     invalid_fts.scene.sizex = 0;
     pistoris::Level unchanged_level;
-    REQUIRE(pistoris::Level::fromNative(unchanged_level, fts) == ARX_OK);
+    REQUIRE(pistoris::Level::importNative(unchanged_level, fts) == ARX_OK);
     std::vector<std::uint8_t> before;
     REQUIRE(unchanged_level.exportGlb(before) == ARX_OK);
-    CHECK(pistoris::Level::fromNative(unchanged_level, invalid_fts) != ARX_OK);
+    CHECK(pistoris::Level::importNative(unchanged_level, invalid_fts) != ARX_OK);
     std::vector<std::uint8_t> after;
     REQUIRE(unchanged_level.exportGlb(after) == ARX_OK);
     CHECK(after == before);
   }
 
-  TEST_CASE("Utilities") {
-    pistoris::Ftl ftl;
-    REQUIRE(pistoris::readFtl(makeMinimalFtl(), ftl) == ARX_OK);
-
-    CHECK(pistoris::overwriteTexturePaths(ftl, "GRAPH\\NEW.BMP") == ARX_OK);
-
-    pistoris::AffineXform identity = pistoris::makeAffineXform(0, 0, 0, 1, 1, 1, 0, 0, 0);
-    CHECK(pistoris::applyTransform(ftl, identity) == ARX_OK);
-    CHECK(pistoris::validate(ftl) == ARX_OK);
-  }
-
   TEST_CASE("ResourcePathUtilities") {
     static_assert(sizeof(ArxResourceKind) == 1);
-    CHECK(pistoris::paths::resourceShorthandKind("model:npc:hero") == ARX_RESOURCE_KIND_MODEL);
-    CHECK(pistoris::paths::resourceShorthandKind("hero.ftl") == ARX_RESOURCE_KIND_NONE);
+    CHECK(pistoris::paths::resourceSelectorKind("model:npc:hero") == ARX_RESOURCE_KIND_MODEL);
+    CHECK(pistoris::paths::resourceSelectorKind("hero.ftl") == ARX_RESOURCE_KIND_NONE);
 
     CHECK(pistoris::paths::levelDlf(3) == "graph/levels/level3/level3.dlf");
     CHECK(pistoris::paths::isPortableFilename("new_texture.png"));
@@ -572,6 +580,11 @@ TEST_SUITE("cpp_api") {
     CHECK_FALSE(pistoris::paths::isPortableFilename("new__texture.png"));
     CHECK(pistoris::paths::sanitizePortableFilename("wall_[metal].png") == "wall_[metal].png");
     CHECK(pistoris::paths::sanitizePortableFilename("new??__texture.png") == "new_texture.png");
+    CHECK(pistoris::paths::isPortableResourcePathComponent("My texture_(stone)&[wet]__01.png"));
+    CHECK_FALSE(pistoris::paths::isPortableResourcePathComponent("my#texture.png"));
+    CHECK(pistoris::paths::textureDirectory() == "graph/obj3d/textures");
+    CHECK(pistoris::paths::soundDirectory() == "sfx");
+    CHECK(pistoris::paths::ambianceSoundDirectory() == "sfx/ambiance");
 
     std::string path;
     REQUIRE(pistoris::paths::modelFtl({.type = "npc", .name = "hero"}, path));
@@ -582,8 +595,22 @@ TEST_SUITE("cpp_api") {
     CHECK(model.name == "hero");
     REQUIRE(pistoris::paths::entityClassFromModel(model, path));
     CHECK(path == "graph/obj3d/interactive/npc/hero/hero");
+    REQUIRE(pistoris::paths::baseEntityClassFromModel({.type = "npc", .name = "hero", .tweak = "red"}, path));
+    CHECK(path == "graph/obj3d/interactive/npc/hero/hero");
+    ArxEntityClassKind class_kind = ARX_ENTITY_CLASS_KIND_UNKNOWN;
+    REQUIRE(pistoris::paths::entityClassKind(path, class_kind));
+    CHECK(class_kind == ARX_ENTITY_CLASS_KIND_NPC);
+    std::string icon_path;
+    REQUIRE(pistoris::paths::itemIconFromEntityClass(path, icon_path));
+    CHECK(icon_path.empty());
     REQUIRE(pistoris::paths::modelFromEntityClass(path, model));
-    REQUIRE(pistoris::paths::modelShorthand(model, path));
+
+    REQUIRE(pistoris::paths::entityClassKind("graph/obj3d/interactive/items/weapons/sword/sword", class_kind));
+    CHECK(class_kind == ARX_ENTITY_CLASS_KIND_ITEM);
+    REQUIRE(pistoris::paths::itemIconFromEntityClass("graph/obj3d/interactive/items/weapons/sword/sword", icon_path));
+    CHECK(icon_path == "graph/obj3d/interactive/items/weapons/sword/sword[icon]");
+    CHECK_FALSE(pistoris::paths::itemIconFromEntityClass("../items/sword", icon_path));
+    REQUIRE(pistoris::paths::modelSelector(model, path));
     CHECK(path == "model:npc:hero");
     REQUIRE(pistoris::paths::animationTea({"fix_inter", "open"}, path));
     CHECK(path == "graph/obj3d/anims/fix_inter/open.tea");
@@ -594,48 +621,6 @@ TEST_SUITE("cpp_api") {
     CHECK(level == 3);
   }
 
-  TEST_CASE("ReferenceRepairUtilities") {
-    auto set_name = [](auto& dst, const char* name) { std::memcpy(dst.name, name, std::strlen(name) + 1); };
-
-    pistoris::Ftl target = makeData(4);
-    pistoris::Ftl ref = makeData(4);
-    ref.vertices[1].position = {10.0f, 0.0f, 0.0f};
-    ref.vertices[2].position = {20.0f, 0.0f, 0.0f};
-    ref.vertices[3].position = {30.0f, 0.0f, 0.0f};
-
-    pistoris::ftl::Group root{};
-    set_name(root, "root");
-    root.origin = 1;
-    pistoris::ftl::Group child{};
-    set_name(child, "child");
-    child.origin = 2;
-    target.groups = {root, child};
-    ref.groups = {root, child};
-
-    pistoris::ftl::Action action{};
-    set_name(action, "head2chest");
-    action.vertex_idx = 3;
-    target.actions.push_back(action);
-    ref.actions.push_back(action);
-
-    pistoris::ftl::Selection ref_sel{};
-    set_name(ref_sel, "chest");
-    ref_sel.selected = {2, 3};
-    ref.selections.push_back(ref_sel);
-
-    CHECK(pistoris::snapFtlBoneOriginsToReference(target, ref) == ARX_OK);
-    CHECK(target.vertices[1].position.x == 10.0f);
-    CHECK(target.vertices[2].position.x == 20.0f);
-
-    CHECK(pistoris::snapFtlActionPointsToReference(target, ref) == ARX_OK);
-    CHECK(target.vertices[3].position.x == 30.0f);
-
-    CHECK(pistoris::copyFtlSyntheticSelectionAffiliations(target, ref) == ARX_OK);
-    REQUIRE(target.selections.size() == 1);
-    CHECK(std::string_view(target.selections[0].name) == "chest");
-    CHECK(target.selections[0].selected == std::vector<std::int32_t>{2, 3});
-  }
-
   TEST_CASE("FailedImportsLeaveOutputsUnchanged") {
     pistoris::Ftl ftl = makeData(2);
     std::size_t original_vertices = ftl.vertices.size();
@@ -644,7 +629,7 @@ TEST_SUITE("cpp_api") {
     CHECK(pistoris::readFtl(bad_ftl, ftl) != ARX_OK);
     CHECK(ftl.vertices.size() == original_vertices);
 
-    CHECK(pistoris::importJson("{", ftl) != ARX_OK);
+    CHECK(pistoris::fromJson("{", ftl) != ARX_OK);
     CHECK(ftl.vertices.size() == original_vertices);
   }
 }  // TEST_SUITE("cpp_api")

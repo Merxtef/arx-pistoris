@@ -3,10 +3,7 @@
 
 #include "common.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/level.hpp"
-#include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.h"
 
 #include "../palette.h"
 #include "external/glb/container.h"
@@ -162,21 +159,14 @@ void addSurfaceSupportMeshChild(Builder& builder, int parent, const std::string&
   addDebugMeshChild(builder, parent, name, positions, indices, material);
 }
 
-void addGeometryContextMesh(Builder& builder, int parent, const pistoris::Level& level, glb_level::Palette& palette) {
-  std::vector<ArxLevelFace> faces(level.faceCount());
-  std::vector<ArxLevelVertex> vertices(level.vertexCount());
-  if (level.copyFaces(0, faces.size(), faces.data()) != ARX_OK ||
-      level.copyVertices(0, vertices.size(), vertices.data()) != ARX_OK)
-    return;
+void addGeometryContextMesh(Builder& builder, int parent, const GeometryData& geometry, glb_level::Palette& palette) {
   std::vector<GlbVec3> positions;
   std::vector<std::uint32_t> indices;
-  positions.reserve(faces.size() * 3);
-  indices.reserve(faces.size() * 3);
-  for (const ArxLevelFace& face : faces) {
+  positions.reserve(geometry.faces.size() * 3);
+  indices.reserve(geometry.faces.size() * 3);
+  for (const Face& face : geometry.faces) {
     std::uint32_t base = static_cast<std::uint32_t>(positions.size());
-    for (const ArxLevelCorner& corner : face.corners) {
-      positions.push_back(toVec3(vertices[corner.vertex].position));
-    }
+    for (const Corner& corner : face.corners) positions.push_back(toVec3(geometry.vertices[corner.vertex].position));
     indices.push_back(base);
     indices.push_back(base + 1);
     indices.push_back(base + 2);

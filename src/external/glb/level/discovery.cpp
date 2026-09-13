@@ -3,7 +3,8 @@
 
 #include "discovery.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "cgltf/cgltf.h"
 #include "external/glb/node_graph.h"
@@ -12,7 +13,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <format>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -54,6 +54,8 @@ std::string_view objectKindName(LevelObjectKind kind) {
       return "path";
     case LevelObjectKind::kNavSurface:
       return "navigation surface";
+    case LevelObjectKind::kMinimap:
+      return "minimap";
     case LevelObjectKind::kRoom:
       return "room";
     case LevelObjectKind::kNone:
@@ -94,6 +96,9 @@ void appendObject(LevelDiscovery& discovery, LevelObjectKind kind, std::size_t n
     case LevelObjectKind::kNavSurface:
       discovery.navigation_surfaces.push_back(node);
       break;
+    case LevelObjectKind::kMinimap:
+      discovery.minimaps.push_back(node);
+      break;
     case LevelObjectKind::kNone:
       break;
   }
@@ -111,6 +116,7 @@ void sortObjectLists(LevelDiscovery& discovery) {
   sort(discovery.zones);
   sort(discovery.paths);
   sort(discovery.navigation_surfaces);
+  sort(discovery.minimaps);
 }
 
 }  // namespace
@@ -161,11 +167,11 @@ ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& g
     if (kind == LevelObjectKind::kRoom) {
       if (context.room != glb::kInvalidNodeIndex) {
         log(ARX_LOG_DEBUG,
-            std::format("GLB -> Level object failure: room node {} '{}' is nested inside room node {} '{}'",
-                        node_index,
-                        name,
-                        context.room,
-                        nodeName(data.nodes[context.room])));
+            "GLB -> Level object failure: room node {} '{}' is nested inside room node {} '{}'",
+            node_index,
+            name,
+            context.room,
+            nodeName(data.nodes[context.room]));
         return ARX_GLB_BAD_LEVEL_HIERARCHY;
       }
       context.room = node_index;
@@ -186,11 +192,11 @@ ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& g
       continue;
     }
     if (name.starts_with("arx_")) {
-      discovery.warnings.push_back(
-          std::format("GLB -> Level: node {} '{}' uses the reserved arx_ namespace but is not recognized; treated as "
-                      "ordinary payload",
-                      node_index,
-                      name));
+      log(ARX_LOG_WARN,
+          "GLB -> Level: node {} '{}' uses the reserved arx_ namespace but is not recognized; treated as ordinary "
+          "payload",
+          node_index,
+          name);
     }
     if (node.mesh != nullptr) discovery.geometry.push_back({node_index, context.room});
     contexts[node_index] = context;
@@ -198,14 +204,13 @@ ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& g
 
   for (std::size_t node_index : graph.preorder) {
     if (ignored[node_index].nodes == 0) continue;
-    discovery.warnings.push_back(
-        std::format("GLB -> Level: {} node {} '{}' has unexpected descendants; ignored {} node(s), including {} mesh "
-                    "node(s)",
-                    objectKindName(objects[node_index]),
-                    node_index,
-                    nodeName(data.nodes[node_index]),
-                    ignored[node_index].nodes,
-                    ignored[node_index].meshes));
+    log(ARX_LOG_WARN,
+        "GLB -> Level: {} node {} '{}' has unexpected descendants; ignored {} node(s), including {} mesh node(s)",
+        objectKindName(objects[node_index]),
+        node_index,
+        nodeName(data.nodes[node_index]),
+        ignored[node_index].nodes,
+        ignored[node_index].meshes);
   }
 
   sortObjectLists(discovery);

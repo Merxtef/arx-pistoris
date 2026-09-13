@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/paths.hpp"
 
+#include "base/natural_order.h"
 #include "console/diagnostics.h"
 #include "io/service.h"
 
@@ -31,14 +32,14 @@ bool enumerate(const pistoris::paths::ResourceSearchLocation& location, IoServic
 
 bool appendModels(IoService& io, std::vector<std::string>& out) {
   std::vector<std::string> paths;
-  for (std::string_view type : pistoris::paths::modelTypes()) {
+  for (std::string_view type : pistoris::paths::modelSelectorTypes()) {
     pistoris::paths::ResourceSearchLocation location;
     if (!pistoris::paths::modelSearchLocation(type, location) || !enumerate(location, io, paths)) return false;
     for (const std::string& path : paths) {
       pistoris::paths::ModelPathView model;
-      std::string shorthand;
-      if (pistoris::paths::modelFromFtl(path, model) && pistoris::paths::modelShorthand(model, shorthand)) {
-        out.push_back(std::move(shorthand));
+      std::string selector;
+      if (pistoris::paths::modelFromFtl(path, model) && pistoris::paths::modelSelector(model, selector)) {
+        out.push_back(std::move(selector));
       }
     }
   }
@@ -47,15 +48,15 @@ bool appendModels(IoService& io, std::vector<std::string>& out) {
 
 bool appendAnimations(IoService& io, std::vector<std::string>& out) {
   std::vector<std::string> paths;
-  for (std::string_view type : pistoris::paths::animationTypes()) {
+  for (std::string_view type : pistoris::paths::animationSelectorTypes()) {
     pistoris::paths::ResourceSearchLocation location;
     if (!pistoris::paths::animationSearchLocation(type, location) || !enumerate(location, io, paths)) return false;
     for (const std::string& path : paths) {
       pistoris::paths::AnimationPathView animation;
-      std::string shorthand;
+      std::string selector;
       if (pistoris::paths::animationFromTea(path, animation) &&
-          pistoris::paths::animationShorthand(animation, shorthand)) {
-        out.push_back(std::move(shorthand));
+          pistoris::paths::animationSelector(animation, selector)) {
+        out.push_back(std::move(selector));
       }
     }
   }
@@ -67,7 +68,7 @@ bool appendLevels(IoService& io, std::vector<std::string>& out) {
   if (!enumerate(pistoris::paths::levelSearchLocation(), io, paths)) return false;
   for (const std::string& path : paths) {
     std::uint32_t level = 0;
-    if (pistoris::paths::levelFromDlf(path, level)) out.push_back(pistoris::paths::levelShorthand(level));
+    if (pistoris::paths::levelFromDlf(path, level)) out.push_back(pistoris::paths::levelSelector(level));
   }
   return true;
 }
@@ -77,10 +78,9 @@ bool appendCinematics(IoService& io, std::vector<std::string>& out) {
   if (!enumerate(pistoris::paths::cinematicSearchLocation(), io, paths)) return false;
   for (const std::string& path : paths) {
     pistoris::paths::CinematicPathView cinematic;
-    std::string shorthand;
-    if (pistoris::paths::cinematicFromFile(path, cinematic) &&
-        pistoris::paths::cinematicShorthand(cinematic, shorthand)) {
-      out.push_back(std::move(shorthand));
+    std::string selector;
+    if (pistoris::paths::cinematicFromCin(path, cinematic) && pistoris::paths::cinematicSelector(cinematic, selector)) {
+      out.push_back(std::move(selector));
     }
   }
   return true;
@@ -91,9 +91,9 @@ bool appendAmbiances(IoService& io, std::vector<std::string>& out) {
   if (!enumerate(pistoris::paths::ambianceSearchLocation(), io, paths)) return false;
   for (const std::string& path : paths) {
     pistoris::paths::AmbiancePathView ambiance;
-    std::string shorthand;
-    if (pistoris::paths::ambianceFromFile(path, ambiance) && pistoris::paths::ambianceShorthand(ambiance, shorthand)) {
-      out.push_back(std::move(shorthand));
+    std::string selector;
+    if (pistoris::paths::ambianceFromAmb(path, ambiance) && pistoris::paths::ambianceSelector(ambiance, selector)) {
+      out.push_back(std::move(selector));
     }
   }
   return true;
@@ -136,7 +136,7 @@ bool printResourceListing(ResourceListingKind kind, IoService& io) {
     return false;
   }
 
-  std::ranges::sort(resources);
+  std::ranges::sort(resources, naturalStringLess);
   for (const std::string& resource : resources) std::printf("%s\n", resource.c_str());
   return true;
 }

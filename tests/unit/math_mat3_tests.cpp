@@ -3,10 +3,11 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "utils/math/mat3.h"
 #include "utils/math/quat.h"
+#include "utils/math/rotation.h"
 
 #include <numbers>
 
@@ -57,6 +58,16 @@ TEST_SUITE("math::mat3") {
     CHECK(v.x == doctest::Approx(0));
     CHECK(v.y == doctest::Approx(1));
     CHECK(v.z == doctest::Approx(0));
+  }
+
+  TEST_CASE("RotateAroundYMatchesEulerMatrix") {
+    const ArxVector3 value{1.5f, -2.0f, 3.5f};
+    const float radians = 0.73f;
+    const ArxVector3 direct = math::rotateAroundY(value, radians);
+    const ArxVector3 matrix = math::fromEulerXYZ(0.0f, radians, 0.0f) * value;
+    CHECK(direct.x == doctest::Approx(matrix.x));
+    CHECK(direct.y == doctest::Approx(matrix.y));
+    CHECK(direct.z == doctest::Approx(matrix.z));
   }
 
   TEST_CASE("DeterminantIdentity") { CHECK(math::determinant(math::kIdentityMat3) == doctest::Approx(1.0f)); }

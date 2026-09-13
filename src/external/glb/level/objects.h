@@ -41,7 +41,7 @@ std::string anchorNodeName(const Anchor& anchor, std::size_t ordinal, const Leve
 std::optional<ParsedAnchorName> parseAnchorNodeName(std::string_view node_name);
 bool isReservedRoomName(std::string_view name);
 std::string roomNodeName(const Room& room);
-std::string roomNameFromNode(std::string_view node_name);
+std::optional<std::string> roomNameFromNode(std::string_view node_name);
 bool isReservedPortalName(std::string_view name);
 struct ParsedPortalName {
   std::string name;

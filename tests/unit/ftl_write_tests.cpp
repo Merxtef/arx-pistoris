@@ -3,14 +3,16 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/ftl.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
-#include "arx/ftl.h"
 #include "helpers.h"
+#include "native/ftl.h"
+#include "support/native_equivalence.h"
 #include "utils/cursor.h"
 
+#include <bit>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -82,7 +84,25 @@ TEST_SUITE("ftl") {
     pistoris::ReadCursor rc(bytes.data(), bytes.size());
     REQUIRE(pistoris::loadFtl(&d2, rc) == ARX_OK);
 
-    checkEq(d1, d2);
+    test_support::checkEquivalent(d1, d2);
+  }
+
+  TEST_CASE("Preserves nonfinite native normals exactly") {
+    pistoris::ftl::Data source = makeData(3);
+    const float nan = std::bit_cast<float>(UINT32_C(0xffc00000));
+    source.vertices[0].normal = {nan, nan, nan};
+    pistoris::ftl::Face face = makeFace(0, 1, 2);
+    face.norm = {nan, nan, nan};
+    source.faces.push_back(face);
+
+    pistoris::WriteCursor writer;
+    REQUIRE(pistoris::saveFtl(&source, writer) == ARX_OK);
+    const std::vector<std::uint8_t> bytes = writer.take();
+
+    pistoris::ftl::Data roundtrip;
+    pistoris::ReadCursor reader(bytes.data(), bytes.size());
+    REQUIRE(pistoris::loadFtl(&roundtrip, reader) == ARX_OK);
+    test_support::checkEquivalent(source, roundtrip);
   }
 
   TEST_CASE("WriteRoundtrip") {
@@ -106,6 +126,43 @@ TEST_SUITE("ftl") {
     CHECK(d1.texture_containers.size() == d2.texture_containers.size());
     CHECK(std::string(d1.texture_containers[0].filename) == std::string(d2.texture_containers[0].filename));
     CHECK(d1.header.origin == d2.header.origin);
+  }
+
+  TEST_CASE("FtlValidationRequiresBoundedNativeStrings") {
+    pistoris::ftl::Data data = makeData();
+    std::memset(data.header.name, 'a', sizeof(data.header.name));
+    CHECK(pistoris::validateFtl(&data) == ARX_FTL_BAD_SOURCE_PATH);
+
+    data = makeData();
+    data.texture_containers.emplace_back();
+    std::memset(data.texture_containers.front().filename, 'a', sizeof(data.texture_containers.front().filename));
+    CHECK(pistoris::validateFtl(&data) == ARX_FTL_BAD_TEXTURE_PATH);
+
+    data = makeData();
+    data.groups.emplace_back();
+    data.groups.front().origin = 0;
+    std::memset(data.groups.front().name, 'a', sizeof(data.groups.front().name));
+    CHECK(pistoris::validateFtl(&data) == ARX_FTL_BAD_GROUP_NAME);
+
+    data = makeData();
+    data.actions.emplace_back();
+    data.actions.front().vertex_idx = 0;
+    std::memset(data.actions.front().name, 'a', sizeof(data.actions.front().name));
+    CHECK(pistoris::validateFtl(&data) == ARX_FTL_BAD_ACTION_NAME);
+
+    data = makeData();
+    data.selections.emplace_back();
+    data.selections.front().selected.push_back(0);
+    std::memset(data.selections.front().name, 'a', sizeof(data.selections.front().name));
+    CHECK(pistoris::validateFtl(&data) == ARX_FTL_BAD_SELECTION_NAME);
+  }
+
+  TEST_CASE("FtlValidationAllowsBytesAfterNativeTerminator") {
+    pistoris::ftl::Data data = makeData();
+    std::memset(data.header.name, 'x', sizeof(data.header.name));
+    data.header.name[0] = 'a';
+    data.header.name[1] = '\0';
+    CHECK(pistoris::validateFtl(&data) == ARX_OK);
   }
 
 }  // TEST_SUITE("ftl")

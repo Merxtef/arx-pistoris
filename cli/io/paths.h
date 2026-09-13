@@ -8,5 +8,3 @@
 
 std::string sanitizeFilename(std::string_view name);
 bool isPortableReservedFilename(std::string_view name);
-const char* pathFilename(const char* path);
-const char* fileExtension(const char* path);

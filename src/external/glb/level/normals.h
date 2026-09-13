@@ -3,29 +3,26 @@
 
 #pragma once
 
-#include "arx_pistoris/level.hpp"
-
 #include "../writer.h"
+#include "modules/geometry.h"
 
-#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
 
 namespace pistoris::glb_level {
 
-struct LevelNormalCluster {
-  std::vector<ArxVector3> directions;
+struct LevelVertexNormalAnalysis {
   ArxVector3 representative = {};
+  std::size_t cluster_count = 0;
 };
 
 struct LevelNormalAnalysis {
-  std::vector<std::vector<LevelNormalCluster>> clusters;
-  std::vector<std::array<std::uint32_t, 3>> corner_clusters;
+  std::vector<LevelVertexNormalAnalysis> vertices;
 };
 
-ArxReturnCode analyzeLevelNormals(std::span<const ArxLevelVertex> vertices, std::span<const ArxLevelFace> faces,
+ArxReturnCode analyzeLevelNormals(std::span<const Vertex> vertices, std::span<const Face> faces,
                                   float normal_weld_degrees, LevelNormalAnalysis& out);
-ArxVector3 debugVertexNormal(std::span<const LevelNormalCluster> clusters);
 
 }  // namespace pistoris::glb_level

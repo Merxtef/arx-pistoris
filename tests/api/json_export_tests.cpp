@@ -37,17 +37,17 @@ TEST_SUITE("json") {
 
   TEST_CASE("JsonToJsonNullOut") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    ArxFtlHandle h = nullptr;
-    arx_pistoris_ftl_parse(buf.data(), buf.size(), &h);
+    ArxFtl* h = nullptr;
+    arx_pistoris_ftl_read(buf.data(), buf.size(), &h);
 
     ArxReturnCode rc = arx_pistoris_ftl_to_json(h, 0, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
-    arx_pistoris_ftl_free(h);
+    arx_pistoris_ftl_destroy(h);
   }
 
   TEST_CASE("JsonFromJsonNullData") {
-    ArxFtlHandle h = nullptr;
+    ArxFtl* h = nullptr;
     ArxReturnCode rc = arx_pistoris_ftl_from_json(nullptr, 0, &h);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
@@ -60,28 +60,28 @@ TEST_SUITE("json") {
 
   TEST_CASE("JsonRoundtrip") {
     std::vector<uint8_t> buf = makeMinimalFtl();
-    ArxFtlHandle h = nullptr;
-    CHECK(arx_pistoris_ftl_parse(buf.data(), buf.size(), &h) == ARX_OK);
+    ArxFtl* h = nullptr;
+    CHECK(arx_pistoris_ftl_read(buf.data(), buf.size(), &h) == ARX_OK);
 
     char* json_str = nullptr;
     ArxReturnCode rc1 = arx_pistoris_ftl_to_json(h, 0, &json_str);
     CHECK(rc1 == ARX_OK);
     CHECK(json_str != nullptr);
 
-    ArxFtlHandle h2 = nullptr;
+    ArxFtl* h2 = nullptr;
     ArxReturnCode rc2 =
         arx_pistoris_ftl_from_json(reinterpret_cast<const uint8_t*>(json_str), std::strlen(json_str), &h2);
     CHECK(rc2 == ARX_OK);
     CHECK(h2 != nullptr);
 
     arx_pistoris_free_string(json_str);
-    arx_pistoris_ftl_free(h);
-    arx_pistoris_ftl_free(h2);
+    arx_pistoris_ftl_destroy(h);
+    arx_pistoris_ftl_destroy(h2);
   }
 
   TEST_CASE("JsonBadFormat") {
     const char* bad = "not json";
-    ArxFtlHandle h = nullptr;
+    ArxFtl* h = nullptr;
     ArxReturnCode rc = arx_pistoris_ftl_from_json(reinterpret_cast<const uint8_t*>(bad), std::strlen(bad), &h);
     CHECK(rc == ARX_JSON_BAD_FORMAT);
     CHECK(h == nullptr);
@@ -89,7 +89,7 @@ TEST_SUITE("json") {
 
   TEST_CASE("JsonEmptyBadFormat") {
     const uint8_t empty = 0;
-    ArxFtlHandle h = nullptr;
+    ArxFtl* h = nullptr;
     ArxReturnCode rc = arx_pistoris_ftl_from_json(&empty, 0, &h);
     CHECK(rc == ARX_JSON_BAD_FORMAT);
     CHECK(h == nullptr);
@@ -123,17 +123,17 @@ TEST_SUITE("json") {
 
   TEST_CASE("TeaJsonToJsonNullOut") {
     std::vector<uint8_t> buf = makeKeyframeTea();
-    ArxTeaHandle h = nullptr;
-    arx_pistoris_tea_parse(buf.data(), buf.size(), &h);
+    ArxTea* h = nullptr;
+    arx_pistoris_tea_read(buf.data(), buf.size(), &h);
 
     ArxReturnCode rc = arx_pistoris_tea_to_json(h, 0, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
-    arx_pistoris_tea_free(h);
+    arx_pistoris_tea_destroy(h);
   }
 
   TEST_CASE("TeaJsonFromJsonNullData") {
-    ArxTeaHandle h = nullptr;
+    ArxTea* h = nullptr;
     ArxReturnCode rc = arx_pistoris_tea_from_json(nullptr, 0, &h);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
@@ -146,28 +146,28 @@ TEST_SUITE("json") {
 
   TEST_CASE("TeaJsonRoundtrip") {
     std::vector<uint8_t> buf = makeKeyframeTea();
-    ArxTeaHandle h = nullptr;
-    CHECK(arx_pistoris_tea_parse(buf.data(), buf.size(), &h) == ARX_OK);
+    ArxTea* h = nullptr;
+    CHECK(arx_pistoris_tea_read(buf.data(), buf.size(), &h) == ARX_OK);
 
     char* json_str = nullptr;
     ArxReturnCode rc1 = arx_pistoris_tea_to_json(h, 0, &json_str);
     CHECK(rc1 == ARX_OK);
     CHECK(json_str != nullptr);
 
-    ArxTeaHandle h2 = nullptr;
+    ArxTea* h2 = nullptr;
     ArxReturnCode rc2 =
         arx_pistoris_tea_from_json(reinterpret_cast<const uint8_t*>(json_str), std::strlen(json_str), &h2);
     CHECK(rc2 == ARX_OK);
     CHECK(h2 != nullptr);
 
     arx_pistoris_free_string(json_str);
-    arx_pistoris_tea_free(h);
-    arx_pistoris_tea_free(h2);
+    arx_pistoris_tea_destroy(h);
+    arx_pistoris_tea_destroy(h2);
   }
 
   TEST_CASE("TeaJsonBadFormat") {
     const char* bad = "not json";
-    ArxTeaHandle h = nullptr;
+    ArxTea* h = nullptr;
     ArxReturnCode rc = arx_pistoris_tea_from_json(reinterpret_cast<const uint8_t*>(bad), std::strlen(bad), &h);
     CHECK(rc == ARX_JSON_BAD_FORMAT);
     CHECK(h == nullptr);

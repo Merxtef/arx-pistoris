@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "modules/navigation.h"
 #include "modules/navigation/internal.h"
 #include "modules/navigation/traversal.h"
 #include "utils/log.h"
+#include "utils/spatial/xz_point_index.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -132,25 +133,26 @@ AnchorConnectionTraversalAttemptDebugKind rejectedConnectionAttempt(CylinderTrav
 void logAnchorEndpointDiagnostics(const AnchorConnectionEndpointDiagnostics& diagnostics) {
   if (diagnostics.anchors == 0) return;
   log(ARX_LOG_DEBUG,
-      std::format("Level anchor connection endpoint placement: anchors={}, usable={}, invalid={}, no_support={}, "
-                  "too_far={}, unresolved={}",
-                  diagnostics.anchors,
-                  diagnostics.usable,
-                  diagnostics.invalid,
-                  diagnostics.no_support,
-                  diagnostics.too_far,
-                  diagnostics.unresolved));
+      "Anchor connection endpoint placement: anchors={}, usable={}, invalid={}, no_support={}, "
+      "too_far={}, unresolved={}",
+      diagnostics.anchors,
+      diagnostics.usable,
+      diagnostics.invalid,
+      diagnostics.no_support,
+      diagnostics.too_far,
+      diagnostics.unresolved);
   if (!diagnostics.examples.empty())
-    log(ARX_LOG_DEBUG,
-        std::format("Level anchor connection endpoint placement examples: {}",
-                    anchorSupportExamples(diagnostics.examples)));
+    logLazy(ARX_LOG_DEBUG, [&] {
+      return std::format("Anchor connection endpoint placement examples: {}",
+                         anchorSupportExamples(diagnostics.examples));
+    });
 }
 
 }  // namespace
 
 Error buildAnchorConnections(std::vector<AnchorConnection>& out, std::span<const Anchor> anchors,
-                             const StaticAnchorTraversal& traversal, const AnchorConnectionGenOptions& options,
-                             AnchorConnectionGenDiagnostics* diagnostics) {
+                             StaticAnchorTraversal& traversal, const AnchorConnectionGenerationOptions& options,
+                             AnchorConnectionGenerationDiagnostics* diagnostics) {
   double max_distance_squared = static_cast<double>(options.max_distance) * options.max_distance;
   std::vector<bool> usable(anchors.size(), false);
   AnchorConnectionEndpointDiagnostics endpoint_diagnostics;
@@ -171,13 +173,19 @@ Error buildAnchorConnections(std::vector<AnchorConnection>& out, std::span<const
   }
   logAnchorEndpointDiagnostics(endpoint_diagnostics);
   if (skipped > 0) {
-    log(ARX_LOG_WARN, std::format("Level anchor connection generation skipped {} anchor(s)", skipped));
+    log(ARX_LOG_WARN, "Anchor connection generation skipped {} anchor(s)", skipped);
   }
 
+  spatial::XzPointIndex anchor_index;
+  anchor_index.rebuild(
+      anchors.size(), options.max_distance, [&](std::size_t index) { return anchors[index].position; });
+  std::vector<std::uint32_t> candidates;
   std::vector<AnchorConnection> connections;
   for (std::uint32_t first = 0; first < anchors.size(); ++first) {
     if (!usable[first]) continue;
-    for (std::uint32_t second = first + 1; second < anchors.size(); ++second) {
+    anchor_index.findNeighborCellCandidates(candidates, anchors[first].position.x, anchors[first].position.z);
+    for (std::uint32_t second : candidates) {
+      if (second <= first) continue;
       if (!usable[second]) continue;
       const double dx = static_cast<double>(anchors[second].position.x) - anchors[first].position.x;
       const double dz = static_cast<double>(anchors[second].position.z) - anchors[first].position.z;

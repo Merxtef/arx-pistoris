@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "native_fuzz_common.h"
+#include "fuzz_common.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -10,10 +10,12 @@
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   arx_fuzz::silenceLogs();
   ArxLlf* raw_llf = nullptr;
-  const ArxReturnCode rc = arx_pistoris_llf_parse(data, size, &raw_llf);
-  if (rc == ARX_OK) {
-    arx_fuzz::LlfHandle llf(raw_llf);
-    if (!llf.get()) std::abort();
+  const ArxReturnCode rc = arx_pistoris_llf_read(data, size, &raw_llf);
+  arx_fuzz::LlfHandle llf(raw_llf);
+  if (rc != ARX_OK) {
+    if (llf.get()) std::abort();
+    return 0;
   }
+  if (!llf.get()) std::abort();
   return 0;
 }

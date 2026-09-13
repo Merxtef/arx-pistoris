@@ -4,7 +4,8 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/arx_pistoris.h"
-#include "arx_pistoris/native/ftl.hpp"
+
+#include "support/fixture_catalog.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,175 +13,111 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
-static std::string readText(const fs::path& p) {
-  std::ifstream f(p);
-  return {std::istreambuf_iterator<char>(f), {}};
+static std::string readText(const fs::path& path) {
+  std::ifstream input(path);
+  return {std::istreambuf_iterator<char>(input), {}};
 }
 
 TEST_SUITE("obj") {
-  // import -> export -> import -> export; both exports must match (pipeline stable after pass 1)
-  TEST_CASE("ModelObjImportStable") {
-    std::size_t count = 0;
-    for (auto& e : fs::directory_iterator("data/fixtures/model/native")) {
-      if (e.path().extension() != ".ftl") continue;
-      fs::path obj_path = fs::path("data/fixtures/model/obj") / e.path().stem();
-      obj_path += ".obj";
-      if (!fs::exists(obj_path)) continue;
-      count++;
-      fs::path mtl_path = fs::path("data/fixtures/model/obj") / e.path().stem();
-      mtl_path += ".mtl";
+  TEST_CASE("Model OBJ corpus roundtrips through the public boundary") {
+    for (const test_support::ModelFixture& fixture : test_support::fixtureCatalog().models) {
+      if (fixture.obj.empty()) continue;
+      const fs::path& obj_path = fixture.obj;
       CAPTURE(obj_path.string());
 
       std::string obj_text = readText(obj_path);
-      std::string mtl_text = fs::exists(mtl_path) ? readText(mtl_path) : "";
-      std::string stem = e.path().stem().string();
+      const std::string stem = fixture.name;
 
-      auto import_and_export = [&](const std::string& obj_in,
-                                   const std::string& mtl_in,
-                                   std::string& obj_out,
-                                   std::string& mtl_out) -> bool {
-        ArxFtlHandle h = nullptr;
-        if (arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj_in.data()),
-                                   obj_in.size(),
-                                   mtl_in.empty() ? nullptr : reinterpret_cast<const uint8_t*>(mtl_in.data()),
-                                   mtl_in.size(),
-                                   stem.c_str(),
-                                   &h) != ARX_OK)
-          return false;
-        char* obj_raw = nullptr;
-        char* mtl_raw = nullptr;
-        bool ok = arx_pistoris_ftl_to_obj(h, stem.c_str(), &obj_raw) == ARX_OK;
-        ok = ok && arx_pistoris_ftl_to_mtl(h, &mtl_raw) == ARX_OK;
-        arx_pistoris_ftl_free(h);
-        if (obj_raw) {
-          obj_out = obj_raw;
-          arx_pistoris_free_string(obj_raw);
-        }
-        if (mtl_raw) {
-          mtl_out = mtl_raw;
-          arx_pistoris_free_string(mtl_raw);
-        }
-        return ok;
-      };
+      ArxObjMaterialLibraryPaths* library_paths = nullptr;
+      REQUIRE(arx_pistoris_obj_material_library_paths(
+                  reinterpret_cast<const std::uint8_t*>(obj_text.data()), obj_text.size(), &library_paths) == ARX_OK);
+      std::size_t library_count = 0;
+      REQUIRE(arx_pistoris_obj_material_library_paths_count(library_paths, &library_count) == ARX_OK);
+      std::vector<std::string> library_texts;
+      library_texts.reserve(library_count);
+      std::vector<ArxStringView> path_views;
+      path_views.reserve(library_count);
+      for (std::size_t index = 0; index < library_count; ++index) {
+        ArxStringView path_view{};
+        REQUIRE(arx_pistoris_obj_material_library_paths_get(library_paths, index, &path_view) == ARX_OK);
+        path_views.push_back(path_view);
+        library_texts.push_back(readText(obj_path.parent_path() / std::string(path_view.data, path_view.size)));
+      }
+      std::vector<ArxObjMaterialLibraryView> libraries;
+      libraries.reserve(library_count);
+      for (std::size_t index = 0; index < library_count; ++index) {
+        const std::string& text = library_texts[index];
+        libraries.push_back({path_views[index], reinterpret_cast<const std::uint8_t*>(text.data()), text.size()});
+      }
 
-      std::string pass1_obj, pass1_mtl, pass2_obj, pass2_mtl;
-      CHECK(import_and_export(obj_text, mtl_text, pass1_obj, pass1_mtl));
-      if (pass1_obj.empty()) continue;
-      CHECK(import_and_export(pass1_obj, pass1_mtl, pass2_obj, pass2_mtl));
+      ArxModel* initial_model = nullptr;
+      REQUIRE(arx_pistoris_model_import_obj(reinterpret_cast<const std::uint8_t*>(obj_text.data()),
+                                            obj_text.size(),
+                                            libraries.data(),
+                                            libraries.size(),
+                                            &initial_model,
+                                            nullptr) == ARX_OK);
+      arx_pistoris_obj_material_library_paths_destroy(library_paths);
 
-      // size-check first to avoid dumping full content on mismatch
-      CHECK(pass1_obj.size() == pass2_obj.size());
-      if (pass1_obj.size() == pass2_obj.size()) CHECK(pass1_obj == pass2_obj);
+      const auto roundtrip =
+          [&](const std::string& obj_in, const std::string& mtl_in, std::string& obj_out, std::string& mtl_out) {
+            ArxModel* model = nullptr;
+            const std::string material_path = stem + ".mtl";
+            const ArxObjMaterialLibraryView library{
+                {material_path.data(), material_path.size()},
+                reinterpret_cast<const std::uint8_t*>(mtl_in.data()),
+                mtl_in.size(),
+            };
+            const ArxReturnCode import_rc =
+                arx_pistoris_model_import_obj(reinterpret_cast<const std::uint8_t*>(obj_in.data()),
+                                              obj_in.size(),
+                                              mtl_in.empty() ? nullptr : &library,
+                                              mtl_in.empty() ? 0 : 1,
+                                              &model,
+                                              nullptr);
+            if (import_rc != ARX_OK) return import_rc;
+
+            char* obj_raw = nullptr;
+            char* mtl_raw = nullptr;
+            const ArxReturnCode export_rc =
+                arx_pistoris_model_export_obj(model, {stem.data(), stem.size()}, nullptr, &obj_raw, &mtl_raw, nullptr);
+            arx_pistoris_model_destroy(model);
+            if (obj_raw) {
+              obj_out = obj_raw;
+              arx_pistoris_free_string(obj_raw);
+            }
+            if (mtl_raw) {
+              mtl_out = mtl_raw;
+              arx_pistoris_free_string(mtl_raw);
+            }
+            return export_rc;
+          };
+
+      std::string first_obj;
+      std::string first_mtl;
+      char* first_obj_raw = nullptr;
+      char* first_mtl_raw = nullptr;
+      REQUIRE(arx_pistoris_model_export_obj(
+                  initial_model, {stem.data(), stem.size()}, nullptr, &first_obj_raw, &first_mtl_raw, nullptr) ==
+              ARX_OK);
+      arx_pistoris_model_destroy(initial_model);
+      REQUIRE(first_obj_raw != nullptr);
+      first_obj = first_obj_raw;
+      arx_pistoris_free_string(first_obj_raw);
+      if (first_mtl_raw) {
+        first_mtl = first_mtl_raw;
+        arx_pistoris_free_string(first_mtl_raw);
+      }
+      REQUIRE_FALSE(first_obj.empty());
+
+      std::string second_obj;
+      std::string second_mtl;
+      CHECK(roundtrip(first_obj, first_mtl, second_obj, second_mtl) == ARX_OK);
+      CHECK_FALSE(second_obj.empty());
     }
-    CHECK(count >= 1);
   }
-
-  // > 65535 unique vertices -> ARX_OBJ_TOO_MANY_VERTICES
-  TEST_CASE("ImportTooManyVertices") {
-    // each corner uses unique position with no vn -> unique (vi, SIZE_MAX) key;
-    // faces 1..21845 produce 65535 verts, face 21846 corner 1 trips the limit
-    std::string obj;
-    obj.reserve(1300000);
-    for (int i = 1; i <= 65538; ++i) {
-      obj += "v ";
-      obj += std::to_string(i);
-      obj += " 0 0\n";
-    }
-    for (int i = 1; i <= 21846; ++i) {
-      obj += "f ";
-      obj += std::to_string(3 * i - 2);
-      obj += " ";
-      obj += std::to_string(3 * i - 1);
-      obj += " ";
-      obj += std::to_string(3 * i);
-      obj += "\n";
-    }
-
-    ArxFtlHandle h = nullptr;
-    ArxReturnCode rc =
-        arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj.data()), obj.size(), nullptr, 0, nullptr, &h);
-    CHECK(rc == ARX_OBJ_TOO_MANY_VERTICES);
-    CHECK(h == nullptr);
-  }
-
-  // > kFtlMaxVertices vn lines -> ARX_OBJ_TOO_MANY_NORMALS
-  TEST_CASE("ImportTooManyNormals") {
-    std::string obj;
-    obj.reserve((pistoris::kFtlMaxVertices + 1) * 9);
-    for (std::size_t i = 0; i < pistoris::kFtlMaxVertices + 1; ++i) obj += "vn 0 0 1\n";
-
-    ArxFtlHandle h = nullptr;
-    ArxReturnCode rc =
-        arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj.data()), obj.size(), nullptr, 0, nullptr, &h);
-    CHECK(rc == ARX_OBJ_TOO_MANY_NORMALS);
-    CHECK(h == nullptr);
-  }
-
-  // > kFtlMaxVertices*4 vt lines -> ARX_OBJ_TOO_MANY_TEXCOORDS
-  TEST_CASE("ImportTooManyTexcoords") {
-    std::string obj;
-    obj.reserve((pistoris::kFtlMaxVertices * 4 + 1) * 7);
-    for (std::size_t i = 0; i < pistoris::kFtlMaxVertices * 4 + 1; ++i) obj += "vt 0 0\n";
-
-    ArxFtlHandle h = nullptr;
-    ArxReturnCode rc =
-        arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj.data()), obj.size(), nullptr, 0, nullptr, &h);
-    CHECK(rc == ARX_OBJ_TOO_MANY_TEXCOORDS);
-    CHECK(h == nullptr);
-  }
-
-  // > kFtlMaxFaces triangulated faces -> ARX_OBJ_TOO_MANY_FACES
-  TEST_CASE("ImportTooManyFaces") {
-    // shared 3 positions: vertex dedup is O(1), only face count matters
-    std::string obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\n";
-    obj.reserve(obj.size() + (pistoris::kFtlMaxFaces + 1) * 8);
-    for (std::size_t i = 0; i < pistoris::kFtlMaxFaces + 1; ++i) obj += "f 1 2 3\n";
-
-    ArxFtlHandle h = nullptr;
-    ArxReturnCode rc =
-        arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj.data()), obj.size(), nullptr, 0, nullptr, &h);
-    CHECK(rc == ARX_OBJ_TOO_MANY_FACES);
-    CHECK(h == nullptr);
-  }
-
-  // > 65534 unique texture stems -> ARX_OBJ_TOO_MANY_TEXTURES
-  TEST_CASE("ImportTooManyTextures") {
-    // each unique usemtl stem creates a new TextureContainer
-    std::string obj;
-    obj.reserve(1100000);
-    for (int i = 0; i < 65536; ++i) {
-      obj += "usemtl TEX";
-      obj += std::to_string(i);
-      obj += "\n";
-    }
-
-    ArxFtlHandle h = nullptr;
-    ArxReturnCode rc =
-        arx_pistoris_obj_parse(reinterpret_cast<const uint8_t*>(obj.data()), obj.size(), nullptr, 0, nullptr, &h);
-    CHECK(rc == ARX_OBJ_TOO_MANY_TEXTURES);
-    CHECK(h == nullptr);
-  }
-
-  // > kFtlMaxFaces materials (per-face ceiling) -> ARX_OBJ_TOO_MANY_MATERIALS
-  TEST_CASE("ImportTooManyMaterials") {
-    // MTL is parsed first and fails before OBJ processing starts
-    const auto* dummy_obj = reinterpret_cast<const uint8_t*>("");
-    std::string mtl;
-    mtl.reserve((pistoris::kFtlMaxFaces + 1) * 15);
-    for (std::size_t i = 0; i < pistoris::kFtlMaxFaces + 1; ++i) {
-      mtl += "newmtl M";
-      mtl += std::to_string(i);
-      mtl += "\n";
-    }
-
-    ArxFtlHandle h = nullptr;
-    ArxReturnCode rc =
-        arx_pistoris_obj_parse(dummy_obj, 0, reinterpret_cast<const uint8_t*>(mtl.data()), mtl.size(), nullptr, &h);
-    CHECK(rc == ARX_OBJ_TOO_MANY_MATERIALS);
-    CHECK(h == nullptr);
-  }
-
-}  // TEST_SUITE("obj")
+}

@@ -3,10 +3,10 @@
 
 #include "utils/math/triangulation.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include "mapbox/earcut.hpp"
-#include "utils/math/geometry.h"
+#include "utils/math/geometry_algorithms.h"
 
 #include <array>
 #include <cstddef>

@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
 #include "cgltf/cgltf.h"
 #include "utils/math/mat4.h"
@@ -25,5 +25,7 @@ struct NodeGraph {
 
 ArxReturnCode buildNodeGraph(cgltf_data& data, NodeGraph& out);
 [[nodiscard]] bool hasNonIdentityLocalScale(const cgltf_node& node);
+[[nodiscard]] bool isDescendantOrSelf(const NodeGraph& graph, std::size_t node, std::size_t ancestor) noexcept;
+[[nodiscard]] std::size_t nearestCommonAncestor(const NodeGraph& graph, std::size_t first, std::size_t second) noexcept;
 
 }  // namespace pistoris::glb

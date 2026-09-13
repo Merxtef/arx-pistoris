@@ -80,15 +80,20 @@ class EffectiveModuleResolver {
 
   bool expand(std::size_t source_index) {
     const cli::Module* source = modules_[source_index].module;
+    const std::span<const cli::ModuleImplication> implications = source->implications();
+    if (implications.empty()) return true;
     if (std::ranges::find(expansion_stack_, source) != expansion_stack_.end()) {
       cli::diagnostic(
           cli::DiagnosticCode::kModuleImplicationInvalid, "Module implication cycle reaches %s", moduleName(source));
       return false;
     }
 
-    const std::vector<std::string> source_arguments = modules_[source_index].arguments;
+    const std::span<const std::string> source_arguments = modules_[source_index].arguments;
+    const cli::RouteDescriptor* options_route = modules_[source_index].options_route;
+    std::vector<cli::ModuleInvocation> candidates;
+    candidates.reserve(implications.size());
     expansion_stack_.push_back(source);
-    for (const cli::ModuleImplication& implication : source->implications()) {
+    for (const cli::ModuleImplication& implication : implications) {
       if (!implication.target) {
         cli::diagnostic(
             cli::DiagnosticCode::kModuleImplicationInvalid, "%s has a null implication target", moduleName(source));
@@ -117,11 +122,13 @@ class EffectiveModuleResolver {
         return false;
       }
 
-      cli::ModuleInvocation candidate{.module = target,
-                                      .options_route = modules_[source_index].options_route,
-                                      .origin = cli::ModuleOrigin::kImplied,
-                                      .implied_by = source,
-                                      .arguments = std::move(arguments)};
+      candidates.push_back({.module = target,
+                            .options_route = options_route,
+                            .origin = cli::ModuleOrigin::kImplied,
+                            .implied_by = source,
+                            .arguments = std::move(arguments)});
+    }
+    for (cli::ModuleInvocation& candidate : candidates) {
       if (!acceptImplied(std::move(candidate))) {
         expansion_stack_.pop_back();
         return false;

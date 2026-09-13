@@ -1,0 +1,293 @@
+{
+  "$schema": "https://arx-tools.github.io/schemas/amb.schema.json",
+  "tracks": [
+    {
+      "filename": "sfx/ambiance/exploration_0.wav",
+      "flags": 4,
+      "keys": [
+        {
+          "delayMax": 0,
+          "delayMin": 0,
+          "loop": 1,
+          "pan": {
+            "flags": 0,
+            "interval": 0,
+            "max": -0.0,
+            "min": -0.0
+          },
+          "pitch": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "start": 0,
+          "volume": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "x": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "y": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "z": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "filename": "sfx/ambiance/door_open_01.wav",
+      "flags": 0,
+      "keys": [
+        {
+          "delayMax": 2700,
+          "delayMin": 1800,
+          "loop": 85,
+          "pan": {
+            "flags": 1,
+            "interval": 8000,
+            "max": 0.8999999761581421,
+            "min": -0.8999999761581421
+          },
+          "pitch": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "start": 400,
+          "volume": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.8199999928474426,
+            "min": 0.8199999928474426
+          },
+          "x": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "y": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "z": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "filename": "sfx/ambiance/keys_01.wav",
+      "flags": 0,
+      "keys": [
+        {
+          "delayMax": 2400,
+          "delayMin": 1500,
+          "loop": 95,
+          "pan": {
+            "flags": 1,
+            "interval": 9000,
+            "max": 0.8999999761581421,
+            "min": -0.8999999761581421
+          },
+          "pitch": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "start": 200,
+          "volume": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.7799999713897705,
+            "min": 0.7799999713897705
+          },
+          "x": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "y": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "z": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "filename": "sfx/ambiance/lock_open_01.wav",
+      "flags": 0,
+      "keys": [
+        {
+          "delayMax": 3000,
+          "delayMin": 1500,
+          "loop": 75,
+          "pan": {
+            "flags": 1,
+            "interval": 11000,
+            "max": 0.8999999761581421,
+            "min": -0.8999999761581421
+          },
+          "pitch": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "start": 200,
+          "volume": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.7599999904632568,
+            "min": 0.7599999904632568
+          },
+          "x": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "y": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "z": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "filename": "sfx/ambiance/keys_02.wav",
+      "flags": 0,
+      "keys": [
+        {
+          "delayMax": 2400,
+          "delayMin": 1900,
+          "loop": 95,
+          "pan": {
+            "flags": 1,
+            "interval": 9000,
+            "max": 0.8999999761581421,
+            "min": -0.8999999761581421
+          },
+          "pitch": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "start": 300,
+          "volume": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.8500000238418579,
+            "min": 0.8500000238418579
+          },
+          "x": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "y": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "z": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          }
+        }
+      ]
+    },
+    {
+      "filename": "sfx/ambiance/metal_close_01.wav",
+      "flags": 0,
+      "keys": [
+        {
+          "delayMax": 3200,
+          "delayMin": 2400,
+          "loop": 71,
+          "pan": {
+            "flags": 1,
+            "interval": 13000,
+            "max": 0.8999999761581421,
+            "min": -0.8999999761581421
+          },
+          "pitch": {
+            "flags": 0,
+            "interval": 0,
+            "max": 1.0,
+            "min": 1.0
+          },
+          "start": 400,
+          "volume": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.8899999856948853,
+            "min": 0.8899999856948853
+          },
+          "x": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "y": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          },
+          "z": {
+            "flags": 0,
+            "interval": 0,
+            "max": 0.0,
+            "min": 0.0
+          }
+        }
+      ]
+    }
+  ]
+}

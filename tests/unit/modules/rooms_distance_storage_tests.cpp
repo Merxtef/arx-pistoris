@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
 
 #include "modules/rooms.h"
 
@@ -45,7 +45,7 @@ TEST_SUITE("rooms::distance_storage") {
     RoomDistances distances;
     distances = {{.distance = 12.0f, .low_room_portal = 1, .high_room_portal = 2}};
 
-    rooms::initializeRoomDistances(distances, 3);
+    rooms::resetRoomDistances(distances, 3);
 
     REQUIRE(distances.size() == 3);
     for (const RoomDistance& distance : distances) {

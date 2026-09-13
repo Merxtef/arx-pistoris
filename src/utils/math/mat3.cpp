@@ -3,7 +3,7 @@
 
 #include "utils/math/mat3.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include <cmath>
 

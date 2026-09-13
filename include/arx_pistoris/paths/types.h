@@ -18,6 +18,16 @@ enum {
   ARX_RESOURCE_KIND_AMBIANCE = 5,
 };
 
+typedef uint8_t ArxEntityClassKind;
+enum {
+  ARX_ENTITY_CLASS_KIND_UNKNOWN = 0,
+  ARX_ENTITY_CLASS_KIND_ITEM,
+  ARX_ENTITY_CLASS_KIND_NPC,
+  ARX_ENTITY_CLASS_KIND_FIX,
+  ARX_ENTITY_CLASS_KIND_CAMERA,
+  ARX_ENTITY_CLASS_KIND_MARKER,
+};
+
 // NOLINTEND(readability-identifier-naming, performance-enum-size)
 
 #endif /* ARX_PISTORIS_PATHS_TYPES_H */

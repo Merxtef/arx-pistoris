@@ -3,17 +3,14 @@
 
 #pragma once
 
-#include "arx_pistoris/debug/level_diagnostics.hpp"
-#include "arx_pistoris/level.hpp"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 
 #include "../../writer.h"
+#include "modules/geometry.h"
 #include "modules/navigation.h"
-#include "utils/log.h"
 
 #include <array>
 #include <cstdint>
-#include <exception>
-#include <new>
 #include <span>
 #include <string>
 #include <utility>
@@ -36,22 +33,6 @@ struct DebugSegment {
   ArxVector3 end = {};
 };
 
-template <class Fn>
-ArxReturnCode guardDebugExport(const char* where, Fn&& fn) {
-  try {
-    return std::forward<Fn>(fn)();
-  } catch (const std::bad_alloc&) {
-    log(ARX_LOG_ERROR, std::string(where) + ": allocation failed");
-    return ARX_BAD_ALLOC;
-  } catch (const std::exception& e) {
-    log(ARX_LOG_ERROR, std::string(where) + ": unexpected exception: " + e.what());
-    return ARX_INTERNAL_ERROR;
-  } catch (...) {
-    log(ARX_LOG_ERROR, std::string(where) + ": unexpected exception");
-    return ARX_INTERNAL_ERROR;
-  }
-}
-
 GlbVec3 toVec3(const ArxVector3& value);
 GlbVec4 debugColor(bool active, const GlbVec4& color);
 
@@ -69,7 +50,7 @@ void appendMarkerMeshData(const ArxVector3& position, float size, std::vector<Gl
                           std::vector<std::uint32_t>& indices);
 void addSurfaceSupportMeshChild(Builder& builder, int parent, const std::string& name,
                                 std::span<const geometry::SurfaceSupportTriangle> faces, int material);
-void addGeometryContextMesh(Builder& builder, int parent, const Level& level, glb_level::Palette& palette);
+void addGeometryContextMesh(Builder& builder, int parent, const GeometryData& geometry, glb_level::Palette& palette);
 void appendSegmentQuad(const ArxVector3& a, const ArxVector3& b, float half_width, std::vector<GlbVec3>& positions,
                        std::vector<std::uint32_t>& indices);
 

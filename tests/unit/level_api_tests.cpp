@@ -3,14 +3,15 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.h"
 #include "arx_pistoris/level.hpp"
 #include "arx_pistoris/level/bake.hpp"
 #include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/texture.h"
 
 #include "image_helpers.h"
 #include "level_add_helpers.h"
@@ -116,18 +117,52 @@ constexpr bool cOptionDefaultsMatchCpp() {
       kCGlbExport.arx_offset.y != kCppGlbExport.arx_offset.y || kCGlbExport.arx_offset.z != kCppGlbExport.arx_offset.z)
     return false;
 
+  constexpr ArxLevelMinimapRenderOptions kCMinimap = ARX_LEVEL_MINIMAP_RENDER_OPTIONS_INIT;
+  constexpr Level::MinimapRenderOptions kCppMinimap{};
+  if (kCMinimap.projection_offset.x != kCppMinimap.projection_offset.x ||
+      kCMinimap.projection_offset.y != kCppMinimap.projection_offset.y ||
+      kCMinimap.fill_color.r != kCppMinimap.fill_color.r || kCMinimap.fill_color.g != kCppMinimap.fill_color.g ||
+      kCMinimap.fill_color.b != kCppMinimap.fill_color.b)
+    return false;
+
+  constexpr ArxLevelGameMinimapRenderOptions kCGameMinimap = ARX_LEVEL_GAME_MINIMAP_RENDER_OPTIONS_INIT;
+  constexpr Level::GameMinimapRenderOptions kCppGameMinimap{};
+  if (kCGameMinimap.projection_offset.x != kCppGameMinimap.projection_offset.x ||
+      kCGameMinimap.projection_offset.y != kCppGameMinimap.projection_offset.y ||
+      kCGameMinimap.fill_color.r != kCppGameMinimap.fill_color.r ||
+      kCGameMinimap.fill_color.g != kCppGameMinimap.fill_color.g ||
+      kCGameMinimap.fill_color.b != kCppGameMinimap.fill_color.b ||
+      kCGameMinimap.border_color.r != kCppGameMinimap.border_color.r ||
+      kCGameMinimap.border_color.g != kCppGameMinimap.border_color.g ||
+      kCGameMinimap.border_color.b != kCppGameMinimap.border_color.b)
+    return false;
+
+  constexpr ArxLevelMinimapGenerationOptions kCMinimapGeneration = ARX_LEVEL_MINIMAP_GENERATION_OPTIONS_INIT;
+  constexpr Level::MinimapGenerationOptions kCppMinimapGeneration{};
+  constexpr auto kSamplerDefaultsMatch = [](const ArxLevelMinimapSampler& c, const Level::MinimapSampler& cpp) {
+    return c.image.data == cpp.image.data && c.image.size == cpp.image.size && c.color.r == cpp.color.r &&
+           c.color.g == cpp.color.g && c.color.b == cpp.color.b;
+  };
+  if (!kSamplerDefaultsMatch(kCMinimapGeneration.foreground, kCppMinimapGeneration.foreground) ||
+      !kSamplerDefaultsMatch(kCMinimapGeneration.background, kCppMinimapGeneration.background) ||
+      !kSamplerDefaultsMatch(kCMinimapGeneration.water, kCppMinimapGeneration.water) ||
+      !kSamplerDefaultsMatch(kCMinimapGeneration.lava, kCppMinimapGeneration.lava) ||
+      kCMinimapGeneration.halo_color.r != kCppMinimapGeneration.halo_color.r ||
+      kCMinimapGeneration.halo_color.g != kCppMinimapGeneration.halo_color.g ||
+      kCMinimapGeneration.halo_color.b != kCppMinimapGeneration.halo_color.b ||
+      kCMinimapGeneration.halo_radius != kCppMinimapGeneration.halo_radius)
+    return false;
+
   constexpr ArxLevelNativeBakeOptions kCNative = ARX_LEVEL_NATIVE_BAKE_OPTIONS_INIT;
   constexpr Level::NativeBakeOptions kCppNative{};
   if (kCNative.level_name.data != nullptr || kCNative.level_name.size != kCppNative.level_name.size() ||
-      kCNative.texture_folder.data != nullptr || kCNative.texture_folder.size != kCppNative.texture_folder.size() ||
-      kCNative.texture_path_mode != static_cast<ArxNativeTexturePathMode>(kCppNative.texture_path_mode) ||
       kCNative.reconstruct_quads != kCppNative.reconstruct_quads ||
-      kCNative.include_texture_files != kCppNative.include_texture_files || kCNative.dlf_scene_path.data != nullptr ||
+      kCNative.textures.include_files != kCppNative.textures.include_files || kCNative.dlf_scene_path.data != nullptr ||
       kCNative.dlf_scene_path.size != kCppNative.dlf_scene_path.size())
     return false;
 
-  constexpr ArxLevelNativeDlfBakeOptions kCDlf = ARX_LEVEL_NATIVE_DLF_BAKE_OPTIONS_INIT;
-  constexpr Level::NativeDlfBakeOptions kCppDlf{};
+  constexpr ArxLevelDlfBakeOptions kCDlf = ARX_LEVEL_DLF_BAKE_OPTIONS_INIT;
+  constexpr Level::DlfBakeOptions kCppDlf{};
   return kCDlf.level_name.data == nullptr && kCDlf.level_name.size == kCppDlf.level_name.size() &&
          kCDlf.target_fts_offset.x == kCppDlf.target_fts_offset.x &&
          kCDlf.target_fts_offset.y == kCppDlf.target_fts_offset.y &&
@@ -149,8 +184,8 @@ Face triangle(TextureIndex texture = kNoTexture) {
   face.corners[1].vertex = 1;
   face.corners[2].vertex = 2;
   face.corners[0].normal = {0.0f, -1.0f, 0.0f};
-  face.corners[1].normal = {0.0f, -1.0f, 0.0f};
-  face.corners[2].normal = {0.0f, -1.0f, 0.0f};
+  face.corners[1].normal = face.corners[0].normal;
+  face.corners[2].normal = face.corners[0].normal;
   face.texture = texture;
   return face;
 }
@@ -223,18 +258,20 @@ Path path(std::string name = "path") {
 }  // namespace
 
 TEST_SUITE("Level edit API") {
-  TEST_CASE("Add operations return exact failures and invalidate their output index") {
+  TEST_CASE("Add operations repair identifiers and invalidate output indices on failure") {
     Level level;
 
     RoomIndex room_index = 42;
-    CHECK(level.addRoom({{"", 0}}, room_index) == ARX_LEVEL_BAD_ROOM_NAME);
-    CHECK(room_index == kInvalidRoomIndex);
-    REQUIRE(level.addRoom({{"room", 4}}, room_index) == ARX_OK);
+    REQUIRE(level.addRoom({{"", 0}}, room_index) == ARX_OK);
     CHECK(room_index == 0);
+    CHECK(test::room(level, room_index).name == "unnamed");
+    REQUIRE(level.addRoom({{"room", 4}}, room_index) == ARX_OK);
+    CHECK(room_index == 1);
 
     room_index = 42;
-    CHECK(level.addRoom({{"room", 4}}, room_index) == ARX_LEVEL_DUPLICATE_ROOM_NAME);
-    CHECK(room_index == kInvalidRoomIndex);
+    REQUIRE(level.addRoom({{"room", 4}}, room_index) == ARX_OK);
+    CHECK(room_index == 2);
+    CHECK(test::room(level, room_index).name == "room_1");
 
     VertexIndex vertex_index = 42;
     CHECK(level.addVertices(nullptr, 0, vertex_index) == ARX_INVALID_OPTIONS);
@@ -268,7 +305,11 @@ TEST_SUITE("Level edit API") {
     CHECK(level.setTextureImage(1, {another_image.data(), another_image.size()}) == ARX_INDEX_OUT_OF_RANGE);
 
     CHECK(level.clearTextureImage(0) == ARX_OK);
-    CHECK(test::texture(level, 0).encoded_image.empty());
+    const pistoris::Texture external = test::texture(level, 0);
+    CHECK(external.encoded_image.empty());
+    CHECK(external.external_image_extension == ".bmp");
+    CHECK(level.clearTextureImage(0) == ARX_OK);
+    CHECK(test::texture(level, 0).external_image_extension == ".bmp");
     CHECK(level.clearTextureImage(1) == ARX_INDEX_OUT_OF_RANGE);
   }
 
@@ -279,7 +320,7 @@ TEST_SUITE("Level edit API") {
 
     std::string path = "graph/obj3d/textures/stone.bmp";
     std::vector<std::uint8_t> image = makeTestBmp();
-    const ArxLevelTextureView submitted = {{path.data(), path.size()}, {image.data(), image.size()}};
+    const ArxTextureView submitted = {{path.data(), path.size()}, {image.data(), image.size()}};
     TextureIndex index = 42;
     REQUIRE(level.addTexture(submitted, index) == ARX_OK);
     CHECK(index == 0);
@@ -289,15 +330,18 @@ TEST_SUITE("Level edit API") {
     REQUIRE(level.textureCount() == 1);
     CHECK(test::texture(level, 0).path == "graph/obj3d/textures/stone.bmp");
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
+    REQUIRE(level.rebaseTexturePaths("custom/textures") == ARX_OK);
+    CHECK(test::texture(level, 0).path == "custom/textures/stone.bmp");
     CHECK(test::navSurface(level).has_value());
     CHECK(level.anchorCount() == 1);
     CHECK(level.validateMesh() == ARX_OK);
 
     index = 42;
     const std::string bad_path = "graph/obj3d/textures/bad__name.bmp";
-    CHECK(level.addTexture({{bad_path.data(), bad_path.size()}, {}}, index) == ARX_LEVEL_BAD_TEXTURE_PATH);
-    CHECK(index == kNoTexture);
-    CHECK(level.textureCount() == 1);
+    REQUIRE(level.addTexture({{bad_path.data(), bad_path.size()}, {}}, index) == ARX_OK);
+    CHECK(index == 1);
+    CHECK(test::texture(level, index).path == "graph/obj3d/textures/bad__name.bmp");
+    CHECK(level.textureCount() == 2);
   }
 
   TEST_CASE("Native bundle bake rejects an empty level name") {
@@ -305,12 +349,12 @@ TEST_SUITE("Level edit API") {
     NativeLevelBundle bundle;
     bundle.dlf.scene_path = "unchanged";
 
-    CHECK(level.bakeNativeBundle({.level_name = "", .texture_folder = ""}, bundle) == ARX_DLF_BAD_SCENE_PATH);
+    CHECK(level.bakeNativeBundle({.level_name = ""}, bundle) == ARX_DLF_BAD_SCENE_PATH);
     CHECK(bundle.dlf.scene_path == "unchanged");
 
     dlf::Data dlf;
     dlf.scene_path = "unchanged";
-    CHECK(level.bakeNativeDlf({.level_name = ""}, dlf) == ARX_DLF_BAD_SCENE_PATH);
+    CHECK(level.bakeDlf({.level_name = ""}, dlf) == ARX_DLF_BAD_SCENE_PATH);
     CHECK(dlf.scene_path == "unchanged");
   }
 
@@ -340,7 +384,7 @@ TEST_SUITE("Level edit API") {
     REQUIRE(level.validateVertices() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
 
     dlf::Data dlf;
-    REQUIRE(level.bakeNativeDlf({.level_name = "level7", .target_fts_offset = {10.0f, 20.0f, 30.0f}}, dlf) == ARX_OK);
+    REQUIRE(level.bakeDlf({.level_name = "level7", .target_fts_offset = {10.0f, 20.0f, 30.0f}}, dlf) == ARX_OK);
 
     CHECK(dlf.scene_path == "graph/levels/level7");
     CHECK(dlf.player_spawn.position.x == doctest::Approx(1.0f));
@@ -367,9 +411,9 @@ TEST_SUITE("Level edit API") {
     REQUIRE(dlf.paths[0].nodes.size() == 2);
     CHECK(dlf.paths[0].nodes[1].relative_position.x == doctest::Approx(1.0f));
 
-    Level::NativeDlfBakeOptions explicit_scene_options;
+    Level::DlfBakeOptions explicit_scene_options;
     explicit_scene_options.dlf_scene_path = "graph/levels/custom";
-    REQUIRE(level.bakeNativeDlf(explicit_scene_options, dlf) == ARX_OK);
+    REQUIRE(level.bakeDlf(explicit_scene_options, dlf) == ARX_OK);
     CHECK(dlf.scene_path == "graph/levels/custom");
   }
 
@@ -387,10 +431,28 @@ TEST_SUITE("Level edit API") {
     CHECK(test::vertex(second, 1).position.x == doctest::Approx(2.0f));
   }
 
+  TEST_CASE("Owns an optional Level resource identity") {
+    Level level = makeLevelWithRoomAndTriangle();
+    CHECK(level.resourcePath().empty());
+    REQUIRE(level.setResourcePath("level:17") == ARX_OK);
+    CHECK((level.resourcePath() == "graph/levels/level17/level17.dlf"));
+    CHECK(level.validate() == ARX_OK);
+    REQUIRE(level.setResourcePath(R"(Drafts\MY_LEVEL.DLF)") == ARX_OK);
+    CHECK((level.resourcePath() == "drafts/my_level.dlf"));
+    CHECK(level.setResourcePath("drafts/my_level.ftl") == ARX_LEVEL_BAD_RESOURCE_PATH);
+    CHECK((level.resourcePath() == "drafts/my_level.dlf"));
+
+    Level copy(level);
+    REQUIRE(level.setResourcePath({}) == ARX_OK);
+    CHECK(level.resourcePath().empty());
+    CHECK((copy.resourcePath() == "drafts/my_level.dlf"));
+  }
+
   TEST_CASE("Reset restores the default editing state") {
     Level level = makeLevelWithRoomAndTriangle();
     REQUIRE(test::addAnchor(level, anchor(0.0f)) == 0);
     REQUIRE(test::setPlayerSpawn(level, {{1.0f, 2.0f, 3.0f}, {}}) == ARX_OK);
+    REQUIRE(level.setResourcePath("level:1") == ARX_OK);
 
     level.reset();
 
@@ -398,6 +460,7 @@ TEST_SUITE("Level edit API") {
     CHECK(level.faceCount() == 0);
     CHECK(level.roomCount() == 0);
     CHECK(level.anchorCount() == 0);
+    CHECK(level.resourcePath().empty());
     bool has_usable_spawn = true;
     test::playerSpawn(level, &has_usable_spawn);
     CHECK_FALSE(has_usable_spawn);
@@ -442,6 +505,15 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Rejects incoherent mesh replacement without changing current mesh") {
     Level level = makeLevelWithRoomAndTriangle();
 
+    ArxLevelMeshInput oversized{};
+    oversized.vertex_count = std::numeric_limits<std::size_t>::max();
+    if constexpr (std::numeric_limits<std::size_t>::max() > static_cast<std::size_t>(pistoris::kInvalidVertexIndex))
+      CHECK(level.replaceMesh(oversized) == ARX_LEVEL_TOO_MANY_VERTICES);
+
+    ArxLevelMeshInput maximum_count{};
+    maximum_count.vertex_count = pistoris::kInvalidVertexIndex;
+    CHECK(level.replaceMesh(maximum_count) == ARX_INVALID_DATA_POINTER);
+
     test::MeshSnapshot snapshot;
     REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
     snapshot.faces[0].corners[0].vertex = 99;
@@ -465,7 +537,6 @@ TEST_SUITE("Level edit API") {
 
     REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
     snapshot.vertices[0].position.x = std::numeric_limits<float>::infinity();
-    snapshot.textures = {""};
     snapshot.faces.clear();
     snapshot.face_rooms.clear();
     CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_BAD_VERTEX_POSITION);
@@ -507,9 +578,28 @@ TEST_SUITE("Level edit API") {
     CHECK(test::addFace(level, added, 2) == kInvalidFaceIndex);
     CHECK(level.faceCount() == old_faces);
     added.flags = kFaceBitQuad;
-    CHECK(test::addFace(level, added, 1) == kInvalidFaceIndex);
-    CHECK(level.faceCount() == old_faces);
+    CHECK(test::addFace(level, added, 1) == 1);
+    CHECK(level.faceCount() == old_faces + 1);
+    CHECK((test::face(level, 1).flags & kFaceBitQuad) == 0);
+    REQUIRE(level.removeFace(1) == ARX_OK);
     added.flags = 0;
+
+    Face invalid_normal = added;
+    invalid_normal.corners[0].normal = {};
+    CHECK(test::addFace(level, invalid_normal, 1) == kInvalidFaceIndex);
+    CHECK(test::setFace(level, 0, invalid_normal) == ARX_LEVEL_BAD_CORNER_NORMAL);
+    CHECK(level.validateMesh() == ARX_OK);
+
+    Face invalid_uv = added;
+    invalid_uv.corners[0].u = std::numeric_limits<float>::infinity();
+    CHECK(test::setFace(level, 0, invalid_uv) == ARX_LEVEL_BAD_FACE_UV);
+    Face invalid_transval = added;
+    invalid_transval.transval = std::numeric_limits<float>::infinity();
+    CHECK(test::setFace(level, 0, invalid_transval) == ARX_LEVEL_BAD_FACE_TRANSVAL);
+    Face repeated_vertex = added;
+    repeated_vertex.corners[1].vertex = repeated_vertex.corners[0].vertex;
+    CHECK(test::setFace(level, 0, repeated_vertex) == ARX_LEVEL_BAD_FACE_VERTEX);
+    CHECK(level.validateMesh() == ARX_OK);
 
     REQUIRE(test::addFace(level, added, 1) == 1);
     REQUIRE(level.faceCount() == 2);
@@ -529,13 +619,13 @@ TEST_SUITE("Level edit API") {
     CHECK(level.validateMesh() == ARX_OK);
   }
 
-  TEST_CASE("Level mesh replacement rejects flags reserved for other geometry consumers") {
+  TEST_CASE("Level mesh replacement strips flags reserved for native quad encoding") {
     Level level = makeLevelWithRoomAndTriangle();
     test::MeshSnapshot snapshot;
     REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
     snapshot.faces[0].flags = kFaceBitQuad;
 
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_BAD_FACE_TYPE);
+    CHECK(test::replaceMesh(level, snapshot) == ARX_OK);
     CHECK(test::face(level, 0).flags == 0);
   }
 
@@ -636,6 +726,17 @@ TEST_SUITE("Level edit API") {
     CHECK(level.validateMesh() == ARX_OK);
   }
 
+  TEST_CASE("Face edits replace corner normals directly") {
+    Level level = makeLevelWithRoomAndTriangle();
+    ArxLevelFace face{};
+    REQUIRE(level.copyFaces(0, 1, &face) == ARX_OK);
+    face.corners[0].normal = {1.0f, 0.0f, 0.0f};
+    REQUIRE(level.setFace(0, face) == ARX_OK);
+    face = {};
+    REQUIRE(level.copyFaces(0, 1, &face) == ARX_OK);
+    CHECK(face.corners[0].normal == ArxVector3{1.0f, 0.0f, 0.0f});
+  }
+
   TEST_CASE("Welding protects vertices shared by rooms") {
     Level level;
     REQUIRE(test::addRoom(level, {"first"}) == 0);
@@ -711,7 +812,7 @@ TEST_SUITE("Level edit API") {
     CHECK(level.validateFaces() == ARX_OK);
   }
 
-  TEST_CASE("Locally complete item edits reject invalid values") {
+  TEST_CASE("Locally complete item edits repair identifiers before mutation") {
     Level level = makeLevelWithRoomAndTriangle();
     test::MeshSnapshot mesh;
     REQUIRE(test::copyMesh(level, mesh) == ARX_OK);
@@ -721,19 +822,22 @@ TEST_SUITE("Level edit API") {
     REQUIRE(level.validate() == ARX_OK);
 
     CHECK(test::setTexture(level, 0, {""}) == ARX_LEVEL_BAD_TEXTURE_PATH);
-    CHECK(test::setTexture(level, 0, {"graph/bad__texture.bmp"}) == ARX_LEVEL_BAD_TEXTURE_PATH);
     CHECK(test::texture(level, 0).path == "graph/tex.bmp");
+    REQUIRE(test::setTexture(level, 0, {"graph/bad__texture.bmp"}) == ARX_OK);
+    CHECK(test::texture(level, 0).path == "graph/bad__texture.bmp");
     REQUIRE(test::setTexture(level, 0, {"graph/fixed.bmp"}) == ARX_OK);
     CHECK(level.validateFaces() == ARX_OK);
 
-    CHECK(test::setRoom(level, 0, {""}) == ARX_LEVEL_BAD_ROOM_NAME);
-    CHECK(test::setRoom(level, 0, {"room__one"}) == ARX_LEVEL_BAD_ROOM_NAME);
-    CHECK(test::room(level, 0).name == "room");
-    CHECK(test::addRoom(level, {"room"}) == kInvalidRoomIndex);
-    CHECK(test::addRoom(level, {"room__two"}) == kInvalidRoomIndex);
-    REQUIRE(test::addRoom(level, {"second"}) == 1);
-    CHECK(test::setRoom(level, 1, {"room"}) == ARX_LEVEL_DUPLICATE_ROOM_NAME);
-    REQUIRE(test::setRoom(level, 1, {"renamed"}) == ARX_OK);
+    REQUIRE(test::setRoom(level, 0, {""}) == ARX_OK);
+    CHECK(test::room(level, 0).name == "unnamed");
+    REQUIRE(test::setRoom(level, 0, {"room__one"}) == ARX_OK);
+    CHECK(test::room(level, 0).name == "room_one");
+    CHECK(test::addRoom(level, {"room"}) == 1);
+    CHECK(test::addRoom(level, {"room__two"}) == 2);
+    REQUIRE(test::addRoom(level, {"second"}) == 3);
+    REQUIRE(test::setRoom(level, 3, {"room"}) == ARX_OK);
+    CHECK(test::room(level, 3).name == "room_1");
+    REQUIRE(test::setRoom(level, 3, {"renamed"}) == ARX_OK);
     CHECK(level.validateFaceRooms() == ARX_OK);
   }
 
@@ -759,13 +863,15 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::addRoom(level, {"second"}) == 1);
     REQUIRE(test::addPortal(level, portal(0, 1)) == 0);
     REQUIRE(level.validatePortals() == ARX_OK);
-    CHECK(test::addPortal(level, portal(0, 1)) == kInvalidPortalIndex);
+    CHECK(test::addPortal(level, portal(0, 1)) == 1);
+    CHECK(test::portal(level, 1).name == "portal_1");
 
     Portal invalid = portal(0, 1);
     invalid.name = "portal__one";
-    CHECK(test::setPortal(level, 0, invalid) == ARX_LEVEL_BAD_PORTAL_NAME);
-    CHECK(test::addPortal(level, invalid) == kInvalidPortalIndex);
-    CHECK(test::portal(level, 0).name == "portal");
+    REQUIRE(test::setPortal(level, 0, invalid) == ARX_OK);
+    CHECK(test::portal(level, 0).name == "portal_one");
+    CHECK(test::addPortal(level, invalid) == 2);
+    CHECK(test::portal(level, 2).name == "portal_one_1");
 
     invalid = portal(0, 1);
     invalid.vertices[2] = invalid.vertices[1];
@@ -791,9 +897,9 @@ TEST_SUITE("Level edit API") {
     Level level = makeLevelWithRoomAndTriangle();
     REQUIRE(level.validate() == ARX_OK);
 
-    Face invalid = test::face(level, 0);
-    invalid.corners[0].normal = {};
-    REQUIRE(test::setFace(level, 0, invalid) == ARX_OK);
+    Vertex duplicate = test::vertex(level, 2);
+    duplicate.position = test::vertex(level, 0).position;
+    REQUIRE(test::setVertex(level, 2, duplicate) == ARX_OK);
 
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->max.x == doctest::Approx(1.0f));
@@ -864,6 +970,7 @@ TEST_SUITE("Level edit API") {
 
     CHECK(level.vertexCount() == 0);
     CHECK(level.faceCount() == 0);
+    CHECK(level.textureCount() == 0);
     CHECK(test::cornerColors(level).empty());
     CHECK_FALSE(test::navSurface(level).has_value());
     CHECK(level.anchorCount() == 0);
@@ -986,7 +1093,9 @@ TEST_SUITE("Level edit API") {
     CHECK(test::addAnchor(level, anchor(2.0f)) == 2);
     CHECK(test::addAnchorConnection(level, {1, 2}) == 0);
     CHECK(test::addAnchorConnection(level, {0, 2}) == 0);
-    CHECK(test::addAnchorConnection(level, {0, 2}) == 0);
+    AnchorConnectionIndex duplicate = kInvalidAnchorConnectionIndex;
+    CHECK(level.addAnchorConnection({0, 2}, duplicate) == ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION);
+    CHECK(duplicate == kInvalidAnchorConnectionIndex);
     REQUIRE(level.anchorConnectionCount() == 2);
     CHECK(test::anchorConnection(level, 0).first == 0);
     CHECK(test::anchorConnection(level, 0).second == 2);
@@ -1009,15 +1118,17 @@ TEST_SUITE("Level edit API") {
 
     invalid = test::anchor(level, 0);
     invalid.name = "anchor__one";
-    CHECK(test::setAnchor(level, 0, invalid) == ARX_LEVEL_BAD_ANCHOR_NAME);
+    REQUIRE(test::setAnchor(level, 0, invalid) == ARX_OK);
+    CHECK(test::anchor(level, 0).name == "anchor_one");
 
     Anchor named = anchor(3.0f);
     named.name = "marker";
     CHECK(test::addAnchor(level, named) == 2);
-    CHECK(test::addAnchor(level, named) == kInvalidAnchorIndex);
-    named.name.clear();
     CHECK(test::addAnchor(level, named) == 3);
+    CHECK(test::anchor(level, 3).name == "marker_1");
+    named.name.clear();
     CHECK(test::addAnchor(level, named) == 4);
+    CHECK(test::addAnchor(level, named) == 5);
   }
 
   TEST_CASE("Bulk anchor replacement rejects broken connection packages") {
@@ -1087,9 +1198,10 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Light edits validate individual lights") {
     Level level;
     CHECK(test::addLight(level, light()) == 0);
-    CHECK(test::addLight(level, light()) == kInvalidLightIndex);
-    REQUIRE(level.lightCount() == 1);
+    CHECK(test::addLight(level, light()) == 1);
+    REQUIRE(level.lightCount() == 2);
     CHECK(test::light(level, 0).name == "light");
+    CHECK(test::light(level, 1).name == "light_1");
 
     Light replacement = light("torch");
     CHECK(test::setLight(level, 0, replacement) == ARX_OK);
@@ -1100,16 +1212,19 @@ TEST_SUITE("Level edit API") {
     CHECK(test::light(level, 0).name == "torch");
 
     replacement = light("torch__one");
-    CHECK(test::setLight(level, 0, replacement) == ARX_LEVEL_BAD_LIGHT_NAME);
+    REQUIRE(test::setLight(level, 0, replacement) == ARX_OK);
+    CHECK(test::light(level, 0).name == "torch_one");
 
-    CHECK(test::addLight(level, Light{}) == kInvalidLightIndex);
-    CHECK(test::addLight(level, light("light__one")) == kInvalidLightIndex);
-    CHECK(level.removeLight(2) == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(test::addLight(level, Light{}) == 2);
+    CHECK(test::light(level, 2).name == "unnamed");
+    CHECK(test::addLight(level, light("light__one")) == 3);
+    CHECK(test::light(level, 3).name == "light_one");
+    CHECK(level.removeLight(4) == ARX_INDEX_OUT_OF_RANGE);
     CHECK(level.removeLight(0) == ARX_OK);
-    CHECK(level.lightCount() == 0);
+    CHECK(level.lightCount() == 3);
   }
 
-  TEST_CASE("Player spawn is mandatory in the Level API") {
+  TEST_CASE("Player spawn exposes absence through usability") {
     Level level;
     bool has_usable_spawn = true;
     CHECK(test::playerSpawn(level, &has_usable_spawn).position.x == doctest::Approx(0.0f));
@@ -1168,6 +1283,19 @@ TEST_SUITE("Level edit API") {
     CHECK(level.validateEntities() == ARX_OK);
   }
 
+  TEST_CASE("Entity collision suffixes preserve the identifier length limit") {
+    Level level;
+    Entity authored = entity();
+    authored.name.assign(1023, 'a');
+    REQUIRE(test::addEntity(level, authored) == 0);
+    REQUIRE(test::addEntity(level, authored) == 1);
+
+    const Entity duplicate = test::entity(level, 1);
+    CHECK(duplicate.name.size() == 1023);
+    CHECK(duplicate.name.ends_with("_1"));
+    CHECK(level.validateEntities() == ARX_OK);
+  }
+
   TEST_CASE("Scene collection edits validate module invariants") {
     Level level;
     Entity normalized_entity = entity();
@@ -1178,14 +1306,22 @@ TEST_SUITE("Level edit API") {
     CHECK(test::entity(level, 0).name == "torch");
     CHECK(test::entity(level, 0).rotation.w == doctest::Approx(1.0f));
 
+    Entity no_graph_entity = entity("items/custom/torch");
+    CHECK(test::setEntity(level, 0, no_graph_entity) == ARX_OK);
+    CHECK(test::entity(level, 0).class_path == "items/custom/torch");
+    CHECK(test::setEntity(level, 0, normalized_entity) == ARX_OK);
+
     Entity bad_entity = entity("Graph\\Obj3D\\Interactive\\Items\\Torch.teo");
     CHECK(test::setEntity(level, 0, bad_entity) == ARX_LEVEL_BAD_ENTITY_CLASS_PATH);
     CHECK(test::entity(level, 0).class_path == "graph/obj3d/interactive/items/torch");
     CHECK(test::addEntity(level, bad_entity) == kInvalidEntityIndex);
-    CHECK(test::addEntity(level, entity("graph/obj3d/interactive/items/torch__lit")) == kInvalidEntityIndex);
+    REQUIRE(test::addEntity(level, entity("graph/obj3d/interactive/items/torch__lit")) == 1);
+    CHECK(test::entity(level, 1).class_path == "graph/obj3d/interactive/items/torch__lit");
+    CHECK(test::addEntity(level, entity("graph/obj3d/interactive/items/torch?lit")) == kInvalidEntityIndex);
     bad_entity = entity();
     bad_entity.name = "entity__one";
-    CHECK(test::setEntity(level, 0, bad_entity) == ARX_LEVEL_BAD_ENTITY_NAME);
+    REQUIRE(test::setEntity(level, 0, bad_entity) == ARX_OK);
+    CHECK(test::entity(level, 0).name == "entity_one");
     CHECK(level.removeEntity(2) == ARX_INDEX_OUT_OF_RANGE);
     CHECK(level.removeEntity(0) == ARX_OK);
 
@@ -1199,36 +1335,49 @@ TEST_SUITE("Level edit API") {
     CHECK(test::setFog(level, 0, fog) == ARX_LEVEL_BAD_FOG_POSITION);
     fog.position.x = 1.0f;
     fog.name = "fog__one";
-    CHECK(test::setFog(level, 0, fog) == ARX_LEVEL_BAD_FOG_NAME);
+    REQUIRE(test::setFog(level, 0, fog) == ARX_OK);
+    CHECK(test::fog(level, 0).name == "fog_one");
     fog.name = "mist";
     CHECK(test::setFog(level, 0, fog) == ARX_OK);
-    CHECK(test::setFog(level, 1, fog) == ARX_LEVEL_DUPLICATE_FOG_NAME);
+    REQUIRE(test::setFog(level, 1, fog) == ARX_OK);
+    CHECK(test::fog(level, 1).name == "mist_1");
     CHECK(level.removeFog(1) == ARX_OK);
     CHECK(level.removeFog(0) == ARX_OK);
 
     CHECK(test::addZone(level, zone()) == 0);
-    CHECK(test::addZone(level, zone("ZONE")) == kInvalidZoneIndex);
+    CHECK(test::addZone(level, zone("ZONE")) == 1);
+    CHECK(test::zone(level, 1).name == "zone_1");
     Zone bad_zone = zone("");
-    CHECK(test::setZone(level, 0, bad_zone) == ARX_LEVEL_BAD_ZONE_NAME);
-    CHECK(test::addZone(level, zone("zone__one")) == kInvalidZoneIndex);
+    REQUIRE(test::setZone(level, 0, bad_zone) == ARX_OK);
+    CHECK(test::zone(level, 0).name == "unnamed");
+    CHECK(test::addZone(level, zone("zone__one")) == 2);
+    CHECK(test::zone(level, 2).name == "zone_one");
     bad_zone = zone("zone_two");
-    bad_zone.ambiance = ZoneAmbiance{"ambient__cave", 100.0f};
+    bad_zone.ambiance = ZoneAmbiance{"ambient__cave.v2", 100.0f};
+    REQUIRE(test::setZone(level, 0, bad_zone) == ARX_OK);
+    REQUIRE(test::zone(level, 0).ambiance.has_value());
+    CHECK(test::zone(level, 0).ambiance->name == "ambient__cave.v2");
+    bad_zone.ambiance = ZoneAmbiance{"ambient?cave", 100.0f};
     CHECK(test::setZone(level, 0, bad_zone) == ARX_LEVEL_BAD_ZONE_AMBIANCE);
-    CHECK(test::zone(level, 0).name == "zone");
+    CHECK(test::zone(level, 0).ambiance->name == "ambient__cave.v2");
     CHECK(level.removeZone(0) == ARX_OK);
 
     CHECK(test::addPath(level, path()) == 0);
-    CHECK(test::addPath(level, path()) == kInvalidPathIndex);
-    CHECK(test::addPath(level, path("PATH")) == kInvalidPathIndex);
+    CHECK(test::addPath(level, path()) == 1);
+    CHECK(test::path(level, 1).name == "path_1");
+    CHECK(test::addPath(level, path("PATH")) == 2);
+    CHECK(test::path(level, 2).name == "path_2");
     Path bad_path = path("");
-    CHECK(test::setPath(level, 0, bad_path) == ARX_LEVEL_BAD_PATH_NAME);
-    CHECK(test::addPath(level, path("path__one")) == kInvalidPathIndex);
-    CHECK(test::addPath(level, path("path_two")) == 1);
-    CHECK(test::setPath(level, 1, path()) == ARX_LEVEL_DUPLICATE_PATH_NAME);
-    CHECK(test::setPath(level, 0, path()) == ARX_OK);
-    CHECK(test::path(level, 0).name == "path");
-    CHECK(test::path(level, 1).name == "path_two");
-    CHECK(level.removePath(1) == ARX_OK);
+    REQUIRE(test::setPath(level, 0, bad_path) == ARX_OK);
+    CHECK(test::path(level, 0).name == "unnamed");
+    CHECK(test::addPath(level, path("path__one")) == 3);
+    CHECK(test::path(level, 3).name == "path_one");
+    CHECK(test::addPath(level, path("path_two")) == 4);
+    REQUIRE(test::setPath(level, 1, path()) == ARX_OK);
+    CHECK(test::path(level, 1).name == "path");
+    REQUIRE(test::setPath(level, 0, path()) == ARX_OK);
+    CHECK(test::path(level, 0).name == "path_1");
+    CHECK(level.removePath(4) == ARX_OK);
     CHECK(level.removePath(0) == ARX_OK);
   }
 
@@ -1272,7 +1421,7 @@ TEST_SUITE("Level edit API") {
     ArxLevelPathInput projected_path{{"path", 4}, {}, nodes.data(), nodes.size()};
     PathIndex path_index = kInvalidPathIndex;
     REQUIRE(level.addPath(projected_path, path_index) == ARX_OK);
-    nodes[0].type = ARX_PATH_NODE_STANDARD + 256U;
+    nodes[0].type = 2U;
     CHECK(level.setPath(path_index, projected_path) == ARX_LEVEL_BAD_PATH_NODE_TYPE);
     CHECK(level.addPath(projected_path, path_index) == ARX_LEVEL_BAD_PATH_NODE_TYPE);
     CHECK(path_index == kInvalidPathIndex);

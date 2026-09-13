@@ -1,0 +1,35 @@
+{
+  "$schema": "https://arx-tools.github.io/schemas/llf.schema.json",
+  "colors": [
+    {
+      "a": 1.0,
+      "b": 64,
+      "g": 64,
+      "r": 64
+    },
+    {
+      "a": 1.0,
+      "b": 64,
+      "g": 64,
+      "r": 64
+    },
+    {
+      "a": 1.0,
+      "b": 64,
+      "g": 64,
+      "r": 64
+    },
+    {
+      "a": 1.0,
+      "b": 64,
+      "g": 64,
+      "r": 64
+    }
+  ],
+  "header": {
+    "lastModifiedAt": 1789179310,
+    "lastModifiedBy": "arx-pistoris",
+    "numberOfPolygonsInFTS": 0
+  },
+  "lights": []
+}

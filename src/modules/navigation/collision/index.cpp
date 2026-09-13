@@ -1,31 +1,23 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 #include "modules/navigation/collision/internal.h"
-#include "utils/math/geometry.h"
-#include "utils/spatial/arx_level_grid.h"
+#include "utils/math/geometry_algorithms.h"
+#include "utils/spatial/arx_level_grid_index.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <numeric>
-#include <optional>
 #include <vector>
 
 namespace pistoris::navigation::collision {
 namespace {
-
-ArxVector3 normalizeOrZero(const ArxVector3& value) {
-  float len = static_cast<float>(math::length(value));
-  if (len <= std::numeric_limits<float>::epsilon()) return {};
-  return value * (1.0f / len);
-}
 
 bool ignoredForStaticTraversal(FaceType flags) {
   return (flags & (kFaceBitWater | kFaceBitTrans | kFaceBitNocol)) != 0;
@@ -37,7 +29,10 @@ TraversalFace makeTraversalFace(const GeometryData& geometry, const Face& face) 
   for (std::size_t i = 0; i < out.vertices.size(); ++i)
     out.vertices[i] = geometry.vertices[face.corners[i].vertex].position;
   out.center = (out.vertices[0] + out.vertices[1] + out.vertices[2]) * (1.0f / 3.0f);
-  out.normal = normalizeOrZero(math::cross(out.vertices[1] - out.vertices[0], out.vertices[2] - out.vertices[0]));
+  out.normal =
+      math::normalizeFiniteOr(math::cross(out.vertices[1] - out.vertices[0], out.vertices[2] - out.vertices[0]),
+                              {},
+                              std::numeric_limits<float>::epsilon());
   out.min = out.vertices[0];
   out.max = out.vertices[0];
   for (const ArxVector3& vertex : out.vertices) {
@@ -61,48 +56,28 @@ StaticCollisionIndex::StaticCollisionIndex(const GeometryData& geometry) {
     TraversalFace traversal_face = makeTraversalFace(geometry, face);
     std::uint32_t face_index = static_cast<std::uint32_t>(faces_.size());
     faces_.push_back(traversal_face);
-    std::optional<spatial::ArxLevelGrid::Coord> min_x = spatial::ArxLevelGrid::cellCoord(traversal_face.min.x);
-    std::optional<spatial::ArxLevelGrid::Coord> max_x = spatial::ArxLevelGrid::cellCoord(traversal_face.max.x);
-    std::optional<spatial::ArxLevelGrid::Coord> min_z = spatial::ArxLevelGrid::cellCoord(traversal_face.min.z);
-    std::optional<spatial::ArxLevelGrid::Coord> max_z = spatial::ArxLevelGrid::cellCoord(traversal_face.max.z);
-    if (!min_x || !max_x || !min_z || !max_z) continue;
-    for (std::uint16_t x = *min_x; x <= *max_x; ++x)
-      for (std::uint16_t z = *min_z; z <= *max_z; ++z)
-        buckets_[spatial::ArxLevelGrid::cellKey(static_cast<spatial::ArxLevelGrid::Coord>(x),
-                                                static_cast<spatial::ArxLevelGrid::Coord>(z))]
-            .push_back(face_index);
+    grid_index_.add(face_index, {traversal_face.min, traversal_face.max});
   }
 }
 
 const TraversalFace& StaticCollisionIndex::face(std::uint32_t index) const { return faces_[index]; }
 
-std::vector<std::uint32_t> StaticCollisionIndex::candidates(const Cylinder& cylinder) const {
+void StaticCollisionIndex::findCandidates(std::vector<std::uint32_t>& out, const Cylinder& cylinder) const {
+  out.clear();
   float radius = broadphaseRadius(cylinder);
-  std::optional<spatial::ArxLevelGrid::Coord> min_x = spatial::ArxLevelGrid::cellCoord(cylinder.origin.x - radius);
-  std::optional<spatial::ArxLevelGrid::Coord> max_x = spatial::ArxLevelGrid::cellCoord(cylinder.origin.x + radius);
-  std::optional<spatial::ArxLevelGrid::Coord> min_z = spatial::ArxLevelGrid::cellCoord(cylinder.origin.z - radius);
-  std::optional<spatial::ArxLevelGrid::Coord> max_z = spatial::ArxLevelGrid::cellCoord(cylinder.origin.z + radius);
-
-  std::vector<std::uint32_t> out;
-  if (!min_x || !max_x || !min_z || !max_z) return out;
-  const std::uint32_t cell_count =
-      (static_cast<std::uint32_t>(*max_x) - *min_x + 1U) * (static_cast<std::uint32_t>(*max_z) - *min_z + 1U);
-  if (cell_count > faces_.size()) {
-    out.resize(faces_.size());
-    std::iota(out.begin(), out.end(), 0U);
-    return out;
-  }
-  for (std::uint16_t x = *min_x; x <= *max_x; ++x) {
-    for (std::uint16_t z = *min_z; z <= *max_z; ++z) {
-      auto bucket = buckets_.find(spatial::ArxLevelGrid::cellKey(static_cast<spatial::ArxLevelGrid::Coord>(x),
-                                                                 static_cast<spatial::ArxLevelGrid::Coord>(z)));
-      if (bucket == buckets_.end()) continue;
-      out.insert(out.end(), bucket->second.begin(), bucket->second.end());
-    }
-  }
-  std::sort(out.begin(), out.end());
-  out.erase(std::unique(out.begin(), out.end()), out.end());
-  return out;
+  ArxAabb query_bounds;
+  query_bounds.min = {cylinder.origin.x - radius, cylinder.origin.y + cylinder.height, cylinder.origin.z - radius};
+  query_bounds.max = {cylinder.origin.x + radius, cylinder.origin.y, cylinder.origin.z + radius};
+  if (query_bounds.min.y > query_bounds.max.y) std::swap(query_bounds.min.y, query_bounds.max.y);
+  grid_index_.findAabbCandidates(out, query_bounds);
+  out.erase(std::remove_if(out.begin(),
+                           out.end(),
+                           [&](std::uint32_t face_index) {
+                             const TraversalFace& candidate = faces_[face_index];
+                             return candidate.max.x < query_bounds.min.x || candidate.min.x > query_bounds.max.x ||
+                                    candidate.max.z < query_bounds.min.z || candidate.min.z > query_bounds.max.z;
+                           }),
+            out.end());
 }
 
 }  // namespace pistoris::navigation::collision

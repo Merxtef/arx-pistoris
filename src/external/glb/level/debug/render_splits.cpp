@@ -1,27 +1,28 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "../coordinates.h"
 #include "../normals.h"
 #include "../palette.h"
 #include "../topology.h"
+#include "api/status_boundary.h"
 #include "common.h"
 #include "external/glb/container.h"
+#include "level/debug/access.h"
 #include "modules/geometry.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -29,7 +30,6 @@ namespace pistoris::glb_level_debug {
 namespace {
 
 struct LevelVertexDebug {
-  std::vector<std::pair<std::uint32_t, GlbVec2>> uv_by_material;
   std::uint32_t first_material = 0;
   FaceType first_flags = 0;
   float first_transval = 0.0f;
@@ -50,26 +50,25 @@ std::uint32_t debugMaterialId(TextureIndex texture) { return texture == kNoTextu
 namespace pistoris::level_debug {
 
 ArxReturnCode exportRenderSplitsDebugGlb(const Level& level, std::vector<std::uint8_t>& out, float normal_weld_degrees,
-                                         const Level::GlbExportOptions& options) {
-  return glb_level_debug::guardDebugExport("level_debug::exportRenderSplitsDebugGlb", [&]() -> ArxReturnCode {
+                                         const Level::GlbExportOptions& options) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
     std::vector<std::uint8_t> tmp;
     ArxReturnCode rc = level.validateMesh();
     if (rc != ARX_OK) return rc;
-    std::vector<ArxLevelVertex> vertices(level.vertexCount());
-    std::vector<ArxLevelFace> faces(level.faceCount());
-    rc = level.copyVertices(0, vertices.size(), vertices.data());
-    if (rc != ARX_OK) return rc;
-    rc = level.copyFaces(0, faces.size(), faces.data());
-    if (rc != ARX_OK) return rc;
+    const LevelModules& modules = LevelDebugAccess::modules(level);
+    const std::vector<Vertex>& vertices = modules.geometry.vertices;
+    const std::vector<Face>& faces = modules.geometry.faces;
     glb_level::LevelNormalAnalysis normal_analysis;
     rc = glb_level::analyzeLevelNormals(vertices, faces, normal_weld_degrees, normal_analysis);
     if (rc != ARX_OK) return rc;
 
     std::vector<glb_level_debug::LevelVertexDebug> debug(vertices.size());
+    std::unordered_map<std::uint64_t, glb_level_debug::GlbVec2> uv_by_vertex_material;
+    uv_by_vertex_material.reserve(faces.size() * 3U);
     std::vector<std::uint32_t> indices;
     indices.reserve(faces.size() * 3);
 
-    for (const ArxLevelFace& face : faces) {
+    for (const Face& face : faces) {
       for (const auto& corner : face.corners) {
         if (corner.vertex >= vertices.size()) return ARX_GLB_BAD_FORMAT;
         glb_level_debug::LevelVertexDebug& state = debug[corner.vertex];
@@ -87,12 +86,9 @@ ArxReturnCode exportRenderSplitsDebugGlb(const Level& level, std::vector<std::ui
             state.transval_boundary = true;
         }
 
-        auto material_uv = std::find_if(state.uv_by_material.begin(),
-                                        state.uv_by_material.end(),
-                                        [&](const auto& value) { return value.first == material; });
-        if (material_uv == state.uv_by_material.end()) {
-          state.uv_by_material.emplace_back(material, uv);
-        } else if (!glb_level::sameUv(material_uv->second, uv)) {
+        const std::uint64_t uv_key = (static_cast<std::uint64_t>(corner.vertex) << 32U) | material;
+        const auto [material_uv, inserted] = uv_by_vertex_material.emplace(uv_key, uv);
+        if (!inserted && !glb_level::sameUv(material_uv->second, uv)) {
           state.uv_split = true;
         }
 
@@ -101,13 +97,15 @@ ArxReturnCode exportRenderSplitsDebugGlb(const Level& level, std::vector<std::ui
     }
 
     geometry::PositionIndex vertices_by_position(glb_level::kLevelGlbEpsilon);
+    std::vector<std::uint32_t> candidates;
     for (std::uint32_t vertex_idx = 0; vertex_idx < vertices.size(); ++vertex_idx) {
       const ArxVector3& position = vertices[vertex_idx].position;
-      for (std::uint32_t other_idx : vertices_by_position.candidates(position)) {
+      vertices_by_position.findCandidates(candidates, position);
+      for (std::uint32_t other_idx : candidates) {
         debug[vertex_idx].position_split = true;
         debug[other_idx].position_split = true;
       }
-      vertices_by_position.add(vertex_idx, position);
+      (void)vertices_by_position.tryAdd(vertex_idx, position);
     }
 
     constexpr glb_level_debug::GlbVec4 kPositionColor{1.0f, 1.0f, 0.0f, 1.0f};
@@ -136,9 +134,10 @@ ArxReturnCode exportRenderSplitsDebugGlb(const Level& level, std::vector<std::ui
 
     for (std::size_t i = 0; i < vertices.size(); ++i) {
       positions.push_back(glb_level_debug::toVec3(vertices[i].position));
-      normals.push_back(glb_level_debug::toVec3(glb_level::debugVertexNormal(normal_analysis.clusters[i])));
+      normals.push_back(glb_level_debug::toVec3(normal_analysis.vertices[i].representative));
       position_split.push_back(glb_level_debug::debugColor(debug[i].position_split, kPositionColor));
-      normals_split.push_back(glb_level_debug::debugColor(normal_analysis.clusters[i].size() > 1, kNormalsColor));
+      normals_split.push_back(
+          glb_level_debug::debugColor(normal_analysis.vertices[i].cluster_count > 1, kNormalsColor));
       uv_split.push_back(glb_level_debug::debugColor(debug[i].uv_split, kUvColor));
       texture_boundary.push_back(glb_level_debug::debugColor(debug[i].texture_boundary, kMaterialColor));
       flags_boundary.push_back(glb_level_debug::debugColor(debug[i].flags_boundary, kFlagsColor));

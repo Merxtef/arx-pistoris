@@ -3,12 +3,12 @@
 
 #pragma once
 
+#include "console/help_request.h"
+
 #include <cstdio>
-#include <vector>
 
 namespace cli {
 
-bool validateHelpTopics(const std::vector<const char*>& topics);
-void printUsage(std::FILE* output, const char* argv0, const std::vector<const char*>& topics = {});
+void printHelp(std::FILE* output, const HelpRequest& request);
 
 }  // namespace cli

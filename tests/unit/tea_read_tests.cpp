@@ -3,11 +3,11 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/tea.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
-#include "arx/tea.h"
 #include "helpers.h"
+#include "native/tea.h"
 #include "utils/cursor.h"
 
 #include <cstdint>
@@ -498,6 +498,34 @@ TEST_SUITE("tea") {
     REQUIRE(load(buf, d) == ARX_OK);
     REQUIRE(d.keyframes[0].sample.has_value());
     CHECK(d.keyframes[0].sample->name[255] == '\0');
+  }
+
+  TEST_CASE("TeaLoadReplacesOptionalPayloads") {
+    pistoris::tea::Data d;
+    REQUIRE(load(makeKeyframeTea(), d) == ARX_OK);
+    REQUIRE(d.keyframes.front().translate.has_value());
+    REQUIRE(d.keyframes.front().quat.has_value());
+
+    std::vector<uint8_t> buf = makeMinimalTea();
+    setNumKeyframes(buf, 1);
+    appendKeyframe2014(buf);
+    REQUIRE(load(buf, d) == ARX_OK);
+    CHECK_FALSE(d.keyframes.front().translate.has_value());
+    CHECK_FALSE(d.keyframes.front().quat.has_value());
+    CHECK_FALSE(d.keyframes.front().sample.has_value());
+  }
+
+  TEST_CASE("TeaLoadIsTransactional") {
+    pistoris::tea::Data d;
+    REQUIRE(load(makeKeyframeTea(), d) == ARX_OK);
+    const std::size_t keyframe_count = d.keyframes.size();
+    const int32_t frame_count = d.num_frames;
+    std::vector<uint8_t> buf = makeMinimalTea();
+    setNumKeyframes(buf, 1);
+
+    CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
+    CHECK(d.keyframes.size() == keyframe_count);
+    CHECK(d.num_frames == frame_count);
   }
 
 }  // TEST_SUITE("tea")

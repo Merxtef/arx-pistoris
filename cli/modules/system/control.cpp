@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
+#include "base/unique_prefix.h"
 #include "console/diagnostics.h"
+#include "console/help_request.h"
 #include "modules/module.h"
 #include "modules/system/modules.h"
 #include "pipeline/options.h"
 #include "routes/registry.h"
 #include "routes/types.h"
 
-#include <cctype>
 #include <cstddef>
 #include <span>
 #include <string>
@@ -19,40 +20,21 @@
 namespace cli::modules::system {
 namespace {
 
-bool startsWith(std::string_view text, std::string_view prefix) {
-  return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
-}
-
-std::string asciiLower(std::string_view value) {
-  std::string out;
-  out.reserve(value.size());
-  for (unsigned char c : value) out.push_back(static_cast<char>(std::tolower(c)));
-  return out;
-}
-
 bool parseKind(const char* value, RouteKind& out) {
-  const RouteDescriptor* unique = nullptr;
   std::string_view needle = value ? std::string_view(value) : std::string_view();
   RouteRegistryView routes = routeRegistry();
-  for (std::size_t index = 0; index < routes.count; ++index) {
-    const RouteDescriptor& candidate = routes.routes[index];
-    std::string_view name = candidate.name;
-    if (name == needle) {
-      out = candidate.kind;
-      return true;
-    }
-    if (!startsWith(name, needle)) continue;
-    if (unique) {
-      diagnostic(DiagnosticCode::kKindAmbiguous, "--kind: ambiguous value '%s'", value);
-      return false;
-    }
-    unique = &candidate;
+  const auto match = resolveUniquePrefix(needle,
+                                         std::span<const RouteDescriptor>{routes.routes, routes.count},
+                                         [](const RouteDescriptor& candidate) { return candidate.name; });
+  if (match.status == UniquePrefixStatus::kAmbiguous) {
+    diagnostic(DiagnosticCode::kKindAmbiguous, "--kind: ambiguous value '%s'", value);
+    return false;
   }
-  if (!unique) {
+  if (match.status == UniquePrefixStatus::kNone) {
     diagnostic(DiagnosticCode::kKindInvalid, "--kind: unknown route '%s'", value ? value : "");
     return false;
   }
-  out = unique->kind;
+  out = match.value->kind;
   return true;
 }
 
@@ -81,27 +63,21 @@ bool parseLogLevel(const char* value, ArxLogLevel& out) {
       {"warn", ARX_LOG_WARN},
   };
 
-  const Candidate* unique = nullptr;
-  std::string needle = asciiLower(value ? std::string_view(value) : std::string_view());
-  for (const Candidate& candidate : kCandidates) {
-    std::string_view name = candidate.name;
-    if (name == needle) {
-      out = candidate.level;
-      return true;
-    }
-    if (!startsWith(name, needle)) continue;
-    if (unique) {
-      diagnostic(DiagnosticCode::kLogLevelAmbiguous, "--log-level: ambiguous value '%s'", value);
-      return false;
-    }
-    unique = &candidate;
+  const auto match = resolveUniquePrefix(
+      value ? std::string_view(value) : std::string_view(),
+      std::span<const Candidate>{kCandidates},
+      [](const Candidate& candidate) { return candidate.name; },
+      PrefixCase::kAsciiInsensitive);
+  if (match.status == UniquePrefixStatus::kAmbiguous) {
+    diagnostic(DiagnosticCode::kLogLevelAmbiguous, "--log-level: ambiguous value '%s'", value);
+    return false;
   }
-  if (!unique) {
+  if (match.status == UniquePrefixStatus::kNone) {
     diagnostic(
         DiagnosticCode::kLogLevelInvalid, "--log-level: expected DEBUG, INFO, or WARN, got '%s'", value ? value : "");
     return false;
   }
-  out = unique->level;
+  out = match.value->level;
   return true;
 }
 
@@ -113,15 +89,15 @@ class HelpModule final : public SystemModule {
   }
 
   ModuleHelp help(const RouteDescriptor*) const noexcept override {
-    return {HelpSection::kOptions, "-h, --help [topics...]", "Print help."};
+    return {HelpSection::kOptions, "-h, --help [TOPIC [SUBTOPIC]]", "Print help."};
   }
 
   ModuleParseResult parse(ModuleParseContext& ctx) const override {
-    ctx.options.help = true;
-    for (int index = ctx.index + 1; index < ctx.argc && !(ctx.argv[index][0] == '-' && ctx.argv[index][1] != '\0');
-         ++index) {
-      ctx.options.help_topics.push_back(ctx.argv[index]);
-    }
+    HelpRequest request;
+    std::span<const char* const> arguments(ctx.argv + ctx.index + 1,
+                                           static_cast<std::size_t>(ctx.argc - ctx.index - 1));
+    if (!resolveHelpRequest(arguments, request)) return {.ok = false};
+    ctx.options.help = request;
     return {.stop = true};
   }
 };

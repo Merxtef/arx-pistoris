@@ -5,6 +5,8 @@
 
 #include "arx_pistoris/paths/types.h"
 
+#include "base/resource_path.h"
+#include "formats/format.h"
 #include "resources/selector.h"
 
 #include <string>
@@ -20,7 +22,7 @@ TEST_SUITE("CLI resource selectors") {
     CHECK(selector.logical_path == "graph/levels/level17/level17.dlf");
   }
 
-  TEST_CASE("Typed shorthand constructs conventional resource paths") {
+  TEST_CASE("Typed selectors construct conventional resource paths") {
     cli::ResourceSelector selector;
     std::string error;
     REQUIRE(cli::parseResourceSelector("anim:NPC:walk", selector, error) == cli::SelectorParseStatus::kValid);
@@ -69,9 +71,10 @@ TEST_SUITE("CLI resource selectors") {
   TEST_CASE("Resource stems can preserve unregistered suffixes") {
     CHECK(cli::resourceStem("folder/scene.dlf") == "scene");
     CHECK(cli::resourceStem("folder/scene.v2") == "scene");
-    CHECK(cli::resourceStem("folder/scene.dlf", false) == "scene");
-    CHECK(cli::resourceStem("folder/scene.DLF", false) == "scene");
-    CHECK(cli::resourceStem("folder/scene.v2", false) == "scene.v2");
-    CHECK(cli::resourceStem("folder/scene.dlf.bak", false) == "scene.dlf.bak");
+    CHECK(cli::resourceFormatStem("folder/scene.dlf") == "scene");
+    CHECK(cli::resourceFormatStem("folder/scene.DLF") == "scene");
+    CHECK(cli::resourceFormatStem("folder/ambiance.AMB") == "ambiance");
+    CHECK(cli::resourceFormatStem("folder/scene.v2") == "scene.v2");
+    CHECK(cli::resourceFormatStem("folder/scene.dlf.bak") == "scene.dlf.bak");
   }
 }

@@ -3,13 +3,11 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris.hpp"
-
 #include "conversion/options.h"
 #include "routes/animation/state.h"
 
-namespace cli::animation {
+namespace cli::animation::operations {
 
-bool applyModules(Context& ctx, const SharedConversionOptions& conversion);
+bool apply(IntermediateAnimation& animation, const SharedConversionOptions& conversion);
 
-}  // namespace cli::animation
+}  // namespace cli::animation::operations

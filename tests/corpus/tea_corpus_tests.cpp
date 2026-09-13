@@ -6,68 +6,72 @@
 #include "arx_pistoris/arx_pistoris.h"
 #include "arx_pistoris/native/tea.hpp"
 
-#include "helpers.h"
+#include "support/corpus_checks.h"
+#include "support/corpus_files.h"
+#include "support/native_equivalence.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <ios>
-#include <iterator>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-static std::vector<uint8_t> readBytes(const fs::path& p) {
-  std::ifstream f(p, std::ios::binary);
-  return {std::istreambuf_iterator<char>(f), {}};
-}
-
 TEST_SUITE("tea") {
-  // --- data/arx/tea/ (game assets, silently skipped if absent) ---
-
   TEST_CASE("ArxTeaParse") {
-    const fs::path dir = "data/arx/tea";
-    if (!fs::exists(dir)) return;
-    for (auto& e : fs::directory_iterator(dir)) {
-      if (e.path().extension() != ".tea") continue;
-      CAPTURE(e.path().string());
-      auto bytes = readBytes(e.path());
-      ArxTeaHandle h = nullptr;
-      ArxReturnCode rc = arx_pistoris_tea_parse(bytes.data(), bytes.size(), &h);
-      CHECK(rc == ARX_OK);
-      if (h) arx_pistoris_tea_free(h);
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kTea)) {
+      CAPTURE(path.string());
+      std::vector<std::uint8_t> bytes;
+      if (!test_support::readCorpusBytes(path, bytes)) continue;
+      ArxTea* h = nullptr;
+      const ArxReturnCode rc = arx_pistoris_tea_read(bytes.data(), bytes.size(), &h);
+      if (!test_support::checkCorpusStatus(path, "read TEA", rc)) {
+        if (h) arx_pistoris_tea_destroy(h);
+        continue;
+      }
+      test_support::checkCorpusCondition(path, "read TEA", h != nullptr, "returned no TEA");
+      if (h) arx_pistoris_tea_destroy(h);
     }
   }
 
   TEST_CASE("ArxTeaWriteRoundtrip") {
-    const fs::path dir = "data/arx/tea";
-    if (!fs::exists(dir)) return;
-    for (auto& e : fs::directory_iterator(dir)) {
-      if (e.path().extension() != ".tea") continue;
-      CAPTURE(e.path().string());
-      auto bytes = readBytes(e.path());
-      ArxTeaHandle h1 = nullptr;
-      CHECK(arx_pistoris_tea_parse(bytes.data(), bytes.size(), &h1) == ARX_OK);
-      if (!h1) continue;
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kTea)) {
+      CAPTURE(path.string());
+      std::vector<std::uint8_t> bytes;
+      if (!test_support::readCorpusBytes(path, bytes)) continue;
+      ArxTea* h1 = nullptr;
+      ArxReturnCode rc = arx_pistoris_tea_read(bytes.data(), bytes.size(), &h1);
+      if (!test_support::checkCorpusStatus(path, "read source TEA", rc)) {
+        if (h1) arx_pistoris_tea_destroy(h1);
+        continue;
+      }
+      if (!test_support::checkCorpusCondition(path, "read source TEA", h1 != nullptr, "returned no TEA")) continue;
 
       uint8_t* out = nullptr;
       size_t sz = 0;
-      CHECK(arx_pistoris_tea_write(h1, &out, &sz) == ARX_OK);
-      if (!out) {
-        arx_pistoris_tea_free(h1);
+      rc = arx_pistoris_tea_write(h1, &out, &sz);
+      if (!test_support::checkCorpusStatus(path, "write TEA", rc) ||
+          !test_support::checkCorpusCondition(path, "write TEA", out != nullptr, "returned no bytes")) {
+        if (out) arx_pistoris_free_bytes(out);
+        arx_pistoris_tea_destroy(h1);
         continue;
       }
 
-      ArxTeaHandle h2 = nullptr;
-      ArxReturnCode rc2 = arx_pistoris_tea_parse(out, sz, &h2);
+      ArxTea* h2 = nullptr;
+      const ArxReturnCode rc2 = arx_pistoris_tea_read(out, sz, &h2);
       arx_pistoris_free_bytes(out);
-      CHECK(rc2 == ARX_OK);
-      if (h2) {
-        checkEq(*reinterpret_cast<const pistoris::tea::Data*>(h1), *reinterpret_cast<const pistoris::tea::Data*>(h2));
-        arx_pistoris_tea_free(h2);
+      if (!test_support::checkCorpusStatus(path, "read written TEA", rc2)) {
+        if (h2) arx_pistoris_tea_destroy(h2);
+        arx_pistoris_tea_destroy(h1);
+        continue;
       }
-      arx_pistoris_tea_free(h1);
+      test_support::checkCorpusCondition(path, "read written TEA", h2 != nullptr, "returned no TEA");
+      if (h2) {
+        test_support::checkEquivalent(*reinterpret_cast<const pistoris::tea::Data*>(h1),
+                                      *reinterpret_cast<const pistoris::tea::Data*>(h2));
+        arx_pistoris_tea_destroy(h2);
+      }
+      arx_pistoris_tea_destroy(h1);
     }
   }
 

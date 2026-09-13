@@ -4,16 +4,18 @@
 #ifndef ARX_PISTORIS_LEVEL_TYPES_H
 #define ARX_PISTORIS_LEVEL_TYPES_H
 
-#include "arx_pistoris/api.h"
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/image.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/string_view.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 // Public C-compatible Level value types
 // NOLINTBEGIN(readability-identifier-naming, performance-enum-size)
+
+typedef struct ArxTextureView ArxTextureView;
 
 #ifdef __cplusplus
 #define ARX_PISTORIS_DETAIL_CXX_DEFAULT(value) = value
@@ -28,7 +30,7 @@ typedef uint32_t ArxZoneHeightMode;
 enum { ARX_ZONE_HEIGHT_FINITE = 0, ARX_ZONE_HEIGHT_INFINITE = 1 };
 
 typedef uint32_t ArxPathNodeType;
-enum { ARX_PATH_NODE_STANDARD = 0, ARX_PATH_NODE_BEZIER = 1, ARX_PATH_NODE_CONTROL_POINT = 2 };
+enum { ARX_PATH_NODE_STANDARD = 0, ARX_PATH_NODE_BEZIER = 1 };
 
 enum { ARX_ANCHOR_FLAG_BLOCKED = 1U << 3, ARX_LEVEL_FACE_BITS_ALL = ARX_FACE_BITS_ALL & ~ARX_FACE_BIT_QUAD };
 
@@ -76,10 +78,18 @@ typedef struct ArxLevelPlayerSpawn {
   uint8_t is_usable;
 } ArxLevelPlayerSpawn;
 
-typedef struct ArxLevelTextureView {
-  ArxStringView path;
-  ArxEncodedImageView encoded_image;
-} ArxLevelTextureView;
+typedef struct ArxLevelModelPreviewReport {
+  size_t mapped_models ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  size_t previewed_entities ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  size_t skipped_anonymous_models ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  size_t skipped_unmappable_models ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  size_t skipped_duplicate_models ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  size_t skipped_invalid_models ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+} ArxLevelModelPreviewReport;
+
+typedef struct ArxLevelGlbImportInfo {
+  ArxVector3 applied_arx_offset ARX_PISTORIS_DETAIL_CXX_DEFAULT({});
+} ArxLevelGlbImportInfo;
 
 typedef struct ArxLevelRoom {
   ArxStringView name;
@@ -201,7 +211,7 @@ typedef struct ArxLevelMeshInput {
   size_t vertex_count;
   const ArxLevelFace* faces;
   size_t face_count;
-  const ArxLevelTextureView* textures;
+  const ArxTextureView* textures;
   size_t texture_count;
 } ArxLevelMeshInput;
 

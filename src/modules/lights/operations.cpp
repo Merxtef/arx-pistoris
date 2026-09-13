@@ -1,34 +1,25 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/lights.h"
-#include "utils/math/finite.h"
-#include "utils/name_tokens.h"
-#include "utils/unique_name.h"
+#include "utils/identifier.h"
 
+#include <array>
 #include <cassert>
 #include <cstddef>
+#include <optional>
 #include <span>
-#include <string>
-#include <string_view>
-#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace pistoris::lights {
 namespace {
 
 constexpr std::size_t kCornersPerFace = 3;
-
-using math::finite;
-
-bool unitColor(const ArxColor3& color) {
-  return finite(color) && color.r >= 0.0f && color.r <= 1.0f && color.g >= 0.0f && color.g <= 1.0f && color.b >= 0.0f &&
-         color.b <= 1.0f;
-}
 
 }  // namespace
 
@@ -71,90 +62,113 @@ void remapCornerColors(LightingData& lighting, std::span<const FaceIndex> face_r
   while (lighting.corner_colors.size() > next_color_count) lighting.corner_colors.pop_back();
 }
 
-Error validateLightSource(const Light& light) {
-  if (light.name.empty() || !validSemanticString(light.name)) return Error::kBadLightName;
-  if (!finite(light.position)) return Error::kBadLightPosition;
-  if (!unitColor(light.color)) return Error::kBadLightColor;
-  const bool zero_range = light.fallstart == 0.0f && light.fallend == 0.0f;
-  if (!finite(light.fallstart) || light.fallstart < 0.0f || !finite(light.fallend) ||
-      (!zero_range && light.fallend <= light.fallstart))
-    return Error::kBadLightFalloff;
-  if (!finite(light.intensity) || light.intensity < 0.0f) return Error::kBadLightIntensity;
-  if (!finite(light.flicker) || !finite(light.effect_radius) || !finite(light.effect_frequency) ||
-      !finite(light.effect_size) || !finite(light.effect_speed) || !finite(light.flare_size))
-    return Error::kBadLightEffect;
-  if ((light.flags & ~kLightFlagsAll) != 0) return Error::kBadLightFlags;
-  return Error::kNone;
+void reserveCornerColorCapacity(LightingData& lighting, std::size_t capacity) {
+  lighting.corner_colors.reserve(capacity);
 }
 
-Error validateLightSources(std::span<const Light> lights) {
-  if (lights.size() > static_cast<std::size_t>(kInvalidLightIndex)) return Error::kTooManyLights;
-  std::unordered_set<std::string_view> names;
+void truncateCornerColors(LightingData& lighting, std::size_t size) noexcept {
+  while (lighting.corner_colors.size() > size) lighting.corner_colors.pop_back();
+}
+
+void setLight(LightingData& lighting, LightIndex index, Light light) noexcept {
+  assert(static_cast<std::size_t>(index) < lighting.lights.size());
+  lighting.lights[index] = std::move(light);
+}
+
+LightIndex addLight(LightingData& lighting, Light light) {
+  assert(lighting.lights.size() < static_cast<std::size_t>(kInvalidLightIndex));
+  const LightIndex index = static_cast<LightIndex>(lighting.lights.size());
+  lighting.lights.push_back(std::move(light));
+  return index;
+}
+
+void removeLight(LightingData& lighting, LightIndex index) noexcept {
+  assert(static_cast<std::size_t>(index) < lighting.lights.size());
+  lighting.lights.erase(lighting.lights.begin() + static_cast<std::ptrdiff_t>(index));
+}
+
+void setFaceCornerColors(LightingData& lighting, FaceIndex face, const std::optional<std::array<ArxColor3, 3>>& colors,
+                         std::size_t face_count) {
+  assert(static_cast<std::size_t>(face) < face_count);
+  assert(lighting.corner_colors.empty() || lighting.corner_colors.size() == expectedCornerColorCount(face_count));
+  if (lighting.corner_colors.empty()) {
+    if (!colors) return;
+    lighting.corner_colors.assign(expectedCornerColorCount(face_count), kDefaultCornerColor);
+  }
+  const std::size_t first = cornerColorIndex(face, 0);
+  for (std::size_t corner = 0; corner < kCornersPerFace; ++corner)
+    lighting.corner_colors[first + corner] = colors ? (*colors)[corner] : kDefaultCornerColor;
+}
+
+void appendFaceCornerColors(LightingData& lighting, const std::optional<std::array<ArxColor3, 3>>& colors,
+                            std::size_t existing_face_count) {
+  assert(lighting.corner_colors.empty() ||
+         lighting.corner_colors.size() == expectedCornerColorCount(existing_face_count));
+  if (lighting.corner_colors.empty()) {
+    if (!colors) return;
+    std::vector<ArxColor3> corner_colors(expectedCornerColorCount(existing_face_count + 1U), kDefaultCornerColor);
+    const std::size_t first = expectedCornerColorCount(existing_face_count);
+    for (std::size_t corner = 0; corner < kCornersPerFace; ++corner) corner_colors[first + corner] = (*colors)[corner];
+    lighting.corner_colors = std::move(corner_colors);
+    return;
+  }
+  const std::size_t original_size = lighting.corner_colors.size();
+  try {
+    for (std::size_t corner = 0; corner < kCornersPerFace; ++corner)
+      lighting.corner_colors.push_back(colors ? (*colors)[corner] : kDefaultCornerColor);
+  } catch (...) {
+    truncateCornerColors(lighting, original_size);
+    throw;
+  }
+}
+
+void removeFaceCornerColors(LightingData& lighting, FaceIndex face, [[maybe_unused]] std::size_t face_count) noexcept {
+  assert(static_cast<std::size_t>(face) < face_count);
+  if (lighting.corner_colors.empty()) return;
+  assert(lighting.corner_colors.size() == expectedCornerColorCount(face_count));
+  const std::size_t first = cornerColorIndex(face, 0);
+  lighting.corner_colors.erase(lighting.corner_colors.begin() + static_cast<std::ptrdiff_t>(first),
+                               lighting.corner_colors.begin() + static_cast<std::ptrdiff_t>(first + kCornersPerFace));
+}
+
+void setCornerColor(LightingData& lighting, FaceIndex face, std::size_t corner, ArxColor3 color,
+                    std::size_t face_count) {
+  assert(static_cast<std::size_t>(face) < face_count && corner < kCornersPerFace);
+  if (lighting.corner_colors.empty())
+    lighting.corner_colors.assign(expectedCornerColorCount(face_count), kDefaultCornerColor);
+  else
+    assert(lighting.corner_colors.size() == expectedCornerColorCount(face_count));
+  lighting.corner_colors[cornerColorIndex(face, corner)] = color;
+}
+
+void replaceCornerColors(LightingData& lighting, std::vector<ArxColor3>&& colors) noexcept {
+  lighting.corner_colors = std::move(colors);
+}
+
+void clearCornerColors(LightingData& lighting) noexcept { lighting.corner_colors.clear(); }
+
+void clear(LightingData& lighting) noexcept {
+  lighting.lights.clear();
+  lighting.corner_colors.clear();
+}
+
+std::size_t repairLightNames(std::span<Light> lights) {
+  IdentifierUniquifier names;
   names.reserve(lights.size());
-  for (const Light& light : lights) {
-    Error error = validateLightSource(light);
-    if (error != Error::kNone) return error;
-    if (!names.insert(light.name).second) return Error::kDuplicateLightName;
-  }
-  return Error::kNone;
+  for (Light& light : lights) names.add(light.name);
+  const IdentifierRepairSummary summary = names.apply();
+  assert(!summary.exhausted);
+  return summary.changed;
 }
 
-std::size_t makeLightNamesUnique(std::span<Light> lights) {
-  std::unordered_set<std::string> unavailable;
-  unavailable.reserve(lights.size());
-  for (const Light& light : lights) unavailable.insert(light.name);
-
-  std::unordered_set<std::string> assigned;
-  assigned.reserve(lights.size());
-  std::size_t renamed = 0;
-  for (Light& light : lights) {
-    if (assigned.insert(light.name).second) continue;
-    light.name = makeUniqueName(light.name, unavailable);
-    unavailable.insert(light.name);
-    assigned.insert(light.name);
-    ++renamed;
-  }
-  return renamed;
-}
-
-Error validateLightSources(const LightingData& lighting) { return validateLightSources(lighting.lights); }
-
-Error validateCornerColor(const ArxColor3& color) {
-  if (!unitColor(color)) return Error::kBadCornerColor;
-  return Error::kNone;
-}
-
-Error validateCornerColors(std::span<const ArxColor3> colors) {
-  for (const ArxColor3& color : colors) {
-    Error error = validateCornerColor(color);
-    if (error != Error::kNone) return error;
-  }
-  return Error::kNone;
-}
-
-Error validateCornerColors(std::span<const ArxColor3> colors, std::size_t face_count) {
-  Error error = validateCornerColors(colors);
-  if (error != Error::kNone) return error;
-  if (!colors.empty() && colors.size() != expectedCornerColorCount(face_count)) return Error::kBadCornerColorCount;
-  return Error::kNone;
-}
-
-Error validateCornerColors(const LightingData& lighting) { return validateCornerColors(lighting.corner_colors); }
-
-Error validateCornerColors(const LightingData& lighting, const GeometryData& geometry) {
-  return validateCornerColors(lighting.corner_colors, geometry.faces.size());
-}
-
-Error validate(const LightingData& lighting) {
-  Error error = validateLightSources(lighting);
-  if (error != Error::kNone) return error;
-  return validateCornerColors(lighting);
-}
-
-Error validate(const LightingData& lighting, const GeometryData& geometry) {
-  Error error = validateLightSources(lighting);
-  if (error != Error::kNone) return error;
-  return validateCornerColors(lighting, geometry);
+void repairLightName(const LightingData& lighting, Light& light, LightIndex ignored) {
+  IdentifierUniquifier names;
+  names.reserve(1, lighting.lights.size());
+  for (std::size_t index = 0; index < lighting.lights.size(); ++index)
+    if (index != static_cast<std::size_t>(ignored)) names.occupy(lighting.lights[index].name);
+  names.add(light.name);
+  [[maybe_unused]] const IdentifierRepairSummary summary = names.apply();
+  assert(!summary.exhausted);
 }
 
 }  // namespace pistoris::lights

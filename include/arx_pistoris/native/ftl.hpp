@@ -52,9 +52,10 @@ writing Arkane Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 2
  */
 
 #pragma once
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -67,9 +68,9 @@ constexpr std::int16_t kFtlTextureNone = -1;
 constexpr std::size_t kFtlMaxVertices = 0xFFFF;    // uint16_t::max reserved as sentinel
 constexpr std::size_t kFtlMaxTextures = 0x8000;    // int16_t non-negative
 constexpr std::size_t kFtlMaxFaces = 0x20000;      // sanity cap; not Arx-enforced
-constexpr std::size_t kFtlMaxGroups = 0xFFFF;      // matches vertex limit
+constexpr std::size_t kFtlMaxGroups = 0xFFFF;      // sanity cap; not Arx-enforced
 constexpr std::size_t kFtlMaxActions = 0x400;      // sanity cap; not Arx-enforced
-constexpr std::size_t kFtlMaxSelections = 0xFFFF;  // matches vertex limit
+constexpr std::size_t kFtlMaxSelections = 0xFFFF;  // sanity cap; not Arx-enforced
 
 namespace ftl {
 
@@ -122,13 +123,6 @@ struct Selection {
   std::vector<std::int32_t> selected;
 };
 
-// Recomputed by validateFtl; not serialized
-struct Extras {
-  std::vector<std::int32_t> vertex_to_bone;  // [vi] = owning group; -1 none; last group wins
-  std::vector<std::int32_t> parent_bone;     // [gi] = parent group; -1 root
-  std::vector<ArxVector3> bone_world_pos;    // [gi] = world pos of bone's origin vertex
-};
-
 struct Data {
   Header header;
   std::vector<Vertex> vertices;
@@ -137,9 +131,10 @@ struct Data {
   std::vector<Group> groups;
   std::vector<Action> actions;
   std::vector<Selection> selections;
-  mutable Extras extras;
 };
 
 }  // namespace ftl
+
+using Ftl = ftl::Data;
 
 }  // namespace pistoris

@@ -3,15 +3,25 @@
 
 #pragma once
 
-#include "formats/options.h"
-#include "io/service.h"
+#include "pipeline/execution_context.h"
 #include "routes/model/invocation.h"
 #include "routes/model/state.h"
-#include "routes/types.h"
 
 namespace cli::model {
 
-bool saveOutput(const Context& ctx, const FormatOptions& format, IoService& io, const Invocation& invocation,
-                Route route);
+struct OutputConverterDescriptor {
+  using NativeWriter = bool (*)(NativeModelFiles& files, const ExecutionContext& execution,
+                                const Invocation& invocation);
+  using IntermediateWriter = bool (*)(IntermediateModel& model, const ExecutionContext& execution,
+                                      const Invocation& invocation);
+
+  NativeWriter write_native = nullptr;
+  IntermediateWriter write_intermediate = nullptr;
+  bool uses_sound_files = false;
+};
+
+const OutputConverterDescriptor* outputConverterDescriptor(Format output, const Module* module);
+bool writeNativeOutput(NativeModelFiles& files, const ExecutionContext& execution, const Invocation& invocation);
+bool writeIntermediateOutput(IntermediateModel& model, const ExecutionContext& execution, const Invocation& invocation);
 
 }  // namespace cli::model

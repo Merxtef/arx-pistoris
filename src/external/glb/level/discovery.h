@@ -3,12 +3,11 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
 #include "external/glb/node_graph.h"
 
 #include <cstddef>
-#include <string>
 #include <vector>
 
 struct cgltf_data;
@@ -31,8 +30,8 @@ struct LevelDiscovery {
   std::vector<std::size_t> zones;
   std::vector<std::size_t> paths;
   std::vector<std::size_t> navigation_surfaces;
+  std::vector<std::size_t> minimaps;
   std::vector<DiscoveredGeometryNode> geometry;
-  std::vector<std::string> warnings;
 };
 
 ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& graph, LevelDiscovery& out);

@@ -3,19 +3,22 @@
 
 #pragma once
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "external/glb/container.h"
 #include "modules/scene.h"
+#include "utils/log.h"
 #include "utils/math/mat4.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace pistoris::glb_level {
@@ -46,11 +49,20 @@ struct Mesh {
   std::vector<std::array<std::uint32_t, 3>> triangles;
 };
 
-void logFailure(std::size_t node_index, std::string_view name, std::string_view reason);
+template <class... Args>
+void logFailure(std::size_t node_index, std::string_view name, std::format_string<Args...> reason,
+                Args&&... args) noexcept {
+  logLazy(ARX_LOG_DEBUG, [&] {
+    return std::format("GLB -> Level object failure: zone node {} '{}' {}",
+                       node_index,
+                       name,
+                       std::format(reason, std::forward<Args>(args)...));
+  });
+}
 ParsedName parseName(std::string_view name, std::size_t node_index);
 std::string nodeName(const Zone& zone, std::size_t ordinal);
 ArxReturnCode parseSettings(std::string_view payload, Settings& out);
-std::string settingsHelperName(const Zone& zone);
+std::string settingsHelperName(const Settings& settings, std::string_view label);
 
 ArxReturnCode readMesh(const glb::Asset& asset, const cgltf_node& node, const math::Mat4& world,
                        const ImportUnits& units, std::size_t node_index, std::string_view name, Mesh& out);

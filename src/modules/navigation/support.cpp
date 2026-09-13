@@ -1,19 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
 #include "modules/navigation/internal.h"
 #include "modules/navigation/traversal.h"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace pistoris::navigation {
@@ -27,14 +30,18 @@ bool supportHitAllowed(const geometry::SurfaceSupportHit& hit, const GeometryDat
   return -hit.normal.y >= filter.min_up_dot;
 }
 
+bool supportFaceAllowed(const Face& face, const GeometryData& geometry, const SurfaceSupportFilter& filter) {
+  if ((face.flags & filter.ignore_flags) != 0) return false;
+  const ArxVector3 normal = geometry::faceNormalOr(geometry, face, {});
+  return -normal.y >= filter.min_up_dot;
+}
+
 std::vector<FaceIndex> supportFaceIndices(const GeometryData& geometry, const SurfaceSupportFilter& filter) {
   std::vector<FaceIndex> face_indices;
   face_indices.reserve(geometry.faces.size());
   for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
     const Face& face = geometry.faces[face_index];
-    if ((face.flags & filter.ignore_flags) != 0) continue;
-    ArxVector3 normal = geometry::faceNormalOr(geometry, face, {});
-    if (-normal.y < filter.min_up_dot) continue;
+    if (!supportFaceAllowed(face, geometry, filter)) continue;
     face_indices.push_back(static_cast<FaceIndex>(face_index));
   }
   return face_indices;
@@ -43,12 +50,13 @@ std::vector<FaceIndex> supportFaceIndices(const GeometryData& geometry, const Su
 }  // namespace
 
 std::optional<geometry::SurfaceSupportHit> closestMergedSupportHit(const geometry::SurfaceSupportIndex& index, float x,
-                                                                   float z, float reference_y, float max_delta) {
-  std::vector<geometry::SurfaceSupportHit> hits = index.hitsAt(x, z);
-  geometry::mergeSurfaceSupportHits(hits);
+                                                                   float z, float reference_y, float max_delta,
+                                                                   std::vector<geometry::SurfaceSupportHit>& scratch) {
+  index.findHitsAt(scratch, x, z);
+  geometry::mergeSortedSurfaceSupportHits(scratch);
   const geometry::SurfaceSupportHit* best = nullptr;
   float best_delta = std::numeric_limits<float>::max();
-  for (const geometry::SurfaceSupportHit& hit : hits) {
+  for (const geometry::SurfaceSupportHit& hit : scratch) {
     float delta = std::abs(hit.position.y - reference_y);
     if (delta >= best_delta) continue;
     best = &hit;
@@ -70,22 +78,32 @@ std::vector<FaceIndex> navSurfaceSupportFaceIndices(const GeometryData& geometry
   return supportFaceIndices(geometry, navSurfaceSupportFilter(options));
 }
 
-geometry::SurfaceSupportIndex buildNavSurfaceSupportIndex(const GeometryData& geometry,
-                                                          const NavSurfaceSourceOptions& options) {
-  std::vector<FaceIndex> face_indices = navSurfaceSupportFaceIndices(geometry, options);
-  return geometry::buildSurfaceSupportIndex(geometry, face_indices);
+NavSurfaceSupportIndexes buildNavSurfaceSupportIndexes(const GeometryData& geometry,
+                                                       const NavSurfaceSourceOptions& options) {
+  const SurfaceSupportFilter filter = navSurfaceSupportFilter(options);
+  geometry::SurfaceSupportIndexBuilder geometry_builder(geometry.faces.size());
+  std::vector<std::uint32_t> support_indices;
+  support_indices.reserve(geometry.faces.size());
+  for (std::size_t index = 0; index < geometry.faces.size(); ++index) {
+    const FaceIndex face_index = static_cast<FaceIndex>(index);
+    const Face& face = geometry.faces[index];
+    const std::array<ArxVector3, 3> vertices = geometry::facePositions(geometry, face);
+    geometry_builder.addTriangle(face_index, vertices);
+    if (supportFaceAllowed(face, geometry, filter)) support_indices.push_back(static_cast<std::uint32_t>(index));
+  }
+  geometry::SurfaceSupportIndex geometry_support = std::move(geometry_builder).build();
+  geometry::SurfaceSupportIndex support = geometry_support.subset(support_indices);
+  return {std::move(support), std::move(geometry_support)};
 }
 
 geometry::SurfaceSupportIndex buildSurfaceSupportIndex(const NavSurface& surface) {
-  std::vector<geometry::SurfaceSupportTriangle> triangles;
-  triangles.reserve(surface.triangles.size());
-  for (const NavSurfaceTriangle& source : surface.triangles) {
-    geometry::SurfaceSupportTriangle triangle;
-    for (std::size_t i = 0; i < triangle.vertices.size(); ++i)
-      triangle.vertices[i] = surface.vertices[source.vertices[i]].position;
-    triangles.push_back(triangle);
+  geometry::SurfaceSupportIndexBuilder builder(surface.triangles.size());
+  for (const NavSurfaceTriangle& triangle : surface.triangles) {
+    std::array<ArxVector3, 3> vertices;
+    for (std::size_t i = 0; i < vertices.size(); ++i) vertices[i] = surface.vertices[triangle.vertices[i]].position;
+    builder.addTriangle(kInvalidFaceIndex, vertices);
   }
-  return geometry::SurfaceSupportIndex(triangles);
+  return std::move(builder).build();
 }
 
 bool hasAllowedFinalGeometrySupport(const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
@@ -96,13 +114,12 @@ bool hasAllowedFinalGeometrySupport(const geometry::SurfaceSupportIndex& geometr
   float closest_distance = std::numeric_limits<float>::max();
   float origin_y = cylinder_bottom.y - kFinalSupportRayOriginOffset;
   for (const ArxVector3& offset : navigationProbeOffsets(radius)) {
-    std::vector<geometry::SurfaceSupportHit> hits =
-        geometry_support.downwardHitsAt(cylinder_bottom.x + offset.x, cylinder_bottom.z + offset.z, origin_y);
-    if (hits.empty()) continue;
-    const geometry::SurfaceSupportHit& hit = hits.front();
-    float distance = hit.position.y - origin_y;
+    std::optional<geometry::SurfaceSupportHit> hit =
+        geometry_support.closestDownwardHit(cylinder_bottom.x + offset.x, cylinder_bottom.z + offset.z, origin_y);
+    if (!hit) continue;
+    float distance = hit->position.y - origin_y;
     if (distance >= closest_distance) continue;
-    closest = hit;
+    closest = *hit;
     closest_distance = distance;
   }
   if (!closest.has_value()) return false;

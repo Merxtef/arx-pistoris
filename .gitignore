@@ -10,10 +10,14 @@
 *.dll
 *.lib
 *.exe
-*.pyd
+
+# Python
+__pycache__/
+*.py[cod]
 
 # Test related rules
 /data/arx/*
+!/data/arx/.gitkeep
 !data/**/*.obj
 
 # Fuzz corpus

@@ -3,9 +3,9 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 #include "arx_pistoris/pistoris.hpp"
 
 #include "level/data.h"
@@ -31,14 +31,14 @@ struct LogCapture {
   int warnings = 0;
   int debug = 0;
   std::string last;
-  std::string last_debug;
+  std::vector<std::string> debug_messages;
 };
 
 void captureLog(ArxLogLevel level, const char* msg, void* userdata) {
   auto* capture = static_cast<LogCapture*>(userdata);
   if (level == ARX_LOG_DEBUG) {
     ++capture->debug;
-    capture->last_debug = msg ? msg : "";
+    capture->debug_messages.emplace_back(msg ? msg : "");
   }
   if (level == ARX_LOG_WARN) {
     ++capture->warnings;
@@ -46,8 +46,8 @@ void captureLog(ArxLogLevel level, const char* msg, void* userdata) {
   }
 }
 
-pistoris::Face makeFace(std::uint32_t a, std::uint32_t b, std::uint32_t c, const ArxVector3& normal,
-                        pistoris::FaceType flags = 0) {
+pistoris::Face makeFace(pistoris::GeometryData&, std::uint32_t a, std::uint32_t b, std::uint32_t c,
+                        const ArxVector3& normal, pistoris::FaceType flags = 0) {
   return {
       {{{a, normal, 0.0f, 0.0f}, {b, normal, 0.0f, 0.0f}, {c, normal, 0.0f, 0.0f}}}, pistoris::kNoTexture, flags, 0.0f};
 }
@@ -59,9 +59,9 @@ void addQuad(pistoris::LevelModules& level, const ArxVector3& a, const ArxVector
   level.geometry.vertices.push_back({b});
   level.geometry.vertices.push_back({c});
   level.geometry.vertices.push_back({d});
-  level.geometry.faces.push_back(makeFace(base + 0, base + 1, base + 2, normal, flags));
+  level.geometry.faces.push_back(makeFace(level.geometry, base + 0, base + 1, base + 2, normal, flags));
   level.rooms.face_rooms.push_back(room);
-  level.geometry.faces.push_back(makeFace(base + 0, base + 2, base + 3, normal, flags));
+  level.geometry.faces.push_back(makeFace(level.geometry, base + 0, base + 2, base + 3, normal, flags));
   level.rooms.face_rooms.push_back(room);
 }
 
@@ -118,8 +118,9 @@ void addDefaultAnchors(pistoris::LevelModules& level) {
   level.navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
 }
 
-pistoris::navigation::NavSurfaceGenOptions toModuleOptions(const pistoris::Level::NavSurfaceGenOptions& options) {
-  pistoris::navigation::NavSurfaceGenOptions result;
+pistoris::navigation::NavSurfaceGenerationOptions toModuleOptions(
+    const pistoris::Level::NavSurfaceGenOptions& options) {
+  pistoris::navigation::NavSurfaceGenerationOptions result;
   result.radius = options.radius;
   result.height = options.height;
   result.clearance = options.clearance;
@@ -129,7 +130,7 @@ pistoris::navigation::NavSurfaceGenOptions toModuleOptions(const pistoris::Level
   return result;
 }
 
-pistoris::navigation::AnchorGenOptions toModuleOptions(const pistoris::Level::AnchorGenOptions& options) {
+pistoris::navigation::AnchorGenerationOptions toModuleOptions(const pistoris::Level::AnchorGenOptions& options) {
   return {
       .sample_spacing = options.sample_spacing,
       .radius = options.radius,
@@ -137,7 +138,7 @@ pistoris::navigation::AnchorGenOptions toModuleOptions(const pistoris::Level::An
   };
 }
 
-pistoris::navigation::AnchorConnectionGenOptions toModuleOptions(
+pistoris::navigation::AnchorConnectionGenerationOptions toModuleOptions(
     const pistoris::Level::AnchorConnectionGenOptions& options) {
   return {
       .max_distance = options.max_distance,
@@ -153,8 +154,8 @@ ArxReturnCode generateNavSurface(pistoris::LevelModules& level,
                                  pistoris::GeometryDerived* derived = nullptr,
                                  pistoris::navigation::NavigationDiagnostics* diagnostics = nullptr) {
   pistoris::GeometryDerived next_derived;
-  ArxReturnCode rc =
-      pistoris::level_validation::geometryError(pistoris::geometry::validate(level.geometry, &next_derived));
+  ArxReturnCode rc = pistoris::level_validation::geometryError(
+      pistoris::geometry::validate(level.geometry, level.textures.textures.size(), &next_derived));
   if (rc != ARX_OK) return rc;
   pistoris::NavSurface surface;
   rc = pistoris::level_validation::navigationError(pistoris::navigation::generateSurface(
@@ -169,8 +170,8 @@ ArxReturnCode generateAnchors(pistoris::LevelModules& level, const pistoris::Lev
                               pistoris::GeometryDerived* derived = nullptr,
                               pistoris::navigation::NavigationDiagnostics* diagnostics = nullptr) {
   pistoris::GeometryDerived next_derived;
-  ArxReturnCode rc =
-      pistoris::level_validation::geometryError(pistoris::geometry::validate(level.geometry, &next_derived));
+  ArxReturnCode rc = pistoris::level_validation::geometryError(
+      pistoris::geometry::validate(level.geometry, level.textures.textures.size(), &next_derived));
   if (rc != ARX_OK) return rc;
   if (!level.navigation.surface.has_value()) return ARX_LEVEL_NAV_SURFACE_REQUIRED;
   rc = pistoris::level_validation::navigationError(pistoris::navigation::validateSurface(*level.navigation.surface));
@@ -195,8 +196,8 @@ ArxReturnCode generateAnchorConnections(pistoris::LevelModules& level,
                                         pistoris::GeometryDerived* derived = nullptr,
                                         pistoris::navigation::NavigationDiagnostics* diagnostics = nullptr) {
   pistoris::GeometryDerived next_derived;
-  ArxReturnCode rc =
-      pistoris::level_validation::geometryError(pistoris::geometry::validate(level.geometry, &next_derived));
+  ArxReturnCode rc = pistoris::level_validation::geometryError(
+      pistoris::geometry::validate(level.geometry, level.textures.textures.size(), &next_derived));
   if (rc != ARX_OK) return rc;
   rc = pistoris::level_validation::navigationError(
       pistoris::navigation::validateAnchorDefinitions(level.navigation.anchors));
@@ -224,7 +225,7 @@ pistoris::Level makePublicLevel(const pistoris::LevelModules& src) {
   test::MeshSnapshot mesh;
   mesh.vertices = src.geometry.vertices;
   mesh.faces = src.geometry.faces;
-  mesh.textures = src.geometry.textures;
+  mesh.textures = src.textures.textures;
   mesh.face_rooms = src.rooms.face_rooms;
   mesh.corner_colors = src.lighting.corner_colors;
   REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
@@ -263,17 +264,23 @@ TEST_CASE("SurfaceSupportIndexUsesTransientRoomPredicateContext") {
 
   const RoomPredicateContext room_1_context{&level.rooms, 0};
   const RoomPredicateContext room_2_context{&level.rooms, 1};
+  std::vector<pistoris::FaceIndex> face_scratch;
   pistoris::geometry::SurfaceSupportIndex room_1 =
-      pistoris::geometry::buildSurfaceSupportIndex(level.geometry, {belongs_to_room, &room_1_context});
+      pistoris::geometry::buildSurfaceSupportIndex(level.geometry, {belongs_to_room, &room_1_context}, face_scratch);
   pistoris::geometry::SurfaceSupportIndex room_2 =
-      pistoris::geometry::buildSurfaceSupportIndex(level.geometry, {belongs_to_room, &room_2_context});
+      pistoris::geometry::buildSurfaceSupportIndex(level.geometry, {belongs_to_room, &room_2_context}, face_scratch);
 
-  CHECK(room_1.triangles().size() == 2);
-  CHECK(room_2.triangles().size() == 2);
-  CHECK(room_1.hitsAt(50.0f, 50.0f).size() == 2);
-  CHECK(room_1.hitsAt(250.0f, 50.0f).empty());
-  CHECK(room_2.hitsAt(50.0f, 50.0f).empty());
-  CHECK(room_2.hitsAt(250.0f, 50.0f).size() == 2);
+  CHECK(room_1.size() == 2);
+  CHECK(room_2.size() == 2);
+  std::vector<pistoris::geometry::SurfaceSupportHit> hits;
+  room_1.findHitsAt(hits, 50.0f, 50.0f);
+  CHECK(hits.size() == 2);
+  room_1.findHitsAt(hits, 250.0f, 50.0f);
+  CHECK(hits.empty());
+  room_2.findHitsAt(hits, 50.0f, 50.0f);
+  CHECK(hits.empty());
+  room_2.findHitsAt(hits, 250.0f, 50.0f);
+  CHECK(hits.size() == 2);
 }
 
 TEST_CASE("NavigationCollisionBroadphaseUsesCylinderRadiusWithEpsilon") {
@@ -293,8 +300,10 @@ TEST_CASE("NavigationCollisionBroadphaseDoesNotScanOldCompatibilityPadding") {
 
   pistoris::navigation::collision::StaticCollisionIndex index(level.geometry);
   pistoris::navigation::collision::Cylinder cylinder{{50.0f, 0.0f, 50.0f}, 5.0f, -80.0f};
+  std::vector<std::uint32_t> candidates;
 
-  CHECK(index.candidates(cylinder).empty());
+  index.findCandidates(candidates, cylinder);
+  CHECK(candidates.empty());
 }
 
 TEST_CASE("NavigationCollisionBroadphaseKeepsNearbySmallRadiusFacesAcrossCells") {
@@ -308,8 +317,10 @@ TEST_CASE("NavigationCollisionBroadphaseKeepsNearbySmallRadiusFacesAcrossCells")
 
   pistoris::navigation::collision::StaticCollisionIndex index(level.geometry);
   pistoris::navigation::collision::Cylinder cylinder{{99.0f, 0.0f, 50.0f}, 5.0f, -80.0f};
+  std::vector<std::uint32_t> candidates;
 
-  CHECK(!index.candidates(cylinder).empty());
+  index.findCandidates(candidates, cylinder);
+  CHECK(!candidates.empty());
 }
 
 TEST_CASE("NavigationCollisionBroadphaseBoundsHugeFiniteQueries") {
@@ -323,8 +334,26 @@ TEST_CASE("NavigationCollisionBroadphaseBoundsHugeFiniteQueries") {
 
   pistoris::navigation::collision::StaticCollisionIndex index(level.geometry);
   pistoris::navigation::collision::Cylinder cylinder{{8000.0f, 0.0f, 8000.0f}, 1.0e20f, -80.0f};
+  std::vector<std::uint32_t> candidates;
 
-  CHECK(index.candidates(cylinder).size() == level.geometry.faces.size());
+  index.findCandidates(candidates, cylinder);
+  CHECK(candidates.size() == level.geometry.faces.size());
+}
+
+TEST_CASE("NavigationCollisionBroadphaseKeepsLargeFacesQueryable") {
+  pistoris::LevelModules level = baseLevel();
+  level.geometry.vertices.push_back({{0.0f, 0.0f, 0.0f}});
+  level.geometry.vertices.push_back({{16000.0f, 0.0f, 0.0f}});
+  level.geometry.vertices.push_back({{0.0f, 0.0f, 16000.0f}});
+  level.geometry.faces.push_back(makeFace(level.geometry, 0, 1, 2, {0.0f, -1.0f, 0.0f}));
+
+  pistoris::navigation::collision::StaticCollisionIndex index(level.geometry);
+  pistoris::navigation::collision::Cylinder cylinder{{50.0f, 0.0f, 50.0f}, 5.0f, -80.0f};
+  std::vector<std::uint32_t> candidates;
+
+  index.findCandidates(candidates, cylinder);
+  REQUIRE(candidates.size() == 1);
+  CHECK(candidates[0] == 0);
 }
 
 TEST_CASE("LevelNavSurfaceGenerationSamplesWalkableGeometryWithClearance") {
@@ -476,7 +505,7 @@ TEST_CASE("LevelNavSurfaceGenerationUsesConsistentNativeUpWinding") {
 TEST_CASE("LevelNavSurfaceGenerationKeepsInteriorOfLargeTriangles") {
   pistoris::LevelModules level = baseLevel();
   level.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{300.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 300.0f}}};
-  level.geometry.faces.push_back(makeFace(0, 1, 2, {0.0f, -1.0f, 0.0f}));
+  level.geometry.faces.push_back(makeFace(level.geometry, 0, 1, 2, {0.0f, -1.0f, 0.0f}));
   level.rooms.face_rooms.push_back(0);
 
   REQUIRE(generateNavSurface(level, {.radius = 10.0f, .height = -80.0f}) == ARX_OK);
@@ -496,9 +525,11 @@ TEST_CASE("LevelNavSurfaceGenerationRepairsSmallBoundaryDents") {
   pistoris::setLogCallback(nullptr, nullptr);
 
   REQUIRE(level.navigation.surface.has_value());
-  CHECK(capture.last_debug.find("boundary repair") != std::string::npos);
-  CHECK(capture.last_debug.find("considered") != std::string::npos);
-  CHECK(capture.last_debug.find("added") != std::string::npos);
+  const auto repair = std::ranges::find_if(capture.debug_messages, [](const std::string& message) {
+    return message.find("boundary repair") != std::string::npos && message.find("considered") != std::string::npos &&
+           message.find("added") != std::string::npos;
+  });
+  CHECK(repair != capture.debug_messages.end());
 }
 
 TEST_CASE("LevelNavSurfaceGenerationIgnoresNoPathEvenWhenProxyMaskDoesNot") {
@@ -848,7 +879,7 @@ TEST_CASE("LevelAnchorConnectionsAllowAnchorsSlightlyBelowGround") {
 TEST_CASE("LevelAnchorConnectionsDetectSupportInsideLargeTriangle") {
   pistoris::LevelModules level = baseLevel();
   level.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1000.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1000.0f}}};
-  level.geometry.faces.push_back(makeFace(0, 1, 2, {0.0f, -1.0f, 0.0f}));
+  level.geometry.faces.push_back(makeFace(level.geometry, 0, 1, 2, {0.0f, -1.0f, 0.0f}));
   level.rooms.face_rooms.push_back(0);
   level.navigation.anchors.push_back({{100.0f, 0.0f, 700.0f}, 10.0f, -80.0f, 0, {}});
   level.navigation.anchors.push_back({{200.0f, 0.0f, 650.0f}, 10.0f, -80.0f, 0, {}});

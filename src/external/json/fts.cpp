@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx/fts.h"
+#include "native/fts.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/paths.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "external/json.h"
 #include "external/json/native_common.h"
-#include "utils/parse_utils.h"
+#include "utils/return_code.h"
 
 #include <algorithm>
 #include <cmath>
@@ -399,67 +399,98 @@ std::optional<std::size_t> centroidCell(const fts::Poly& polygon) {
 }
 
 ArxReturnCode placePolygons(std::vector<fts::Poly>& polygons, fts::Data& out) {
-  std::vector<std::optional<PolygonLocation>> locations(polygons.size());
-  for (std::size_t room_index = 0; room_index < out.rooms.size(); ++room_index) {
-    std::vector<std::size_t> polygon_indices;
-    for (std::size_t index = 0; index < polygons.size(); ++index)
-      if (polygons[index].room == static_cast<std::int16_t>(room_index)) polygon_indices.push_back(index);
+  constexpr std::size_t kUnassigned = std::numeric_limits<std::size_t>::max();
+  std::vector<PolygonLocation> locations(polygons.size(), {kUnassigned, kUnassigned});
 
-    std::vector<fts::EpData> references = out.rooms[room_index].polygons;
-    if (polygon_indices.size() != references.size()) continue;
+  std::vector<std::size_t> room_offsets(out.rooms.size() + 1U, 0);
+  for (const fts::Poly& polygon : polygons) {
+    if (polygon.room < 0 || static_cast<std::size_t>(polygon.room) >= out.rooms.size()) continue;
+    ++room_offsets[static_cast<std::size_t>(polygon.room) + 1U];
+  }
+  for (std::size_t room = 0; room < out.rooms.size(); ++room) room_offsets[room + 1U] += room_offsets[room];
+
+  std::vector<std::size_t> room_polygons(room_offsets.back());
+  std::vector<std::size_t> room_cursors = room_offsets;
+  for (std::size_t polygon = 0; polygon < polygons.size(); ++polygon) {
+    const std::int16_t room = polygons[polygon].room;
+    if (room < 0 || static_cast<std::size_t>(room) >= out.rooms.size()) continue;
+    room_polygons[room_cursors[static_cast<std::size_t>(room)]++] = polygon;
+  }
+
+  std::size_t max_room_references = 0;
+  for (const fts::Room& room : out.rooms) max_room_references = std::max(max_room_references, room.polygons.size());
+  std::vector<fts::EpData> references;
+  references.reserve(max_room_references);
+  for (std::size_t room = 0; room < out.rooms.size(); ++room) {
+    const std::size_t begin = room_offsets[room];
+    const std::size_t count = room_offsets[room + 1U] - begin;
+    if (count != out.rooms[room].polygons.size()) continue;
+
+    references.assign(out.rooms[room].polygons.begin(), out.rooms[room].polygons.end());
     std::sort(references.begin(), references.end(), [](const fts::EpData& left, const fts::EpData& right) {
       if (left.py != right.py) return left.py < right.py;
       if (left.px != right.px) return left.px < right.px;
       return left.idx < right.idx;
     });
-    for (std::size_t index = 0; index < polygon_indices.size(); ++index) {
-      const fts::EpData& reference = references[index];
+    for (std::size_t ordinal = 0; ordinal < count; ++ordinal) {
+      const fts::EpData& reference = references[ordinal];
       if (reference.px < 0 || reference.px >= kJsonGridSize || reference.py < 0 || reference.py >= kJsonGridSize ||
           reference.idx < 0) {
         return ARX_JSON_BAD_SCHEMA;
       }
-      locations[polygon_indices[index]] = PolygonLocation{
+      locations[room_polygons[begin + ordinal]] = {
           static_cast<std::size_t>(reference.py) * kJsonGridSize + static_cast<std::size_t>(reference.px),
           static_cast<std::size_t>(reference.idx)};
     }
   }
 
-  struct PlacedPolygon {
-    std::optional<std::size_t> index;
-    fts::Poly polygon;
-  };
-  std::vector<std::vector<PlacedPolygon>> placed(out.cells.size());
-  for (std::size_t index = 0; index < polygons.size(); ++index) {
-    const PolygonLocation location = locations[index].value_or(PolygonLocation{});
-    if (locations[index].has_value()) {
-      placed[location.cell].push_back({location.index, polygons[index]});
-      continue;
+  std::vector<std::size_t> cell_offsets(out.cells.size() + 1U, 0);
+  for (std::size_t polygon = 0; polygon < polygons.size(); ++polygon) {
+    PolygonLocation& location = locations[polygon];
+    if (location.cell == kUnassigned) {
+      const std::optional<std::size_t> cell = centroidCell(polygons[polygon]);
+      if (!cell) return ARX_JSON_BAD_SCHEMA;
+      location.cell = *cell;
     }
-    const std::optional<std::size_t> cell = centroidCell(polygons[index]);
-    if (!cell) return ARX_JSON_BAD_SCHEMA;
-    placed[*cell].push_back({std::nullopt, polygons[index]});
+    if (location.cell >= out.cells.size()) return ARX_JSON_BAD_SCHEMA;
+    ++cell_offsets[location.cell + 1U];
+  }
+  for (std::size_t cell = 0; cell < out.cells.size(); ++cell) cell_offsets[cell + 1U] += cell_offsets[cell];
+
+  struct PlacedPolygon {
+    std::size_t source = 0;
+    std::size_t index = kUnassigned;
+  };
+  std::vector<PlacedPolygon> placed(polygons.size());
+  std::vector<std::size_t> cell_cursors = cell_offsets;
+  for (std::size_t polygon = 0; polygon < polygons.size(); ++polygon) {
+    const PolygonLocation& location = locations[polygon];
+    placed[cell_cursors[location.cell]++] = {polygon, location.index};
   }
 
-  for (std::size_t cell_index = 0; cell_index < placed.size(); ++cell_index) {
-    std::vector<PlacedPolygon>& source = placed[cell_index];
-    std::vector<std::optional<fts::Poly>> slots(source.size());
-    for (PlacedPolygon& item : source) {
-      const auto& index = item.index;
-      if (!index) continue;
-      if (*index >= slots.size() || slots[*index]) return ARX_JSON_BAD_SCHEMA;
-      slots[*index] = item.polygon;
+  std::vector<std::size_t> slots;
+  for (std::size_t cell = 0; cell < out.cells.size(); ++cell) {
+    const std::size_t begin = cell_offsets[cell];
+    const std::size_t count = cell_offsets[cell + 1U] - begin;
+    slots.assign(count, kUnassigned);
+    for (std::size_t offset = 0; offset < count; ++offset) {
+      const PlacedPolygon& polygon = placed[begin + offset];
+      if (polygon.index == kUnassigned) continue;
+      if (polygon.index >= slots.size() || slots[polygon.index] != kUnassigned) return ARX_JSON_BAD_SCHEMA;
+      slots[polygon.index] = polygon.source;
     }
     std::size_t next = 0;
-    for (PlacedPolygon& item : source) {
-      if (item.index) continue;
-      while (next < slots.size() && slots[next]) ++next;
+    for (std::size_t offset = 0; offset < count; ++offset) {
+      const PlacedPolygon& polygon = placed[begin + offset];
+      if (polygon.index != kUnassigned) continue;
+      while (next < slots.size() && slots[next] != kUnassigned) ++next;
       if (next == slots.size()) return ARX_JSON_BAD_SCHEMA;
-      slots[next] = item.polygon;
+      slots[next] = polygon.source;
     }
-    out.cells[cell_index].polygons.reserve(slots.size());
-    for (std::optional<fts::Poly>& polygon : slots) {
-      if (!polygon) return ARX_JSON_BAD_SCHEMA;
-      out.cells[cell_index].polygons.push_back(*polygon);
+    out.cells[cell].polygons.reserve(count);
+    for (std::size_t source : slots) {
+      if (source == kUnassigned) return ARX_JSON_BAD_SCHEMA;
+      out.cells[cell].polygons.push_back(polygons[source]);
     }
   }
   out.scene.num_polys = static_cast<std::int32_t>(polygons.size());
@@ -573,8 +604,7 @@ ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, std::string& o
           {"endPosition", json_detail::vector(distance.endpos)},
       });
     }
-    json_detail::dump(root, pretty, out);
-    return ARX_OK;
+    return json_detail::dump(root, pretty, out);
   });
 }
 

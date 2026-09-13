@@ -3,10 +3,9 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 
@@ -28,6 +27,11 @@ struct Room {
 enum class PortalShape : std::uint8_t {
   kTriangle = 3,
   kQuad = 4,
+};
+
+enum class PortalSide : std::uint8_t {
+  kFront,
+  kBack,
 };
 
 struct Portal {
@@ -79,7 +83,7 @@ struct RoomDistanceSupportTriangle {
   std::array<ArxVector3, 3> vertices = {};
 };
 
-struct RoomDistanceGenDiagnostics {
+struct RoomDistanceGenerationDiagnostics {
   std::vector<std::vector<RoomDistanceSupportTriangle>> support_by_room;
   std::vector<std::vector<RoomDistanceDebugPoint>> portal_access_points_by_room;
   std::vector<RoomDistanceDebugSegment> portal_access_segments;
@@ -87,6 +91,12 @@ struct RoomDistanceGenDiagnostics {
   std::vector<RoomDistanceDebugSegment> in_room_visibility_edges;
   std::vector<std::vector<RoomDistanceDebugPath>> in_room_portal_paths_by_room;
   std::vector<RoomDistanceDebugPath> room_pair_paths;
+};
+
+struct VertexWeldSegments {
+  std::vector<VertexIndex> vertices;
+  std::vector<std::size_t> offsets;
+  std::vector<VertexIndex> protected_vertices;
 };
 
 enum class Error : std::uint8_t {
@@ -111,6 +121,7 @@ enum class Error : std::uint8_t {
   kInconsistentPortalOrientation,
   kSelfIntersectingPortal,
   kBadFaceVertex,
+  kBadIndex,
 };
 
 enum class PortalValidation : std::uint8_t {
@@ -130,46 +141,78 @@ struct RoomDistanceOptions {
   float max_link_distance = 150.0f;
 };
 
-RoomIndex addRoom(RoomsData& rooms, std::string name);
-void addFaceRooms(RoomsData& rooms, std::span<const RoomIndex> face_rooms);
-// Empty means identity; otherwise the map must describe an order-preserving compaction
-void remapFaceRooms(RoomsData& rooms, std::span<const FaceIndex> face_remap) noexcept;
-Error collectVertexWeldSegments(const GeometryData& geometry, const RoomsData& rooms, float radius,
-                                std::vector<std::vector<VertexIndex>>& segments,
-                                std::vector<VertexIndex>& protected_vertices);
-PortalIndex addPortal(RoomsData& rooms, Portal portal);
-std::size_t makePortalNamesUnique(std::span<Portal> portals);
+// --- Validation ---
+
+bool validRoomDistanceOptions(const RoomDistanceOptions& options) noexcept;
+Error validateRoomCount(std::size_t count) noexcept;
+Error validateRoom(const Room& room) noexcept;
+Error validateRoomRemoval(const RoomsData& rooms, RoomIndex index) noexcept;
+Error validateRoomDefinitions(const RoomsData& rooms);
+Error validateFaceRoomIndices(std::span<const RoomIndex> face_rooms, std::size_t room_count) noexcept;
+Error validateFaceRooms(std::span<const RoomIndex> face_rooms, std::size_t face_count, std::size_t room_count);
+Error validateFaceRooms(const RoomsData& rooms, std::size_t face_count);
+Error validateRoomDistance(const RoomDistance& distance, const RoomsData& rooms, RoomIndex low_room,
+                           RoomIndex high_room) noexcept;
+Error validateRoomDistances(const RoomDistances& distances, const RoomsData& rooms);
+Error validateRoomDistances(const RoomsData& rooms);
+Error validatePortalCount(std::size_t count) noexcept;
+Error validatePortalDefinitions(const RoomsData& rooms);
+Error validatePortalRoomRefs(const RoomsData& rooms);
+Error validatePortalRoomRefs(const Portal& portal, std::size_t room_count);
+PortalValidation validatePortalGeometry(const Portal& portal);
+Error validatePortal(const Portal& portal, std::size_t room_count);
+Error validatePortals(const RoomsData& rooms);
+Error validate(const RoomsData& rooms, std::size_t face_count);
+
+// --- Queries ---
 
 std::size_t portalVertexCount(PortalShape shape);
 ArxVector3 portalCentroid(const Portal& portal);
 ArxVector3 portalNormal(const Portal& portal);
 double pointPortalDistanceSquared(const ArxVector3& point, const Portal& portal);
-RoomIndex portalSideRoom(const Portal& portal, bool front);
+RoomIndex portalSideRoom(const Portal& portal, PortalSide side);
 bool connectsRooms(const Portal& portal, RoomIndex first, RoomIndex second);
-Error validatePortalRoomRefs(const Portal& portal, std::size_t room_count);
-PortalValidation validatePortalGeometry(const Portal& portal);
 std::optional<PortalIndex> firstDirectPortal(const RoomsData& rooms, RoomIndex first_room, RoomIndex second_room);
-
-bool validateRoomDistanceOptions(const RoomDistanceOptions& options);
-Error validateRoom(const Room& room) noexcept;
-Error validateRooms(const RoomsData& rooms);
-Error validateFaceRooms(std::span<const RoomIndex> face_rooms, std::size_t face_count, std::size_t room_count);
-Error validateFaceRooms(const RoomsData& rooms, std::size_t face_count);
-Error validateRoomDistances(const RoomDistances& distances, const RoomsData& rooms);
-Error validateRoomDistances(const RoomsData& rooms);
-Error validatePortalDefinitions(const RoomsData& rooms);
-Error validatePortalRoomRefs(const RoomsData& rooms);
-Error validatePortal(const Portal& portal, std::size_t room_count);
-Error validatePortals(const RoomsData& rooms);
-Error validate(const RoomsData& rooms, std::size_t face_count);
-
 std::size_t roomDistancePairCount(std::size_t room_count);
 std::size_t roomDistancePairIndex(std::size_t first_room, std::size_t second_room);
 bool hasCompleteRoomDistances(const RoomDistances& distances, std::size_t room_count);
-void initializeRoomDistances(RoomDistances& distances, std::size_t room_count);
+
+// --- Mutation ---
+
+RoomIndex addRoom(RoomsData& rooms, Room room);
+void setRoom(RoomsData& rooms, RoomIndex index, Room room) noexcept;
+void removeRoom(RoomsData& rooms, RoomIndex index) noexcept;
+void appendFaceRooms(RoomsData& rooms, std::span<const RoomIndex> face_rooms);
+void reserveFaceRoomCapacity(RoomsData& rooms, std::size_t capacity);
+void truncateFaceRooms(RoomsData& rooms, std::size_t size) noexcept;
+void setFaceRoom(RoomsData& rooms, FaceIndex face, RoomIndex room) noexcept;
+void removeFaceRoom(RoomsData& rooms, FaceIndex face) noexcept;
+void replaceFaceRooms(RoomsData& rooms, std::vector<RoomIndex>&& face_rooms) noexcept;
+void clearFaceRooms(RoomsData& rooms) noexcept;
+// Empty means identity; otherwise the map must describe an order-preserving compaction
+void remapFaceRooms(RoomsData& rooms, std::span<const FaceIndex> face_remap) noexcept;
+PortalIndex addPortal(RoomsData& rooms, Portal portal);
+void setPortal(RoomsData& rooms, PortalIndex index, Portal portal) noexcept;
+void removePortal(RoomsData& rooms, PortalIndex index) noexcept;
+void setRoomDistance(RoomsData& rooms, RoomIndex low_room, RoomIndex high_room, RoomDistance distance);
+void replaceRoomDistances(RoomsData& rooms, RoomDistances&& distances) noexcept;
+void clearRoomDistances(RoomsData& rooms) noexcept;
+
+// --- Repair ---
+
+void repairRoomName(const RoomsData& rooms, Room& room, RoomIndex ignored = kInvalidRoomIndex);
+void repairPortalName(const RoomsData& rooms, Portal& portal, PortalIndex ignored = kInvalidPortalIndex);
+std::size_t repairPortalNames(std::span<Portal> portals);
+
+// --- Generation ---
+
+Error collectVertexWeldSegments(const GeometryData& geometry, const RoomsData& rooms, float radius,
+                                VertexWeldSegments& out);
+void resetRoomDistances(RoomDistances& distances, std::size_t room_count);
 
 Error generateRoomDistances(RoomDistances& out, const RoomsData& rooms, const GeometryData& geometry,
-                            const RoomDistanceOptions& options, RoomDistanceGenDiagnostics* diagnostics = nullptr);
+                            const RoomDistanceOptions& options,
+                            RoomDistanceGenerationDiagnostics* diagnostics = nullptr);
 
 }  // namespace rooms
 }  // namespace pistoris

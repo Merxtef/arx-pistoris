@@ -3,22 +3,23 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 using namespace pistoris;
 
 namespace {
 
-Face makeFace(VertexIndex a, VertexIndex b, VertexIndex c, const ArxVector3& normal = {0.0f, -1.0f, 0.0f},
-              FaceType flags = 0) {
+Face makeFace(GeometryData&, VertexIndex a, VertexIndex b, VertexIndex c,
+              const ArxVector3& normal = {0.0f, -1.0f, 0.0f}, FaceType flags = 0) {
   Face face;
   face.flags = flags;
   face.corners[0].vertex = a;
@@ -34,8 +35,8 @@ void addFloor(GeometryData& geometry, float min_x, float max_x, float y, float m
   geometry.vertices.push_back({{max_x, y, min_z}});
   geometry.vertices.push_back({{max_x, y, max_z}});
   geometry.vertices.push_back({{min_x, y, max_z}});
-  geometry.faces.push_back(makeFace(base + 0, base + 1, base + 2, {0.0f, -1.0f, 0.0f}, flags));
-  geometry.faces.push_back(makeFace(base + 0, base + 2, base + 3, {0.0f, -1.0f, 0.0f}, flags));
+  geometry.faces.push_back(makeFace(geometry, base + 0, base + 1, base + 2, {0.0f, -1.0f, 0.0f}, flags));
+  geometry.faces.push_back(makeFace(geometry, base + 0, base + 2, base + 3, {0.0f, -1.0f, 0.0f}, flags));
 }
 
 GeometryData makeFloorGeometry(float size = 200.0f) {
@@ -57,7 +58,7 @@ TEST_SUITE("navigation::generation") {
   TEST_CASE("Generates a navigation surface from geometry") {
     GeometryData geometry = makeFloorGeometry(200.0f);
     NavSurface surface;
-    navigation::NavSurfaceGenDiagnostics diagnostics;
+    navigation::NavSurfaceGenerationDiagnostics diagnostics;
 
     CHECK(navigation::generateSurface(surface, geometry, {.radius = 50.0f, .height = -165.0f}, &diagnostics) ==
           navigation::Error::kNone);
@@ -72,7 +73,7 @@ TEST_SUITE("navigation::generation") {
     navigation.surface = makeSurface();
     GeometryData geometry = makeFloorGeometry();
     GeometryDerived derived;
-    REQUIRE(geometry::validate(geometry, &derived) == geometry::Error::kNone);
+    REQUIRE(geometry::validate(geometry, 0, &derived) == geometry::Error::kNone);
     std::vector<Anchor> anchors;
 
     CHECK(navigation::generateAnchors(
@@ -105,8 +106,8 @@ TEST_SUITE("navigation::generation") {
         {{200.0f, -200.0f, 100.0f}},
         {{0.0f, 0.0f, 100.0f}},
     };
-    geometry.faces.push_back(makeFace(0, 1, 2));
-    geometry.faces.push_back(makeFace(0, 2, 3));
+    geometry.faces.push_back(makeFace(geometry, 0, 1, 2));
+    geometry.faces.push_back(makeFace(geometry, 0, 2, 3));
     std::vector<Anchor> anchors = {
         {{50.0f, -50.0f, 50.0f}, 10.0f, -80.0f, 0, {}},
         {{150.0f, -150.0f, 50.0f}, 10.0f, -80.0f, 0, {}},
@@ -125,15 +126,15 @@ TEST_SUITE("navigation::generation") {
   TEST_CASE("Failures do not overwrite outputs") {
     NavSurface surface = makeSurface();
     GeometryData geometry = makeFloorGeometry();
-    navigation::NavSurfaceGenOptions bad_surface_options;
+    navigation::NavSurfaceGenerationOptions bad_surface_options;
     bad_surface_options.radius = 0.0f;
     CHECK(navigation::generateSurface(surface, geometry, bad_surface_options) == navigation::Error::kInvalidOptions);
     CHECK(surface.vertices.size() == 4);
 
     std::vector<Anchor> anchors = {{{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}}};
     GeometryDerived derived;
-    REQUIRE(geometry::validate(geometry, &derived) == geometry::Error::kNone);
-    navigation::AnchorGenOptions bad_anchor_options;
+    REQUIRE(geometry::validate(geometry, 0, &derived) == geometry::Error::kNone);
+    navigation::AnchorGenerationOptions bad_anchor_options;
     bad_anchor_options.radius = 0.0f;
     CHECK(navigation::generateAnchors(anchors, geometry, surface, derived.referenced_bounds, bad_anchor_options) ==
           navigation::Error::kInvalidOptions);
@@ -148,15 +149,14 @@ TEST_SUITE("navigation::generation") {
     geometry.vertices.push_back({{400.0f, 0.0f, 0.0f}});
     geometry.vertices.push_back({{400.0f, -100.0f, 0.0f}});
     geometry.vertices.push_back({{400.0f, 0.0f, 100.0f}});
-    geometry.faces.push_back(makeFace(wall_base, wall_base + 1, wall_base + 2, {1.0f, 0.0f, 0.0f}));
+    geometry.faces.push_back(makeFace(geometry, wall_base, wall_base + 1, wall_base + 2, {1.0f, 0.0f, 0.0f}));
 
     navigation::NavSurfaceSourceOptions options;
     options.clearance = 7.0f;
     options.support_ignore_flags = 0;
     NavSurface surface;
-    navigation::NavSurfaceGenDiagnostics diagnostics;
-    REQUIRE(navigation::generateSurfaceFromFloorPolygons(surface, geometry, options, &diagnostics) ==
-            navigation::Error::kNone);
+    navigation::NavSurfaceGenerationDiagnostics diagnostics;
+    REQUIRE(navigation::generateSurfaceFromFloor(surface, geometry, options, &diagnostics) == navigation::Error::kNone);
 
     CHECK(surface.vertices.size() == 4);
     CHECK(surface.triangles.size() == 2);
@@ -175,7 +175,7 @@ TEST_SUITE("navigation::generation") {
     addFloor(geometry, kOrigin, kOrigin + kExtent, 0.0f, kOrigin, kOrigin + kExtent);
 
     NavSurface surface;
-    REQUIRE(navigation::generateSurfaceFromFloorPolygons(surface, geometry, {}) == navigation::Error::kNone);
+    REQUIRE(navigation::generateSurfaceFromFloor(surface, geometry, {}) == navigation::Error::kNone);
     CHECK(surface.vertices.size() == 4);
     CHECK(surface.triangles.size() == 2);
   }
@@ -281,6 +281,44 @@ TEST_SUITE("navigation::generation") {
     CHECK(connections[1].first == 1);
     CHECK(connections[1].second == 2);
     CHECK(diagnostics.pruned.size() == 3);
+  }
+
+  TEST_CASE("Component pruning plans do not mutate source data before publication") {
+    NavSurface surface{{{{0.0f, 0.0f, 0.0f}},
+                        {{10.0f, 0.0f, 0.0f}},
+                        {{0.0f, 0.0f, 10.0f}},
+                        {{20.0f, 0.0f, 0.0f}},
+                        {{21.0f, 0.0f, 0.0f}},
+                        {{20.0f, 0.0f, 1.0f}}},
+                       {{{{0, 1, 2}}}, {{{3, 4, 5}}}}};
+    const Vertex* surface_vertices = surface.vertices.data();
+    navigation::NavSurfaceComponentPrunePlan surface_plan;
+    REQUIRE(navigation::planSurfaceComponentPrune(
+                surface_plan, surface, {.min_component_area_ratio = 0.5f, .min_component_area = 0.0}) ==
+            navigation::Error::kNone);
+    CHECK(surface.vertices.data() == surface_vertices);
+    CHECK(surface.triangles.size() == 2);
+    REQUIRE(surface_plan.replacement.has_value());
+    navigation::applySurfaceComponentPrune(surface, std::move(surface_plan));
+    CHECK(surface.triangles.size() == 1);
+
+    std::vector<Anchor> anchors = {
+        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
+        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
+        {{20.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
+    };
+    std::vector<AnchorConnection> connections = {{0, 1}};
+    const Anchor* anchor_data = anchors.data();
+    navigation::AnchorComponentPrunePlan anchor_plan;
+    REQUIRE(
+        navigation::planAnchorComponentPrune(
+            anchor_plan, anchors, connections, {.min_component_anchor_ratio = 0.0f, .min_component_anchor_count = 2}) ==
+        navigation::Error::kNone);
+    CHECK(anchors.data() == anchor_data);
+    CHECK(anchors.size() == 3);
+    navigation::applyAnchorComponentPrune(anchors, connections, std::move(anchor_plan));
+    CHECK(anchors.size() == 2);
+    CHECK(connections.size() == 1);
   }
 
   TEST_CASE("Anchor component absolute threshold keeps equality and treats isolates as components") {

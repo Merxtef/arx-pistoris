@@ -42,17 +42,23 @@ def destructure_glb(glb_path, out_path):
     return True
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: destructure_glb.py <input_dir> <output_dir>")
-        return
+    if len(sys.argv) != 3:
+        print("Usage: destructure_glb.py <input_dir> <output_dir>", file=sys.stderr)
+        return 1
 
     in_dir = Path(sys.argv[1])
     out_dir = Path(sys.argv[2])
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    for glb in in_dir.glob("*.glb"):
-        if destructure_glb(glb, out_dir / (glb.stem + ".seed")):
-            print(f"Destructured {glb.name} -> {glb.stem}.seed")
+    failed = False
+    for glb in sorted(in_dir.glob("*.glb")):
+        if not destructure_glb(glb, out_dir / (glb.stem + ".seed")):
+            print(f"Failed to destructure {glb}", file=sys.stderr)
+            failed = True
+            continue
+        print(f"Destructured {glb.name} -> {glb.stem}.seed")
+
+    return 1 if failed else 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

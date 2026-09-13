@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <unordered_map>
 #include <vector>
 
 namespace pistoris::glb {
@@ -39,7 +41,33 @@ struct AccessorView {
   std::vector<std::uint32_t> indices;
 };
 
+struct AccessorElementKey {
+  const cgltf_accessor* accessor = nullptr;
+  std::uint32_t index = 0;
+
+  bool operator==(const AccessorElementKey&) const = default;
+};
+
+struct AccessorElementKeyHash {
+  std::size_t operator()(const AccessorElementKey& key) const noexcept {
+    const std::size_t pointer = std::hash<const cgltf_accessor*>{}(key.accessor);
+    return pointer ^ (std::hash<std::uint32_t>{}(key.index) + 0x9e3779b9U + (pointer << 6U) + (pointer >> 2U));
+  }
+};
+
 ArxReturnCode getAccessor(const Asset& asset, const cgltf_accessor* accessor, AccessorView& out);
+
+class AccessorCache {
+ public:
+  explicit AccessorCache(const Asset& asset, std::size_t expected_accessors = 0);
+
+  ArxReturnCode get(const cgltf_accessor* accessor, const AccessorView*& out);
+
+ private:
+  const Asset& asset_;
+  std::unordered_map<const cgltf_accessor*, AccessorView> views_;
+};
+
 ArxReturnCode validatePositionAccessor(const AccessorView& view);
 ArxReturnCode validateNormalAccessor(const AccessorView& view);
 ArxReturnCode validateTexcoordAccessor(const AccessorView& view);

@@ -7,9 +7,13 @@
 
 #include "modules/geometry.h"
 #include "modules/lights.h"
+#include "modules/loading_screen.h"
+#include "modules/minimap.h"
 #include "modules/navigation.h"
+#include "modules/resource.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
+#include "modules/textures.h"
 
 #include <cstdint>
 #include <optional>
@@ -17,11 +21,15 @@
 namespace pistoris {
 
 struct LevelModules {
+  ResourceData resource;
+  TexturesData textures;
   GeometryData geometry;
   RoomsData rooms;
   NavigationData navigation;
   LightingData lighting;
   SceneData scene;
+  MinimapData minimap;
+  LoadingScreenData loading_screen;
 };
 
 enum class LevelValidation : std::uint32_t {
@@ -43,6 +51,8 @@ enum class LevelValidation : std::uint32_t {
   kFogs = 1U << 14,
   kZones = 1U << 15,
   kPaths = 1U << 16,
+  kMinimap = 1U << 17,
+  kLoadingScreen = 1U << 18,
 };
 
 struct LevelDerivedState {

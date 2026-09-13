@@ -28,9 +28,15 @@ enum class ResourceEnumerationResult : std::uint8_t {
   kReadFailed,
 };
 
+enum class ImageLookupMode : std::uint8_t {
+  kExact,
+  kGamePriority,
+};
+
 class IoService {
  public:
-  IoService(OverwriteMode overwrite, bool dry_run, const std::vector<std::string>& mounts);
+  IoService(OverwriteMode overwrite, bool dry_run, const std::vector<std::string>& read_mounts,
+            std::string_view write_mount = {}, bool auto_mount = false);
   ~IoService();
 
   bool writeFile(const char* path, const void* data, std::size_t size);
@@ -40,10 +46,14 @@ class IoService {
   bool parentPathLocation(const PathLocation& location, PathLocation& out, std::string& error) const;
   bool appendPathLocation(const PathLocation& base, std::string_view resource_path, PathLocation& out,
                           std::string& error) const;
+  bool hasPathComponent(const PathLocation& location, std::string_view component, bool& out, std::string& error) const;
   ResourceReadResult readPath(const PathLocation& location, std::vector<std::uint8_t>& out,
                               std::string* resolved_path = nullptr);
   ResourceReadResult readPath(std::string_view requested, std::vector<std::uint8_t>& out,
                               std::string* resolved_path = nullptr);
+  ResourceReadResult readImage(const PathLocation& base, std::string_view path, ImageLookupMode mode,
+                               std::vector<std::uint8_t>& out, std::string* selected_path = nullptr,
+                               std::string* resolved_path = nullptr);
   bool isAbsolutePath(std::string_view requested, bool& out, std::string& error) const;
 
   bool resolveOutputLocation(std::string_view requested, OutputLocation& out, std::string& error) const;
@@ -52,8 +62,10 @@ class IoService {
                                   std::string* resolved_path = nullptr);
   ResourceEnumerationResult enumerateResources(std::string_view base_path, std::uint32_t max_depth,
                                                std::vector<std::string>& out);
+  ResourceEnumerationResult enumerateFiles(const PathLocation& directory, std::vector<PathLocation>& out);
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] bool hasReadMounts() const noexcept;
+  bool useDefaultGameWriteMount();
 
  private:
   struct MountState;

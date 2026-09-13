@@ -11,6 +11,7 @@
 #include "routes/options.h"
 
 #include <cstdio>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -35,8 +36,13 @@ namespace cli {
 bool parseArgs(int argc, char* argv[], ParsedCli& parsed) {
   ParsedOptions& options = parsed.options;
   std::vector<const char*> positionals;
+  bool positional_only = false;
   for (int index = 1; index < argc; ++index) {
-    if (argv[index][0] == '-' && argv[index][1] != '\0') {
+    if (!positional_only && std::string_view(argv[index]) == "--") {
+      positional_only = true;
+      continue;
+    }
+    if (!positional_only && argv[index][0] == '-' && argv[index][1] != '\0') {
       OptionMatch match = resolveModule(argv[index]);
       if (match.ambiguous) {
         diagnosticPrefix(DiagnosticCode::kAmbiguousOption);
