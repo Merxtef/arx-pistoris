@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx/dlf.h"
+#include "native/dlf.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/paths.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
-#include "arx/resource_path.h"
-#include "arx/write_metadata.h"
 #include "external/json.h"
 #include "external/json/native_common.h"
+#include "native/write_metadata.h"
+#include "paths/entity_class.h"
 #include "utils/log.h"
-#include "utils/parse_utils.h"
+#include "utils/return_code.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -300,8 +301,7 @@ ArxReturnCode importDlf(std::string_view text, dlf::Data& out) {
   ARX_RETURN_IF_ERR(parseZones(root, out));
   ARX_RETURN_IF_ERR(validateDlf(&out));
   if (normalized_legacy_teo != 0) {
-    log(ARX_LOG_WARN,
-        std::format("DLF JSON import: normalized {} legacy .teo entity class path(s)", normalized_legacy_teo));
+    log(ARX_LOG_WARN, "DLF JSON import: normalized {} legacy .teo entity class path(s)", normalized_legacy_teo);
   }
   return ARX_OK;
 }
@@ -371,8 +371,7 @@ ArxReturnCode exportDlfToJson(const dlf::Data& data, bool pretty, std::string_vi
       }
       root["zones"].push_back(std::move(json));
     }
-    json_detail::dump(root, pretty, out);
-    return ARX_OK;
+    return json_detail::dump(root, pretty, out);
   });
 }
 

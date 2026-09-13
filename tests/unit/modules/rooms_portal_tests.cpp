@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/rooms.h"
 
@@ -84,8 +84,8 @@ TEST_SUITE("rooms::portal") {
   TEST_CASE("Reports side rooms and room connection") {
     Portal portal = makeQuadPortal();
 
-    CHECK(rooms::portalSideRoom(portal, true) == 0);
-    CHECK(rooms::portalSideRoom(portal, false) == 1);
+    CHECK(rooms::portalSideRoom(portal, PortalSide::kFront) == 0);
+    CHECK(rooms::portalSideRoom(portal, PortalSide::kBack) == 1);
     CHECK(rooms::connectsRooms(portal, 0, 1));
     CHECK(rooms::connectsRooms(portal, 1, 0));
     CHECK_FALSE(rooms::connectsRooms(portal, 0, 2));

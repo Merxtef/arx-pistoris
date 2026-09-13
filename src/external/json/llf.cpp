@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx/llf.h"
+#include "native/llf.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/llf.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
-#include "arx/write_metadata.h"
 #include "external/json.h"
 #include "external/json/native_common.h"
-#include "utils/parse_utils.h"
+#include "native/write_metadata.h"
+#include "utils/return_code.h"
 
 #include <cstdint>
 #include <string>
@@ -118,8 +118,7 @@ ArxReturnCode exportLlfToJson(const llf::Data& data, bool pretty, std::string_vi
     for (const llf::Light& light : data.lights) root["lights"].push_back(lightJson(light));
     root["colors"] = json_detail::Json::array();
     for (const ArxColor3& color : data.colors) root["colors"].push_back(json_detail::color(color));
-    json_detail::dump(root, pretty, out);
-    return ARX_OK;
+    return json_detail::dump(root, pretty, out);
   });
 }
 

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "modules/geometry.h"
+#include "modules/geometry/internal.h"
+#include "utils/log.h"
 
 #include <algorithm>
 #include <array>
@@ -24,15 +27,6 @@ namespace {
 constexpr std::uint32_t kProtectedVertexRole = std::numeric_limits<std::uint32_t>::max() - 1U;
 constexpr std::uint32_t kUnlistedVertexRole = std::numeric_limits<std::uint32_t>::max();
 
-bool validMetric(PositionWeldMetric metric) noexcept {
-  switch (metric) {
-    case PositionWeldMetric::kEuclidean:
-    case PositionWeldMetric::kAxisAligned:
-      return true;
-  }
-  return false;
-}
-
 bool validDegenerateFacePolicy(DegenerateFacePolicy policy) noexcept {
   switch (policy) {
     case DegenerateFacePolicy::kReject:
@@ -44,7 +38,7 @@ bool validDegenerateFacePolicy(DegenerateFacePolicy policy) noexcept {
 }
 
 bool validOptions(const VertexWeldOptions& options) noexcept {
-  return options.radius > 0.0f && std::isfinite(options.radius) && validMetric(options.metric) &&
+  return options.radius > 0.0f && std::isfinite(options.radius) && validPositionWeldMetric(options.metric) &&
          validDegenerateFacePolicy(options.degenerate_faces);
 }
 
@@ -90,8 +84,11 @@ bool protectedVertex(VertexIndex vertex, std::span<const std::uint32_t> roles) n
 
 class RepresentativeQueue {
  public:
-  explicit RepresentativeQueue(std::vector<std::size_t> counts)
-      : counts_(std::move(counts)), positions_(counts_.size()), heap_(counts_.size()) {
+  RepresentativeQueue(std::vector<std::size_t>& counts, std::vector<std::size_t>& positions,
+                      std::vector<VertexIndex>& heap)
+      : counts_(counts), positions_(positions), heap_(heap) {
+    positions_.resize(counts_.size());
+    heap_.resize(counts_.size());
     for (std::size_t i = 0; i < heap_.size(); ++i) {
       heap_[i] = static_cast<VertexIndex>(i);
       positions_[i] = i;
@@ -102,7 +99,9 @@ class RepresentativeQueue {
   [[nodiscard]] bool empty() const noexcept { return heap_.empty(); }
   [[nodiscard]] VertexIndex best() const noexcept { return heap_.front(); }
   [[nodiscard]] bool contains(VertexIndex vertex) const noexcept {
-    return vertex < positions_.size() && positions_[vertex] != kNotQueued;
+    if (vertex >= positions_.size()) return false;
+    const std::size_t position = positions_[vertex];
+    return position < heap_.size() && heap_[position] == vertex;
   }
 
   void remove(VertexIndex vertex) {
@@ -161,9 +160,41 @@ class RepresentativeQueue {
     }
   }
 
-  std::vector<std::size_t> counts_;
-  std::vector<std::size_t> positions_;
-  std::vector<VertexIndex> heap_;
+  std::vector<std::size_t>& counts_;
+  std::vector<std::size_t>& positions_;
+  std::vector<VertexIndex>& heap_;
+};
+
+struct WeldScratch {
+  WeldScratch(std::size_t vertex_count, std::size_t max_segment_size) {
+    candidates.reserve(vertex_count);
+    candidate_counts.reserve(max_segment_size);
+    queue_positions.reserve(max_segment_size);
+    queue_heap.reserve(max_segment_size);
+    assigned.reserve(max_segment_size);
+    group.reserve(max_segment_size);
+  }
+
+  std::vector<std::uint32_t> candidates;
+  std::vector<std::size_t> candidate_counts;
+  std::vector<std::size_t> queue_positions;
+  std::vector<VertexIndex> queue_heap;
+  std::vector<std::uint8_t> assigned;
+  std::vector<VertexIndex> group;
+};
+
+struct SegmentedWeldScratch {
+  SegmentedWeldScratch(std::size_t vertex_count, std::size_t max_segment_size)
+      : plan(vertex_count, max_segment_size),
+        local_indices(vertex_count, kInvalidVertexIndex),
+        segment_membership(vertex_count, kUnlistedVertexRole) {
+    members.reserve(max_segment_size);
+  }
+
+  WeldScratch plan;
+  std::vector<VertexIndex> members;
+  std::vector<VertexIndex> local_indices;
+  std::vector<std::uint32_t> segment_membership;
 };
 
 double distanceSquared(const ArxVector3& lhs, const ArxVector3& rhs) noexcept {
@@ -173,70 +204,128 @@ double distanceSquared(const ArxVector3& lhs, const ArxVector3& rhs) noexcept {
   return x * x + y * y + z * z;
 }
 
-void planSegmentRepresentatives(const GeometryData& geometry, std::span<const VertexIndex> segment,
-                                std::span<const std::uint32_t> roles, const VertexWeldOptions& options,
-                                std::vector<VertexIndex>& representatives) {
-  std::vector<VertexIndex> members(segment.begin(), segment.end());
-  std::sort(members.begin(), members.end());
-  members.erase(std::unique(members.begin(), members.end()), members.end());
-  if (members.empty()) return;
+bool strictlyIncreasing(std::span<const VertexIndex> values) noexcept {
+  for (std::size_t index = 1; index < values.size(); ++index)
+    if (values[index - 1U] >= values[index]) return false;
+  return true;
+}
 
-  PositionIndex index(options.radius, options.metric);
-  for (std::size_t local = 0; local < members.size(); ++local) {
-    index.add(static_cast<std::uint32_t>(local), geometry.vertices[members[local]].position);
+std::span<const VertexIndex> normalizedMembers(std::span<const VertexIndex> segment,
+                                               std::vector<VertexIndex>& scratch) {
+  if (strictlyIncreasing(segment)) return segment;
+  scratch.assign(segment.begin(), segment.end());
+  std::sort(scratch.begin(), scratch.end());
+  scratch.erase(std::unique(scratch.begin(), scratch.end()), scratch.end());
+  return scratch;
+}
+
+struct AllVertexDomain {
+  std::size_t count = 0;
+
+  [[nodiscard]] std::size_t size() const noexcept { return count; }
+  [[nodiscard]] bool empty() const noexcept { return count == 0; }
+  [[nodiscard]] VertexIndex vertex(std::size_t local) const noexcept { return static_cast<VertexIndex>(local); }
+  [[nodiscard]] VertexIndex local(std::uint32_t vertex_index) const noexcept { return vertex_index; }
+  [[nodiscard]] bool contains(std::uint32_t vertex_index) const noexcept { return vertex_index < count; }
+  [[nodiscard]] bool protectedVertex(std::uint32_t) const noexcept { return false; }
+};
+
+struct SegmentedVertexDomain {
+  std::span<const VertexIndex> members;
+  std::uint32_t segment = 0;
+  std::span<const std::uint32_t> roles;
+  std::span<const VertexIndex> local_indices;
+  std::span<const std::uint32_t> segment_membership;
+
+  [[nodiscard]] std::size_t size() const noexcept { return members.size(); }
+  [[nodiscard]] bool empty() const noexcept { return members.empty(); }
+  [[nodiscard]] VertexIndex vertex(std::size_t local) const noexcept { return members[local]; }
+  [[nodiscard]] VertexIndex local(std::uint32_t vertex_index) const noexcept { return local_indices[vertex_index]; }
+  [[nodiscard]] bool contains(std::uint32_t vertex_index) const noexcept {
+    return segment_membership[vertex_index] == segment;
   }
+  [[nodiscard]] bool protectedVertex(std::uint32_t vertex_index) const noexcept {
+    return geometry::protectedVertex(static_cast<VertexIndex>(vertex_index), roles);
+  }
+};
 
-  std::vector<std::size_t> candidate_counts(members.size(), 0);
-  for (std::size_t local = 0; local < members.size(); ++local) {
-    for (std::uint32_t candidate : index.candidates(geometry.vertices[members[local]].position)) {
-      if (!protectedVertex(members[candidate], roles)) ++candidate_counts[local];
+template <typename Domain>
+Error planRepresentatives(const GeometryData& geometry, const Domain& domain, const PositionIndex& position_index,
+                          WeldScratch& scratch, std::vector<VertexIndex>& representatives) {
+  if (domain.empty()) return Error::kNone;
+
+  scratch.candidate_counts.assign(domain.size(), 0);
+  for (std::size_t local = 0; local < domain.size(); ++local) {
+    position_index.findCandidates(scratch.candidates, geometry.vertices[domain.vertex(local)].position);
+    for (std::uint32_t candidate : scratch.candidates) {
+      if (!domain.contains(candidate)) continue;
+      if (!domain.protectedVertex(candidate)) ++scratch.candidate_counts[local];
     }
   }
 
-  RepresentativeQueue queue(std::move(candidate_counts));
-  std::vector<std::uint8_t> assigned(members.size(), 0);
+  RepresentativeQueue queue(scratch.candidate_counts, scratch.queue_positions, scratch.queue_heap);
+  scratch.assigned.assign(domain.size(), 0);
   while (!queue.empty()) {
     const VertexIndex center_local = queue.best();
-    const VertexIndex center_vertex = members[center_local];
+    const VertexIndex center_vertex = domain.vertex(center_local);
     const ArxVector3& center = geometry.vertices[center_vertex].position;
 
-    std::vector<VertexIndex> group;
+    scratch.group.clear();
     std::optional<VertexIndex> closest_protected;
     double closest_distance = std::numeric_limits<double>::infinity();
-    for (std::uint32_t candidate_local : index.candidates(center)) {
-      const VertexIndex candidate = members[candidate_local];
-      if (protectedVertex(candidate, roles)) {
+    position_index.findCandidates(scratch.candidates, center);
+    for (std::uint32_t candidate_index : scratch.candidates) {
+      if (!domain.contains(candidate_index)) continue;
+      const VertexIndex candidate = static_cast<VertexIndex>(candidate_index);
+      const VertexIndex candidate_local = domain.local(candidate);
+      if (domain.protectedVertex(candidate)) {
         const double distance = distanceSquared(center, geometry.vertices[candidate].position);
         if (distance < closest_distance ||
             (distance == closest_distance && (!closest_protected || candidate < *closest_protected))) {
           closest_protected = candidate;
           closest_distance = distance;
         }
-      } else if (assigned[candidate_local] == 0) {
-        group.push_back(static_cast<VertexIndex>(candidate_local));
+      } else if (scratch.assigned[candidate_local] == 0) {
+        scratch.group.push_back(candidate_local);
       }
     }
 
-    if (group.empty()) {
+    if (scratch.group.empty()) {
       queue.remove(center_local);
       continue;
     }
 
     const VertexIndex representative = closest_protected.value_or(center_vertex);
-    for (VertexIndex candidate_local : group) {
-      representatives[members[candidate_local]] = representative;
-      assigned[candidate_local] = 1;
+    for (VertexIndex candidate_local : scratch.group) {
+      representatives[domain.vertex(candidate_local)] = representative;
+      scratch.assigned[candidate_local] = 1;
       queue.remove(candidate_local);
     }
-    if (protectedVertex(center_vertex, roles) && queue.contains(center_local)) queue.remove(center_local);
+    if (domain.protectedVertex(center_vertex) && queue.contains(center_local)) queue.remove(center_local);
 
-    for (VertexIndex candidate_local : group) {
-      const ArxVector3& position = geometry.vertices[members[candidate_local]].position;
-      for (std::uint32_t neighbor : index.candidates(position)) {
-        queue.decrementCount(static_cast<VertexIndex>(neighbor));
+    for (VertexIndex candidate_local : scratch.group) {
+      const ArxVector3& position = geometry.vertices[domain.vertex(candidate_local)].position;
+      position_index.findCandidates(scratch.candidates, position);
+      for (std::uint32_t neighbor : scratch.candidates) {
+        if (!domain.contains(neighbor)) continue;
+        queue.decrementCount(domain.local(neighbor));
       }
     }
   }
+  return Error::kNone;
+}
+
+Error planSegmentRepresentatives(const GeometryData& geometry, std::span<const VertexIndex> segment,
+                                 std::uint32_t segment_index, std::span<const std::uint32_t> roles,
+                                 const PositionIndex& position_index, SegmentedWeldScratch& scratch,
+                                 std::vector<VertexIndex>& representatives) {
+  const std::span<const VertexIndex> members = normalizedMembers(segment, scratch.members);
+  for (std::size_t local = 0; local < members.size(); ++local) {
+    scratch.segment_membership[members[local]] = segment_index;
+    scratch.local_indices[members[local]] = static_cast<VertexIndex>(local);
+  }
+  const SegmentedVertexDomain domain{members, segment_index, roles, scratch.local_indices, scratch.segment_membership};
+  return planRepresentatives(geometry, domain, position_index, scratch.plan, representatives);
 }
 
 bool faceDegenerateAfterRemap(const GeometryData& geometry, const Face& face,
@@ -249,21 +338,55 @@ bool faceDegenerateAfterRemap(const GeometryData& geometry, const Face& face,
 }
 
 Error preserveNondegenerateFaces(const GeometryData& geometry, std::vector<VertexIndex>& representatives) {
-  bool changed = false;
-  do {
-    changed = false;
-    for (const Face& face : geometry.faces) {
-      if (!faceDegenerateAfterRemap(geometry, face, representatives)) continue;
-      bool restored = false;
-      for (const Corner& corner : face.corners) {
-        if (representatives[corner.vertex] == corner.vertex) continue;
-        representatives[corner.vertex] = corner.vertex;
-        restored = true;
-        changed = true;
-      }
-      if (!restored) return Error::kDegenerateFace;
+  std::vector<FaceIndex> pending;
+  pending.reserve(geometry.faces.size());
+  std::vector<std::uint8_t> queued(geometry.faces.size(), 0);
+  for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
+    if (!faceDegenerateAfterRemap(geometry, geometry.faces[face_index], representatives)) continue;
+    pending.push_back(static_cast<FaceIndex>(face_index));
+    queued[face_index] = 1;
+  }
+  if (pending.empty()) return Error::kNone;
+
+  std::vector<std::size_t> offsets(geometry.vertices.size() + 1U, 0);
+  for (const Face& face : geometry.faces)
+    for (const Corner& corner : face.corners) ++offsets[static_cast<std::size_t>(corner.vertex) + 1U];
+  std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
+  std::vector<std::size_t> cursors = offsets;
+  std::vector<FaceIndex> incident_faces(offsets.back());
+  for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
+    for (const Corner& corner : geometry.faces[face_index].corners) {
+      incident_faces[cursors[corner.vertex]++] = static_cast<FaceIndex>(face_index);
     }
-  } while (changed);
+  }
+
+  while (!pending.empty()) {
+    const FaceIndex face_index = pending.back();
+    pending.pop_back();
+    queued[face_index] = 0;
+    const Face& face = geometry.faces[face_index];
+    if (!faceDegenerateAfterRemap(geometry, face, representatives)) continue;
+
+    std::array<VertexIndex, 3> restored_vertices{};
+    std::size_t restored_count = 0;
+    for (const Corner& corner : face.corners) {
+      if (representatives[corner.vertex] == corner.vertex) continue;
+      representatives[corner.vertex] = corner.vertex;
+      restored_vertices[restored_count++] = corner.vertex;
+    }
+    if (restored_count == 0) return Error::kDegenerateFace;
+
+    for (std::size_t restored = 0; restored < restored_count; ++restored) {
+      const VertexIndex vertex = restored_vertices[restored];
+      for (std::size_t incident = offsets[vertex]; incident < offsets[static_cast<std::size_t>(vertex) + 1U];
+           ++incident) {
+        const FaceIndex affected = incident_faces[incident];
+        if (queued[affected] != 0) continue;
+        pending.push_back(affected);
+        queued[affected] = 1;
+      }
+    }
+  }
   return Error::kNone;
 }
 
@@ -336,23 +459,11 @@ bool identityRemap(std::span<const Id> remap) {
   return true;
 }
 
-Error weldVerticesImpl(GeometryData& geometry, const SegmentedVertexWeldInput& input, const VertexWeldOptions& options,
-                       GeometryRemap* out_remap) {
-  if (out_remap) *out_remap = {};
-  if (!validOptions(options)) return Error::kInvalidOptions;
-
-  Error error = validateIndexingPreconditions(geometry);
-  if (error != Error::kNone) return error;
-
-  std::vector<std::uint32_t> roles;
-  error = classifyVertices(geometry.vertices.size(), input, roles);
-  if (error != Error::kNone) return error;
-
-  std::vector<VertexIndex> representatives(geometry.vertices.size());
-  std::iota(representatives.begin(), representatives.end(), VertexIndex{0});
-  for (const VertexWeldSegment& segment : input.segments) {
-    planSegmentRepresentatives(geometry, segment.vertices, roles, options, representatives);
-  }
+Error finishWeld(GeometryData& geometry, const VertexWeldOptions& options, std::vector<VertexIndex>& representatives,
+                 std::size_t segment_count, std::size_t protected_count, GeometryRemap* out_remap) {
+  const std::size_t old_vertex_count = geometry.vertices.size();
+  const std::size_t old_face_count = geometry.faces.size();
+  Error error = Error::kNone;
   if (options.degenerate_faces == DegenerateFacePolicy::kPreserve) {
     error = preserveNondegenerateFaces(geometry, representatives);
     if (error != Error::kNone) return error;
@@ -365,9 +476,63 @@ Error weldVerticesImpl(GeometryData& geometry, const SegmentedVertexWeldInput& i
 
   applyVertexRemap(geometry, representatives, vertex_remap);
   applyFaceRemap(geometry, face_remap);
+  const std::size_t discarded_faces = old_face_count - geometry.faces.size();
+  log(ARX_LOG_DEBUG,
+      "Geometry weld: {} -> {} vertices, {} -> {} faces, radius {}, metric {}, face policy {}, {} segments, {} "
+      "protected vertices",
+      old_vertex_count,
+      geometry.vertices.size(),
+      old_face_count,
+      geometry.faces.size(),
+      options.radius,
+      static_cast<int>(options.metric),
+      static_cast<int>(options.degenerate_faces),
+      segment_count,
+      protected_count);
+  if (discarded_faces != 0) log(ARX_LOG_WARN, "Geometry weld discarded {} degenerate face(s)", discarded_faces);
   if (out_remap && !identityRemap<VertexIndex>(vertex_remap)) out_remap->vertices = std::move(vertex_remap);
   if (out_remap && !face_remap.empty()) out_remap->faces = std::move(face_remap);
   return Error::kNone;
+}
+
+Error weldVerticesImpl(GeometryData& geometry, const SegmentedVertexWeldInput& input, const VertexWeldOptions& options,
+                       GeometryRemap* out_remap) {
+  if (out_remap) *out_remap = {};
+  if (!validOptions(options)) return Error::kInvalidOptions;
+
+  Error error = validateIndexingPreconditions(geometry);
+  if (error != Error::kNone) return error;
+
+  std::vector<std::uint32_t> roles;
+  error = classifyVertices(geometry.vertices.size(), input, roles);
+  if (error != Error::kNone) return error;
+
+  PositionIndex position_index(options.radius, options.metric);
+  position_index.reservePositionCapacity(roles.size());
+  for (std::size_t vertex = 0; vertex < roles.size(); ++vertex) {
+    if (roles[vertex] == kUnlistedVertexRole) continue;
+    if (!position_index.tryAdd(static_cast<VertexIndex>(vertex), geometry.vertices[vertex].position))
+      return Error::kBadVertex;
+  }
+
+  std::size_t max_segment_size = 0;
+  for (const VertexWeldSegment& segment : input.segments)
+    max_segment_size = std::max(max_segment_size, segment.vertices.size());
+  SegmentedWeldScratch scratch(geometry.vertices.size(), max_segment_size);
+  std::vector<VertexIndex> representatives(geometry.vertices.size());
+  std::iota(representatives.begin(), representatives.end(), VertexIndex{0});
+  for (std::size_t segment = 0; segment < input.segments.size(); ++segment) {
+    error = planSegmentRepresentatives(geometry,
+                                       input.segments[segment].vertices,
+                                       static_cast<std::uint32_t>(segment),
+                                       roles,
+                                       position_index,
+                                       scratch,
+                                       representatives);
+    if (error != Error::kNone) return error;
+  }
+  return finishWeld(
+      geometry, options, representatives, input.segments.size(), input.protected_vertices.size(), out_remap);
 }
 
 }  // namespace
@@ -375,13 +540,23 @@ Error weldVerticesImpl(GeometryData& geometry, const SegmentedVertexWeldInput& i
 Error weldVertices(GeometryData& geometry, const VertexWeldOptions& options, GeometryRemap* out_remap) {
   if (out_remap) *out_remap = {};
   if (!validOptions(options)) return Error::kInvalidOptions;
-  if (geometry.vertices.size() > static_cast<std::size_t>(kInvalidVertexIndex)) return Error::kTooManyVertices;
+  Error error = validateIndexingPreconditions(geometry);
+  if (error != Error::kNone) return error;
 
-  std::vector<VertexIndex> vertices(geometry.vertices.size());
-  std::iota(vertices.begin(), vertices.end(), VertexIndex{0});
-  const VertexWeldSegment segment{vertices};
-  const std::array segments{segment};
-  return weldVerticesImpl(geometry, {.segments = segments, .protected_vertices = {}}, options, out_remap);
+  PositionIndex position_index(options.radius, options.metric);
+  position_index.reservePositionCapacity(geometry.vertices.size());
+  for (std::size_t vertex = 0; vertex < geometry.vertices.size(); ++vertex) {
+    if (!position_index.tryAdd(static_cast<VertexIndex>(vertex), geometry.vertices[vertex].position))
+      return Error::kBadVertex;
+  }
+
+  WeldScratch scratch(geometry.vertices.size(), geometry.vertices.size());
+  std::vector<VertexIndex> representatives(geometry.vertices.size());
+  std::iota(representatives.begin(), representatives.end(), VertexIndex{0});
+  error = planRepresentatives(
+      geometry, AllVertexDomain{geometry.vertices.size()}, position_index, scratch, representatives);
+  if (error != Error::kNone) return error;
+  return finishWeld(geometry, options, representatives, 0, 0, out_remap);
 }
 
 Error weldVerticesSegmented(GeometryData& geometry, const SegmentedVertexWeldInput& input,

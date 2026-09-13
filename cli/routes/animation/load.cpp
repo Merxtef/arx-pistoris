@@ -3,9 +3,13 @@
 
 #include "routes/animation/load.h"
 
-#include "arx_pistoris/pistoris.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/animation.hpp"
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native.hpp"
+#include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/runtime.hpp"
 
+#include "base/bytes.h"
 #include "console/diagnostics.h"
 #include "formats/classification.h"
 #include "formats/format.h"
@@ -13,50 +17,89 @@
 #include "routes/animation/state.h"
 #include "routes/types.h"
 
-#include <cstddef>
-#include <cstdint>
 #include <string_view>
-#include <utility>
+#include <variant>
 #include <vector>
 
 namespace cli::animation {
 namespace {
 
-std::string_view textView(const std::vector<std::uint8_t>& buffer) {
-  return {reinterpret_cast<const char*>(buffer.data()), buffer.size()};
+bool inputFailure(const char* what, ArxReturnCode rc, std::string_view path) {
+  diagnostic(DiagnosticCode::kAnimationInputFailed,
+             "%s input failed (%.*s): %s (code %d)",
+             what,
+             static_cast<int>(path.size()),
+             path.data(),
+             pistoris::errorString(rc),
+             static_cast<int>(rc));
+  return false;
+}
+
+bool decodeTea(const ClassifiedPath& input, pistoris::Tea& out) {
+  ArxReturnCode rc = ARX_OK;
+  switch (input.facts.format) {
+    case Format::kTea:
+      rc = pistoris::readTea(input.buffer, out);
+      break;
+    case Format::kJson:
+      rc = pistoris::fromJson(byteStringView(input.buffer), out);
+      break;
+    default:
+      diagnostic(DiagnosticCode::kAnimationUnsupportedInput, "Unsupported Animation input format");
+      return false;
+  }
+  return rc == ARX_OK || inputFailure(formatName(input.facts.format), rc, input.path);
+}
+
+bool applyResourcePath(const ClassifiedPath& input, pistoris::Animation& out) {
+  pistoris::paths::AnimationPathView parsed;
+  if (!pistoris::paths::animationFromTea(input.path, parsed)) return true;
+  const ArxReturnCode rc = out.setResourcePath(input.path);
+  return rc == ARX_OK || inputFailure("Animation resource identity", rc, input.path);
+}
+
+bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, NativeAnimation& out) {
+  return decodeTea(inputs[invocation.input], out.animation);
+}
+
+bool loadIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+                      IntermediateAnimation& out) {
+  const ClassifiedPath& input = inputs[invocation.input];
+  pistoris::Tea native;
+  if (!decodeTea(input, native)) return false;
+  const ArxReturnCode rc = pistoris::Animation::importNative(out.animation, native, &out.sound_sources);
+  if (rc != ARX_OK) return inputFailure("TEA Animation", rc, input.path);
+  return applyResourcePath(input, out.animation);
 }
 
 }  // namespace
 
-bool loadInput(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, Route route, Context& ctx) {
-  ctx.teas.reserve(invocation.inputs.size());
-  for (std::size_t index : invocation.inputs) {
-    const ClassifiedPath& input = inputs[index];
-    pistoris::Tea tea;
-    ArxReturnCode rc = ARX_OK;
-    switch (route.input) {
-      case Format::kTea:
-        rc = pistoris::readTea(input.buffer, tea);
-        break;
-      case Format::kJson:
-        rc = pistoris::importJson(textView(input.buffer), tea);
-        break;
-      default:
-        diagnostic(DiagnosticCode::kAnimationUnsupportedInput, "Unsupported input format");
-        return false;
-    }
-    if (rc != ARX_OK) {
-      diagnostic(DiagnosticCode::kAnimationInputFailed,
-                 "%s input failed (%s): %s (code %d)",
-                 formatName(route.input),
-                 input.path.c_str(),
-                 pistoris::errorString(rc),
-                 static_cast<int>(rc));
-      return false;
-    }
-    ctx.teas.push_back(std::move(tea));
+const InputConverterDescriptor* inputConverterDescriptor(Route route) {
+  static constexpr InputConverterDescriptor kNative{loadNative, loadIntermediate};
+  switch (route.input) {
+    case Format::kTea:
+    case Format::kJson:
+      return &kNative;
+    default:
+      return nullptr;
   }
-  return true;
+}
+
+bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, bool native, AnimationInput& out) {
+  if (native) {
+    if (!converter.load_native) return false;
+    NativeAnimation& loaded = out.emplace<NativeAnimation>();
+    if (converter.load_native(inputs, invocation, loaded)) return true;
+    out.emplace<std::monostate>();
+    return false;
+  }
+
+  if (!converter.load_intermediate) return false;
+  IntermediateAnimation& loaded = out.emplace<IntermediateAnimation>();
+  if (converter.load_intermediate(inputs, invocation, loaded)) return true;
+  out.emplace<std::monostate>();
+  return false;
 }
 
 }  // namespace cli::animation

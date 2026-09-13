@@ -12,7 +12,9 @@ import sys
 
 
 CODE_PREFIXES = (
+    "ARX_AMB_",
     "ARX_FTL_",
+    "ARX_MODEL_",
     "ARX_TEA_",
     "ARX_FTS_",
     "ARX_LLF_",
@@ -99,7 +101,7 @@ def asserted_codes(source: str) -> set[str]:
         result.update(re.findall(r"\bARX_[A-Z0-9_]+\b", source[open_paren + 1 : cursor - 1]))
     return result
 
-header = pathlib.Path("include/arx_pistoris/pistoris_types.h").read_text()
+header = pathlib.Path("include/arx_pistoris/base/status.h").read_text()
 strerror = pathlib.Path("src/api/strerror.cpp").read_text()
 covered = set()
 for test_path in pathlib.Path("tests").rglob("*.cpp"):

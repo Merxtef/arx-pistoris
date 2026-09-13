@@ -7,10 +7,19 @@
 
 namespace pistoris {
 
+struct LevelModules;
+struct LevelValidationState;
+
+ArxReturnCode validateLevelModules(const LevelModules& modules, ArxAabb* out_bounds = nullptr,
+                                   ArxAabb* out_referenced_bounds = nullptr);
+ArxReturnCode validateLevelModules(const LevelModules& modules, LevelValidationState& out_state);
+
 namespace geometry {
 enum class Error : std::uint8_t;
-enum class ImageError : std::uint8_t;
 }  // namespace geometry
+namespace textures {
+enum class Error : std::uint8_t;
+}  // namespace textures
 namespace rooms {
 enum class Error : std::uint8_t;
 }
@@ -21,6 +30,12 @@ namespace lights {
 enum class Error : std::uint8_t;
 }
 namespace scene {
+enum class Error : std::uint8_t;
+}
+namespace minimap {
+enum class Error : std::uint8_t;
+}
+namespace loading_screen {
 enum class Error : std::uint8_t;
 }
 
@@ -45,11 +60,13 @@ namespace level_validation {
 inline constexpr std::size_t kMaxRooms = 254;
 
 ArxReturnCode geometryError(geometry::Error error) noexcept;
-ArxReturnCode imageError(geometry::ImageError error) noexcept;
+ArxReturnCode textureError(textures::Error error) noexcept;
 ArxReturnCode roomsError(rooms::Error error) noexcept;
 ArxReturnCode navigationError(navigation::Error error) noexcept;
 ArxReturnCode lightingError(lights::Error error) noexcept;
 ArxReturnCode sceneError(scene::Error error) noexcept;
+ArxReturnCode minimapError(minimap::Error error) noexcept;
+ArxReturnCode loadingScreenError(loading_screen::Error error) noexcept;
 ArxReturnCode faceTypes(std::span<const Face> faces) noexcept;
 bool validPortalBounds(const Portal& portal) noexcept;
 
@@ -78,6 +95,8 @@ ArxReturnCode entities(const LevelModules& modules, LevelValidationState& state)
 ArxReturnCode fogs(const LevelModules& modules, LevelValidationState& state);
 ArxReturnCode zones(const LevelModules& modules, LevelValidationState& state);
 ArxReturnCode paths(const LevelModules& modules, LevelValidationState& state);
+ArxReturnCode minimap(const LevelModules& modules, LevelValidationState& state);
+ArxReturnCode loadingScreen(const LevelModules& modules, LevelValidationState& state);
 ArxReturnCode mesh(const LevelModules& modules, LevelValidationState& state);
 ArxReturnCode all(const LevelModules& modules, LevelValidationState& state);
 

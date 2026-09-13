@@ -7,117 +7,72 @@
 #include "arx_pistoris/arx_pistoris.h"
 #include "arx_pistoris/native/ftl.hpp"
 
-#include "helpers.h"
+#include "support/corpus_checks.h"
+#include "support/corpus_files.h"
+#include "support/native_equivalence.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <ios>
-#include <iterator>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-static std::vector<uint8_t> readBytes(const fs::path& p) {
-  std::ifstream f(p, std::ios::binary);
-  return {std::istreambuf_iterator<char>(f), {}};
-}
-
 TEST_SUITE("ftl") {
-  // --- data/fixtures/model/native/ (committed CC0 seeds, always run) ---
-
   TEST_CASE("ModelFtlParse") {
-    std::size_t count = 0;
-    for (auto& e : fs::directory_iterator("data/fixtures/model/native")) {
-      if (e.path().extension() != ".ftl") continue;
-      count++;
-      CAPTURE(e.path().string());
-      auto bytes = readBytes(e.path());
-      ArxFtlHandle h = nullptr;
-      ArxReturnCode rc = arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h);
-      CHECK(rc == ARX_OK);
-      if (h) arx_pistoris_ftl_free(h);
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kFtl)) {
+      CAPTURE(path.string());
+      std::vector<std::uint8_t> bytes;
+      if (!test_support::readCorpusBytes(path, bytes)) continue;
+      ArxFtl* h = nullptr;
+      const ArxReturnCode rc = arx_pistoris_ftl_read(bytes.data(), bytes.size(), &h);
+      if (!test_support::checkCorpusStatus(path, "read FTL", rc)) {
+        if (h) arx_pistoris_ftl_destroy(h);
+        continue;
+      }
+      test_support::checkCorpusCondition(path, "read FTL", h != nullptr, "returned no FTL");
+      if (h) arx_pistoris_ftl_destroy(h);
     }
-    CHECK(count >= 1);
   }
 
   TEST_CASE("ModelFtlWriteRoundtrip") {
-    std::size_t count = 0;
-    for (auto& e : fs::directory_iterator("data/fixtures/model/native")) {
-      if (e.path().extension() != ".ftl") continue;
-      count++;
-      CAPTURE(e.path().string());
-      auto bytes = readBytes(e.path());
-      ArxFtlHandle h1 = nullptr;
-      CHECK(arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h1) == ARX_OK);
-      if (!h1) continue;
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kFtl)) {
+      CAPTURE(path.string());
+      std::vector<std::uint8_t> bytes;
+      if (!test_support::readCorpusBytes(path, bytes)) continue;
+      ArxFtl* h1 = nullptr;
+      ArxReturnCode rc = arx_pistoris_ftl_read(bytes.data(), bytes.size(), &h1);
+      if (!test_support::checkCorpusStatus(path, "read source FTL", rc)) {
+        if (h1) arx_pistoris_ftl_destroy(h1);
+        continue;
+      }
+      if (!test_support::checkCorpusCondition(path, "read source FTL", h1 != nullptr, "returned no FTL")) continue;
 
       uint8_t* out = nullptr;
       size_t sz = 0;
-      CHECK(arx_pistoris_ftl_write(h1, 1, &out, &sz) == ARX_OK);
-      if (!out) {
-        arx_pistoris_ftl_free(h1);
+      rc = arx_pistoris_ftl_write(h1, 1, &out, &sz);
+      if (!test_support::checkCorpusStatus(path, "write FTL", rc) ||
+          !test_support::checkCorpusCondition(path, "write FTL", out != nullptr, "returned no bytes")) {
+        if (out) arx_pistoris_free_bytes(out);
+        arx_pistoris_ftl_destroy(h1);
         continue;
       }
 
-      ArxFtlHandle h2 = nullptr;
-      ArxReturnCode rc2 = arx_pistoris_ftl_parse(out, sz, &h2);
+      ArxFtl* h2 = nullptr;
+      const ArxReturnCode rc2 = arx_pistoris_ftl_read(out, sz, &h2);
       arx_pistoris_free_bytes(out);
-      CHECK(rc2 == ARX_OK);
-      if (h2) {
-        checkEq(*reinterpret_cast<const pistoris::ftl::Data*>(h1), *reinterpret_cast<const pistoris::ftl::Data*>(h2));
-        arx_pistoris_ftl_free(h2);
-      }
-      arx_pistoris_ftl_free(h1);
-    }
-    CHECK(count >= 1);
-  }
-
-  // --- data/arx/ftl/ (game assets, silently skipped if absent) ---
-
-  TEST_CASE("ArxFtlParse") {
-    const fs::path dir = "data/arx/ftl";
-    if (!fs::exists(dir)) return;
-    for (auto& e : fs::directory_iterator(dir)) {
-      if (e.path().extension() != ".ftl") continue;
-      CAPTURE(e.path().string());
-      auto bytes = readBytes(e.path());
-      ArxFtlHandle h = nullptr;
-      ArxReturnCode rc = arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h);
-      CHECK(rc == ARX_OK);
-      if (h) arx_pistoris_ftl_free(h);
-    }
-  }
-
-  TEST_CASE("ArxFtlWriteRoundtrip") {
-    const fs::path dir = "data/arx/ftl";
-    if (!fs::exists(dir)) return;
-    for (auto& e : fs::directory_iterator(dir)) {
-      if (e.path().extension() != ".ftl") continue;
-      CAPTURE(e.path().string());
-      auto bytes = readBytes(e.path());
-      ArxFtlHandle h1 = nullptr;
-      CHECK(arx_pistoris_ftl_parse(bytes.data(), bytes.size(), &h1) == ARX_OK);
-      if (!h1) continue;
-
-      uint8_t* out = nullptr;
-      size_t sz = 0;
-      CHECK(arx_pistoris_ftl_write(h1, 1, &out, &sz) == ARX_OK);
-      if (!out) {
-        arx_pistoris_ftl_free(h1);
+      if (!test_support::checkCorpusStatus(path, "read written FTL", rc2)) {
+        if (h2) arx_pistoris_ftl_destroy(h2);
+        arx_pistoris_ftl_destroy(h1);
         continue;
       }
-
-      ArxFtlHandle h2 = nullptr;
-      ArxReturnCode rc2 = arx_pistoris_ftl_parse(out, sz, &h2);
-      arx_pistoris_free_bytes(out);
-      CHECK(rc2 == ARX_OK);
+      test_support::checkCorpusCondition(path, "read written FTL", h2 != nullptr, "returned no FTL");
       if (h2) {
-        checkEq(*reinterpret_cast<const pistoris::ftl::Data*>(h1), *reinterpret_cast<const pistoris::ftl::Data*>(h2));
-        arx_pistoris_ftl_free(h2);
+        test_support::checkEquivalent(*reinterpret_cast<const pistoris::ftl::Data*>(h1),
+                                      *reinterpret_cast<const pistoris::ftl::Data*>(h2));
+        arx_pistoris_ftl_destroy(h2);
       }
-      arx_pistoris_ftl_free(h1);
+      arx_pistoris_ftl_destroy(h1);
     }
   }
 

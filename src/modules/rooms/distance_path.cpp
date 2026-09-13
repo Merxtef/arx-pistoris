@@ -1,20 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
 
-#include "modules/geometry.h"
 #include "modules/rooms.h"
 #include "modules/rooms/internal.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
-#include <queue>
 #include <span>
 #include <utility>
 #include <vector>
@@ -22,36 +20,95 @@
 namespace pistoris::rooms {
 namespace {
 
-struct QueueItem {
-  float distance = 0.0f;
-  std::uint32_t node = 0;
-  bool operator>(const QueueItem& other) const { return distance > other.distance; }
+using QueueItem = std::pair<float, std::uint32_t>;
+
+struct QueueGreater {
+  bool operator()(const QueueItem& left, const QueueItem& right) const noexcept { return left.first > right.first; }
 };
 
-void appendUnique(std::vector<PortalIndex>& values, PortalIndex value) {
-  if (std::find(values.begin(), values.end(), value) == values.end()) values.push_back(value);
+void pushQueue(std::vector<QueueItem>& queue, QueueItem value) {
+  queue.push_back(value);
+  std::push_heap(queue.begin(), queue.end(), QueueGreater{});
 }
 
-std::vector<std::vector<PortalIndex>> connectedPortalGroups(const RoomGraph& graph) {
-  std::vector<std::vector<PortalIndex>> groups;
-  std::vector<bool> visited(graph.nodes.size(), false);
+QueueItem popQueue(std::vector<QueueItem>& queue) {
+  std::pop_heap(queue.begin(), queue.end(), QueueGreater{});
+  QueueItem value = queue.back();
+  queue.pop_back();
+  return value;
+}
+
+DijkstraPath findShortestPath(const RoomDistanceAdjacency& adjacency, std::span<const std::uint32_t> starts,
+                              std::span<const std::uint32_t> goals, DijkstraScratch& scratch) {
+  scratch.path.clear();
+  if (starts.empty() || goals.empty()) return {};
+
+  const std::size_t node_count = adjacencyNodeCount(adjacency);
+  reserveDijkstraScratch(scratch, node_count, node_count);
+  scratch.distances.assign(node_count, std::numeric_limits<float>::infinity());
+  scratch.previous.assign(node_count, kInvalidRoomDistanceIndex);
+  scratch.goals.assign(node_count, 0);
+  scratch.queue.clear();
+
+  bool has_goal = false;
+  for (std::uint32_t goal : goals) {
+    if (goal >= node_count) continue;
+    scratch.goals[goal] = 1;
+    has_goal = true;
+  }
+  if (!has_goal) return {};
+
+  for (std::uint32_t start : starts) {
+    if (start >= node_count || scratch.distances[start] == 0.0f) continue;
+    scratch.distances[start] = 0.0f;
+    pushQueue(scratch.queue, {0.0f, start});
+  }
+  if (scratch.queue.empty()) return {};
+
+  std::uint32_t reached = kInvalidRoomDistanceIndex;
+  while (!scratch.queue.empty()) {
+    const QueueItem current = popQueue(scratch.queue);
+    if (current.first != scratch.distances[current.second]) continue;
+    if (scratch.goals[current.second] != 0) {
+      reached = current.second;
+      break;
+    }
+    for (const RoomDistanceEdge& edge : adjacentEdges(adjacency, current.second)) {
+      const float next_distance = current.first + edge.cost;
+      if (next_distance >= scratch.distances[edge.to]) continue;
+      scratch.distances[edge.to] = next_distance;
+      scratch.previous[edge.to] = current.second;
+      pushQueue(scratch.queue, {next_distance, edge.to});
+    }
+  }
+
+  if (reached == kInvalidRoomDistanceIndex) return {};
+  for (std::uint32_t node = reached; node != kInvalidRoomDistanceIndex; node = scratch.previous[node])
+    scratch.path.push_back(node);
+  std::reverse(scratch.path.begin(), scratch.path.end());
+  return {true, scratch.distances[reached], std::span<const std::uint32_t>(scratch.path)};
+}
+
+std::size_t connectedPortalGroupCount(const RoomGraph& graph, const RoomDistanceAdjacency& adjacency,
+                                      std::vector<std::uint8_t>& visited, std::vector<std::uint32_t>& worklist) {
+  std::fill_n(visited.begin(), graph.nodes.size(), std::uint8_t{0});
+  std::size_t groups = 0;
   for (std::uint32_t portal_node : graph.portal_nodes) {
     if (portal_node >= graph.nodes.size() || visited[portal_node]) continue;
-    std::vector<PortalIndex> group;
-    std::queue<std::uint32_t> queue;
-    visited[portal_node] = true;
-    queue.push(portal_node);
-    while (!queue.empty()) {
-      const std::uint32_t current = queue.front();
-      queue.pop();
-      if (graph.nodes[current].portal != kInvalidPortalIndex) appendUnique(group, graph.nodes[current].portal);
-      for (const RoomDistanceEdge& edge : graph.adjacency[current]) {
+    bool contains_portal = false;
+    worklist.clear();
+    visited[portal_node] = 1;
+    worklist.push_back(portal_node);
+    for (std::size_t current_index = 0; current_index < worklist.size(); ++current_index) {
+      const std::uint32_t current = worklist[current_index];
+      contains_portal = contains_portal || graph.nodes[current].portal != kInvalidPortalIndex;
+      for (const RoomDistanceEdge& edge : adjacentEdges(adjacency, current)) {
         if (edge.to >= graph.nodes.size() || visited[edge.to]) continue;
-        visited[edge.to] = true;
-        queue.push(edge.to);
+        visited[edge.to] = 1;
+        worklist.push_back(edge.to);
       }
     }
-    if (!group.empty()) groups.push_back(std::move(group));
+    groups += static_cast<std::size_t>(contains_portal);
   }
   return groups;
 }
@@ -67,48 +124,39 @@ float indexedPathDistance(const RoomGraph& graph, std::span<const std::uint32_t>
 
 }  // namespace
 
-DijkstraPath shortestPath(const RoomGraph& graph, std::uint32_t start, std::uint32_t goal) {
-  if (start >= graph.nodes.size() || goal >= graph.nodes.size()) return {};
-  if (start == goal) return {true, 0.0f, {start}};
-
-  std::vector<float> distances(graph.nodes.size(), std::numeric_limits<float>::infinity());
-  std::vector<std::uint32_t> previous(graph.nodes.size(), kInvalidRoomDistanceIndex);
-  std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> queue;
-  distances[start] = 0.0f;
-  queue.push({0.0f, start});
-
-  while (!queue.empty()) {
-    QueueItem current = queue.top();
-    queue.pop();
-    if (current.distance != distances[current.node]) continue;
-    if (current.node == goal) break;
-    for (const RoomDistanceEdge& edge : graph.adjacency[current.node]) {
-      const float next_distance = current.distance + edge.cost;
-      if (next_distance >= distances[edge.to]) continue;
-      distances[edge.to] = next_distance;
-      previous[edge.to] = current.node;
-      queue.push({next_distance, edge.to});
-    }
-  }
-
-  if (!std::isfinite(distances[goal])) return {};
-  std::vector<std::uint32_t> path;
-  for (std::uint32_t node = goal; node != kInvalidRoomDistanceIndex; node = previous[node]) path.push_back(node);
-  std::reverse(path.begin(), path.end());
-  return {true, distances[goal], std::move(path)};
+void reserveDijkstraScratch(DijkstraScratch& scratch, std::size_t node_count, std::size_t queue_capacity) {
+  scratch.distances.reserve(node_count);
+  scratch.previous.reserve(node_count);
+  scratch.goals.reserve(node_count);
+  scratch.queue.reserve(queue_capacity);
+  scratch.path.reserve(node_count);
+  scratch.shortened_path.reserve(node_count);
 }
 
-std::vector<std::uint32_t> shortcutPath(const RoomsData& rooms, const GeometryData& geometry, const RoomGraph& graph,
-                                        RoomIndex room, std::span<const std::uint32_t> path) {
-  if (path.size() <= 2U) return {path.begin(), path.end()};
-  std::vector<std::uint32_t> out;
+DijkstraPath shortestPath(const RoomDistanceAdjacency& adjacency, std::uint32_t start, std::uint32_t goal,
+                          DijkstraScratch& scratch) {
+  const std::array<std::uint32_t, 1> starts = {start};
+  const std::array<std::uint32_t, 1> goals = {goal};
+  return findShortestPath(adjacency, starts, goals, scratch);
+}
+
+void shortcutPath(std::vector<std::uint32_t>& out, const RoomGeometryIndex& room_geometry, const RoomGraph& graph,
+                  RoomIndex room, std::span<const std::uint32_t> path, std::vector<std::uint32_t>& candidate_scratch) {
+  out.clear();
+  if (path.size() <= 2U) {
+    out.insert(out.end(), path.begin(), path.end());
+    return;
+  }
   std::size_t current = 0;
   out.push_back(path[current]);
   while (current + 1U < path.size()) {
     std::size_t next = current + 1U;
     for (std::size_t candidate = path.size() - 1U; candidate > current + 1U; --candidate) {
-      if (!blockedByRoomGeometry(
-              rooms, geometry, room, graph.nodes[path[current]].position, graph.nodes[path[candidate]].position)) {
+      if (!blockedByRoomGeometry(room_geometry,
+                                 room,
+                                 graph.nodes[path[current]].position,
+                                 graph.nodes[path[candidate]].position,
+                                 candidate_scratch)) {
         next = candidate;
         break;
       }
@@ -116,7 +164,6 @@ std::vector<std::uint32_t> shortcutPath(const RoomsData& rooms, const GeometryDa
     out.push_back(path[next]);
     current = next;
   }
-  return out;
 }
 
 std::vector<ArxVector3> pathPositions(const RoomGraph& graph, std::span<const std::uint32_t> path) {
@@ -126,23 +173,32 @@ std::vector<ArxVector3> pathPositions(const RoomGraph& graph, std::span<const st
   return points;
 }
 
-float pathDistance(std::span<const ArxVector3> points) {
-  float distance = 0.0f;
-  for (std::size_t i = 1; i < points.size(); ++i)
-    distance += std::sqrt(static_cast<float>(math::lengthSquared(points[i] - points[i - 1U])));
-  return distance;
-}
-
-void addInRoomPortalPaths(const RoomsData& rooms, const GeometryData& geometry, RoomDistanceGenerationGraph& graph,
-                          RoomDistanceGenWarnings& warnings, RoomDistanceGenDiagnostics* diagnostics) {
+void addInRoomPortalPaths(const RoomsData& rooms, const RoomGeometryIndex& room_geometry,
+                          RoomDistanceGenerationGraph& graph, RoomDistanceGenerationWarnings& warnings,
+                          RoomDistanceGenerationDiagnostics* diagnostics) {
   if (diagnostics) diagnostics->in_room_portal_paths_by_room.assign(rooms.definitions.size(), {});
+  std::vector<std::uint32_t> candidate_scratch;
+  DijkstraScratch path_scratch;
+  std::size_t max_nodes = 0;
+  std::size_t max_queue = 0;
+  for (const RoomGraph& room_graph : graph.rooms) {
+    max_nodes = std::max(max_nodes, room_graph.nodes.size());
+    const std::size_t queue_capacity = room_graph.nodes.size() + room_graph.edges.size() * 2U;
+    max_queue = std::max(max_queue, queue_capacity);
+  }
+  reserveDijkstraScratch(path_scratch, max_nodes, max_queue);
+  std::vector<std::uint8_t> component_visited(max_nodes, 0);
+  std::vector<std::uint32_t> component_worklist;
+  component_worklist.reserve(max_nodes);
   for (RoomIndex room = 0; room < graph.rooms.size(); ++room) {
-    RoomGraph& room_graph = graph.rooms[room];
-    std::vector<std::vector<PortalIndex>> portal_groups = connectedPortalGroups(room_graph);
-    if (portal_groups.size() > 1U) {
+    const RoomGraph& room_graph = graph.rooms[room];
+    const RoomDistanceAdjacency adjacency = buildAdjacency(room_graph.nodes.size(), room_graph.edges);
+    const std::size_t portal_groups =
+        connectedPortalGroupCount(room_graph, adjacency, component_visited, component_worklist);
+    if (portal_groups > 1U) {
       ++warnings.disconnected_portal_group_rooms;
       if (warnings.disconnected_portal_group_examples.size() < kRoomDistanceWarningExampleLimit) {
-        warnings.disconnected_portal_group_examples.push_back({room, portal_groups.size()});
+        warnings.disconnected_portal_group_examples.push_back({room, portal_groups});
       }
     }
 
@@ -150,17 +206,17 @@ void addInRoomPortalPaths(const RoomsData& rooms, const GeometryData& geometry, 
       for (std::size_t j = i + 1U; j < room_graph.portal_nodes.size(); ++j) {
         const std::uint32_t start = room_graph.portal_nodes[i];
         const std::uint32_t goal = room_graph.portal_nodes[j];
-        DijkstraPath path = shortestPath(room_graph, start, goal);
+        DijkstraPath path = shortestPath(adjacency, start, goal, path_scratch);
         if (!path.found) continue;
-        std::vector<std::uint32_t> shortened = shortcutPath(rooms, geometry, room_graph, room, path.nodes);
-        const float distance = indexedPathDistance(room_graph, shortened);
+        shortcutPath(path_scratch.shortened_path, room_geometry, room_graph, room, path.nodes, candidate_scratch);
+        const float distance = indexedPathDistance(room_graph, path_scratch.shortened_path);
         const RoomDistanceNode& start_node = room_graph.nodes[start];
         const RoomDistanceNode& end_node = room_graph.nodes[goal];
         graph.in_room_paths.push_back({globalPortalSide(start_node.portal, start_node.portal_front),
                                        globalPortalSide(end_node.portal, end_node.portal_front),
                                        distance});
         if (diagnostics && room < diagnostics->in_room_portal_paths_by_room.size()) {
-          std::vector<ArxVector3> points = pathPositions(room_graph, shortened);
+          std::vector<ArxVector3> points = pathPositions(room_graph, path_scratch.shortened_path);
           diagnostics->in_room_portal_paths_by_room[room].push_back(
               {std::move(points), room, room, start_node.portal, end_node.portal});
         }
@@ -169,55 +225,19 @@ void addInRoomPortalPaths(const RoomsData& rooms, const GeometryData& geometry, 
   }
 }
 
-std::vector<std::vector<RoomDistanceEdge>> buildGlobalPortalGraph(const RoomsData& rooms,
-                                                                  const RoomDistanceGenerationGraph& graph) {
-  std::vector<std::vector<RoomDistanceEdge>> adjacency(rooms.portals.size() * 2U);
+RoomDistanceAdjacency buildGlobalPortalGraph(const RoomsData& rooms, const RoomDistanceGenerationGraph& graph) {
+  std::vector<RoomDistanceUndirectedEdge> edges;
+  edges.reserve(rooms.portals.size() + graph.in_room_paths.size());
   for (PortalIndex portal = 0; portal < rooms.portals.size(); ++portal)
-    addGlobalEdge(adjacency, globalPortalSide(portal, true), globalPortalSide(portal, false), 0.0f);
+    edges.push_back({globalPortalSide(portal, true), globalPortalSide(portal, false), 0.0f});
   for (const InRoomPortalPath& path : graph.in_room_paths)
-    addGlobalEdge(adjacency, path.start_global_side, path.end_global_side, path.distance);
-  return adjacency;
+    edges.push_back({path.start_global_side, path.end_global_side, path.distance});
+  return buildAdjacency(rooms.portals.size() * 2U, edges);
 }
 
-GlobalPath shortestGlobalPath(const std::vector<std::vector<RoomDistanceEdge>>& adjacency,
-                              std::span<const std::uint32_t> starts, std::span<const std::uint32_t> goals) {
-  if (starts.empty() || goals.empty()) return {};
-  std::vector<bool> is_goal(adjacency.size(), false);
-  for (std::uint32_t goal : goals)
-    if (goal < is_goal.size()) is_goal[goal] = true;
-
-  std::vector<float> distances(adjacency.size(), std::numeric_limits<float>::infinity());
-  std::vector<std::uint32_t> previous(adjacency.size(), kInvalidRoomDistanceIndex);
-  std::priority_queue<QueueItem, std::vector<QueueItem>, std::greater<QueueItem>> queue;
-  for (std::uint32_t start : starts) {
-    if (start >= adjacency.size()) continue;
-    distances[start] = 0.0f;
-    queue.push({0.0f, start});
-  }
-
-  std::uint32_t reached = kInvalidRoomDistanceIndex;
-  while (!queue.empty()) {
-    QueueItem current = queue.top();
-    queue.pop();
-    if (current.distance != distances[current.node]) continue;
-    if (is_goal[current.node]) {
-      reached = current.node;
-      break;
-    }
-    for (const RoomDistanceEdge& edge : adjacency[current.node]) {
-      const float next_distance = current.distance + edge.cost;
-      if (next_distance >= distances[edge.to]) continue;
-      distances[edge.to] = next_distance;
-      previous[edge.to] = current.node;
-      queue.push({next_distance, edge.to});
-    }
-  }
-
-  if (reached == kInvalidRoomDistanceIndex) return {};
-  std::vector<std::uint32_t> path;
-  for (std::uint32_t node = reached; node != kInvalidRoomDistanceIndex; node = previous[node]) path.push_back(node);
-  std::reverse(path.begin(), path.end());
-  return {true, distances[reached], std::move(path)};
+GlobalPath shortestGlobalPath(const RoomDistanceAdjacency& adjacency, std::span<const std::uint32_t> starts,
+                              std::span<const std::uint32_t> goals, DijkstraScratch& scratch) {
+  return findShortestPath(adjacency, starts, goals, scratch);
 }
 
 }  // namespace pistoris::rooms

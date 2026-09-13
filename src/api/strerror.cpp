@@ -3,7 +3,7 @@
 
 #include "api/strerror.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
 // NOLINTBEGIN(readability-identifier-naming)
 
@@ -18,8 +18,6 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "null data pointer";
     case ARX_INVALID_HANDLE:
       return "null or invalid handle";
-    case ARX_INVALID_XFORM:
-      return "affine transform is non-positive determinant (reflection or singular)";
     case ARX_INVALID_OPTIONS:
       return "invalid operation options";
     case ARX_INDEX_OUT_OF_RANGE:
@@ -42,6 +40,14 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "native compression input exceeds the format limit";
     case ARX_DECOMPRESSION_LIMIT_EXCEEDED:
       return "native decompressed data exceeds the safety limit";
+    case ARX_AUDIO_BAD_DATA:
+      return "encoded audio data is invalid";
+    case ARX_AUDIO_UNSUPPORTED_CHANNELS:
+      return "audio channel count is unsupported";
+    case ARX_AUDIO_TOO_LARGE:
+      return "audio data exceeds the safety limit";
+    case ARX_IMAGE_BAD_DATA:
+      return "encoded image data is invalid";
 
     // FTL
     case ARX_FTL_BAD_VERSION:
@@ -80,14 +86,21 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "FTL: invalid selection index count";
     case ARX_FTL_BAD_SEL_IDX:
       return "FTL: selection vertex index out of range";
-    case ARX_FTL_ORPHAN_BONE:
-      return "FTL: non-root bone has no parent (origin vertex not claimed by any earlier group)";
-    case ARX_FTL_MULTIPLE_ROOTS:
-      return "FTL: skeleton has more than one root joint";
-
+    case ARX_FTL_BAD_SOURCE_PATH:
+      return "FTL: source path is not null-terminated";
+    case ARX_FTL_BAD_TEXTURE_PATH:
+      return "FTL: texture path is not null-terminated";
+    case ARX_FTL_BAD_GROUP_NAME:
+      return "FTL: group name is not null-terminated";
+    case ARX_FTL_BAD_ACTION_NAME:
+      return "FTL: action name is not null-terminated";
+    case ARX_FTL_BAD_SELECTION_NAME:
+      return "FTL: selection name is not null-terminated";
     // TEA
     case ARX_TEA_BAD_VERSION:
       return "TEA: unsupported version";
+    case ARX_TEA_BAD_NAME:
+      return "TEA: animation name is not null-terminated";
     case ARX_TEA_BAD_FRAMES_N:
       return "TEA: invalid frame count";
     case ARX_TEA_BAD_GROUPS_N:
@@ -98,8 +111,14 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "TEA: unknown frame event flag";
     case ARX_TEA_BAD_SAMPLE_SIZE:
       return "TEA: negative sample size";
+    case ARX_TEA_BAD_SAMPLE_PATH:
+      return "TEA: sample path is not null-terminated";
     case ARX_TEA_NON_MONOTONIC_FRAMES:
       return "TEA: keyframe num_frame values are not strictly increasing";
+    case ARX_TEA_BAD_ROOT_TRANSFORM:
+      return "TEA: root transform is not finite";
+    case ARX_TEA_BAD_GROUP_TRANSFORM:
+      return "TEA: group transform is not finite";
 
     // FTS
     case ARX_FTS_BAD_VERSION:
@@ -166,6 +185,8 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "FTS: invalid room distance count";
     case ARX_FTS_BAD_ROOM_DISTANCE:
       return "FTS: invalid room distance";
+    case ARX_FTS_BAD_SCENE_OFFSET:
+      return "FTS: scene offset is not finite";
 
     // LLF
     case ARX_LLF_BAD_LIGHT_COUNT:
@@ -253,7 +274,33 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
     case ARX_DLF_BAD_PATH_FIRST_NODE:
       return "DLF: first path node is not the required origin node";
 
+    // AMB
+    case ARX_AMB_BAD_VERSION:
+      return "AMB: unsupported version";
+    case ARX_AMB_BAD_TRACK_COUNT:
+      return "AMB: invalid track count";
+    case ARX_AMB_BAD_MASTER_COUNT:
+      return "AMB: expected exactly one master track";
+    case ARX_AMB_BAD_SAMPLE_PATH:
+      return "AMB: sample path is invalid";
+    case ARX_AMB_BAD_KEY_COUNT:
+      return "AMB: invalid track key count";
+    case ARX_AMB_BAD_KEY_TIMING:
+      return "AMB: key delay range is invalid";
+    case ARX_AMB_BAD_SETTING:
+      return "AMB: key setting is invalid";
+    case ARX_AMB_UNUSED_SETTING_DATA:
+      return "AMB: unused key setting data must be zero";
+
     // Level
+    case ARX_LEVEL_BAD_RESOURCE_PATH:
+      return "Level: resource path is invalid";
+    case ARX_LEVEL_BAD_MINIMAP_IMAGE:
+      return "Level: minimap image is invalid";
+    case ARX_LEVEL_BAD_MINIMAP_BOUNDS:
+      return "Level: minimap world bounds are invalid";
+    case ARX_LEVEL_BAD_LOADING_SCREEN_IMAGE:
+      return "Level: loading screen image is invalid";
     case ARX_LEVEL_NO_GEOMETRY:
       return "Level: no geometry";
     case ARX_LEVEL_TOO_MANY_VERTICES:
@@ -276,7 +323,7 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "Level: face texture index out of range";
     case ARX_LEVEL_BAD_FACE_TYPE:
       return "Level: face has unsupported or unknown type bits";
-    case ARX_LEVEL_BAD_FACE_NORMAL:
+    case ARX_LEVEL_BAD_CORNER_NORMAL:
       return "Level: face corner normal is invalid";
     case ARX_LEVEL_BAD_FACE_UV:
       return "Level: face corner texture coordinate is not finite";
@@ -360,8 +407,10 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "Level: too many anchor connections";
     case ARX_LEVEL_BAD_ANCHOR_CONNECTION_INDEX:
       return "Level: anchor connection index is invalid";
+    case ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION:
+      return "Level: anchor connection is duplicated";
     case ARX_LEVEL_BAD_ANCHOR_CONNECTION_ORDER:
-      return "Level: anchor connections are not sorted and unique";
+      return "Level: anchor connections are not sorted";
     case ARX_LEVEL_TOO_MANY_LIGHTS:
       return "Level: too many lights";
     case ARX_LEVEL_BAD_LIGHT_NAME:
@@ -447,6 +496,170 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
     case ARX_LEVEL_BAD_PATH_FIRST_NODE:
       return "Level: first path node is not the required origin node";
 
+    // Model
+    case ARX_MODEL_BAD_RESOURCE_PATH:
+      return "Model: resource path is invalid";
+    case ARX_MODEL_BAD_INVENTORY_ICON:
+      return "Model: inventory icon is malformed";
+    case ARX_MODEL_NO_GEOMETRY:
+      return "Model: no usable geometry";
+    case ARX_MODEL_TOO_MANY_VERTICES:
+      return "Model: too many vertices";
+    case ARX_MODEL_TOO_MANY_NATIVE_VERTICES:
+      return "Model: native vertex expansion exceeds uint16 max";
+    case ARX_MODEL_TOO_MANY_FACES:
+      return "Model: too many faces";
+    case ARX_MODEL_TOO_MANY_TEXTURES:
+      return "Model: too many textures";
+    case ARX_MODEL_BAD_VERTEX_POSITION:
+      return "Model: vertex position is not finite";
+    case ARX_MODEL_BAD_TEXTURE_PATH:
+      return "Model: texture path is invalid";
+    case ARX_MODEL_BAD_TEXTURE_IMAGE:
+      return "Model: texture image is malformed";
+    case ARX_MODEL_BAD_FACE_TEXTURE:
+      return "Model: face texture index is invalid";
+    case ARX_MODEL_BAD_FACE_VERTEX:
+      return "Model: face vertex index is invalid";
+    case ARX_MODEL_BAD_FACE_TYPE:
+      return "Model: face flags are invalid";
+    case ARX_MODEL_BAD_FACE_TRANSVAL:
+      return "Model: face transparency value is not finite";
+    case ARX_MODEL_BAD_FACE_NORMAL:
+      return "Model: face normal is invalid";
+    case ARX_MODEL_BAD_CORNER_NORMAL:
+      return "Model: face corner normal is invalid";
+    case ARX_MODEL_BAD_FACE_UV:
+      return "Model: face texture coordinates are not finite";
+    case ARX_MODEL_DEGENERATE_FACE:
+      return "Model: face is degenerate";
+    case ARX_MODEL_TOO_MANY_BONES:
+      return "Model: too many bones";
+    case ARX_MODEL_BAD_BONE_NAME:
+      return "Model: bone name is invalid";
+    case ARX_MODEL_DUPLICATE_BONE_NAME:
+      return "Model: bone names are not unique";
+    case ARX_MODEL_BAD_BONE_POSITION:
+      return "Model: bone position is not finite";
+    case ARX_MODEL_BAD_BONE_PARENT:
+      return "Model: bone parent is invalid or not ordered before the child";
+    case ARX_MODEL_BAD_BONE_BLOB_SHADOW_SIZE:
+      return "Model: bone blob shadow size is invalid";
+    case ARX_MODEL_BAD_VERTEX_BONE_COUNT:
+      return "Model: vertex bone count does not match vertex count";
+    case ARX_MODEL_BAD_VERTEX_BONE:
+      return "Model: vertex bone index is invalid";
+    case ARX_MODEL_BAD_ORIGIN_BONE:
+      return "Model: origin bone index is invalid";
+    case ARX_MODEL_BONE_IN_USE:
+      return "Model: bone is still referenced";
+    case ARX_MODEL_REFERENCE_BONE_COUNT_MISMATCH:
+      return "Model: reference bone count does not match";
+    case ARX_MODEL_REFERENCE_BONE_TOPOLOGY_MISMATCH:
+      return "Model: reference bone topology does not match";
+    case ARX_MODEL_TOO_MANY_ACTION_POINTS:
+      return "Model: too many action points";
+    case ARX_MODEL_BAD_ACTION_POINT_NAME:
+      return "Model: action point name is invalid";
+    case ARX_MODEL_BAD_ACTION_POINT_POSITION:
+      return "Model: action point position is not finite";
+    case ARX_MODEL_BAD_ACTION_POINT_BONE:
+      return "Model: action point bone index is invalid";
+    case ARX_MODEL_TOO_MANY_SELECTIONS:
+      return "Model: too many selections";
+    case ARX_MODEL_BAD_SELECTION_NAME:
+      return "Model: selection name is invalid";
+    case ARX_MODEL_DUPLICATE_SELECTION_NAME:
+      return "Model: selection names are not unique";
+    case ARX_MODEL_BAD_SELECTION_LEADING_POSITION:
+      return "Model: selection leading vertex position is not finite";
+    case ARX_MODEL_BAD_SELECTION_LEADING_BONE:
+      return "Model: selection leading vertex bone index is invalid";
+    case ARX_MODEL_BAD_SELECTION_VERTEX:
+      return "Model: selection vertex index is invalid";
+    case ARX_MODEL_BAD_SELECTION_BONE:
+      return "Model: selection bone index is invalid";
+    case ARX_MODEL_BAD_SELECTION_ACTION_POINT:
+      return "Model: selection action point index is invalid";
+
+    // Animation
+    case ARX_ANIMATION_BAD_RESOURCE_PATH:
+      return "Animation: resource path is invalid";
+    case ARX_ANIMATION_BAD_NAME:
+      return "Animation: name is invalid";
+    case ARX_ANIMATION_TOO_MANY_SOUNDS:
+      return "Animation: too many sounds";
+    case ARX_ANIMATION_BAD_SOUND_PATH:
+      return "Animation: sound path is invalid";
+    case ARX_ANIMATION_BAD_SOUND_DATA:
+      return "Animation: encoded sound data is invalid";
+    case ARX_ANIMATION_UNSUPPORTED_SOUND_CHANNELS:
+      return "Animation: sound channel count is unsupported";
+    case ARX_ANIMATION_SOUND_TOO_LARGE:
+      return "Animation: encoded sound is too large";
+    case ARX_ANIMATION_DUPLICATE_SOUND_PATH:
+      return "Animation: sound path is duplicated";
+    case ARX_ANIMATION_SOUND_IN_USE:
+      return "Animation: sound is still referenced by a keyframe";
+    case ARX_ANIMATION_NO_KEYFRAMES:
+      return "Animation: no keyframes";
+    case ARX_ANIMATION_TOO_MANY_KEYFRAMES:
+      return "Animation: too many keyframes";
+    case ARX_ANIMATION_TOO_MANY_GROUPS:
+      return "Animation: too many groups";
+    case ARX_ANIMATION_BAD_FRAME_LENGTH:
+      return "Animation: frame length is invalid";
+    case ARX_ANIMATION_BAD_FRAME:
+      return "Animation: keyframe number is invalid";
+    case ARX_ANIMATION_BAD_ROOT_TRANSFORM:
+      return "Animation: root transform is invalid";
+    case ARX_ANIMATION_BAD_GROUP_TRANSFORM:
+      return "Animation: group transform is invalid";
+    case ARX_ANIMATION_BAD_KEYFRAME_SOUND:
+      return "Animation: keyframe sound index is invalid";
+    case ARX_ANIMATION_BAD_TRANSFORM_COUNT:
+      return "Animation: group transform count is invalid";
+    case ARX_ANIMATION_BAD_GROUP_CLAIM:
+      return "Animation: group claim is outside the timeline group range";
+
+    // Ambiance
+    case ARX_AMBIANCE_NO_TRACKS:
+      return "Ambiance: no tracks";
+    case ARX_AMBIANCE_TOO_MANY_TRACKS:
+      return "Ambiance: too many tracks";
+    case ARX_AMBIANCE_TOO_MANY_SOUNDS:
+      return "Ambiance: too many sounds";
+    case ARX_AMBIANCE_BAD_RESOURCE_PATH:
+      return "Ambiance: resource path is invalid";
+    case ARX_AMBIANCE_BAD_MASTER_TRACK:
+      return "Ambiance: master track is invalid";
+    case ARX_AMBIANCE_BAD_SOUND_PATH:
+      return "Ambiance: sound path is invalid";
+    case ARX_AMBIANCE_BAD_SOUND_DATA:
+      return "Ambiance: encoded sound data is invalid";
+    case ARX_AMBIANCE_UNSUPPORTED_SOUND_CHANNELS:
+      return "Ambiance: sound channel count is unsupported";
+    case ARX_AMBIANCE_SOUND_TOO_LARGE:
+      return "Ambiance: decoded sound data is too large";
+    case ARX_AMBIANCE_DUPLICATE_SOUND_PATH:
+      return "Ambiance: sound path is not unique";
+    case ARX_AMBIANCE_BAD_TRACK_SOUND:
+      return "Ambiance: track sound index is invalid";
+    case ARX_AMBIANCE_SOUND_IN_USE:
+      return "Ambiance: sound is referenced by a track";
+    case ARX_AMBIANCE_BAD_KEY_COUNT:
+      return "Ambiance: track key count is invalid";
+    case ARX_AMBIANCE_BAD_PLAY_COUNT:
+      return "Ambiance: key play count is invalid";
+    case ARX_AMBIANCE_BAD_KEY_TIMING:
+      return "Ambiance: key delay range is invalid";
+    case ARX_AMBIANCE_BAD_AUTOMATION:
+      return "Ambiance: key automation is invalid";
+    case ARX_AMBIANCE_SOUND_DATA_REQUIRED:
+      return "Ambiance: encoded sound data is required";
+    case ARX_AMBIANCE_TRACK_CANNOT_FIT_MASTER:
+      return "Ambiance: track cannot fit within the master duration";
+
     // OBJ
     case ARX_OBJ_BAD_FORMAT:
       return "OBJ: malformed syntax";
@@ -454,18 +667,30 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "OBJ: vertex index out of range";
     case ARX_OBJ_TOO_MANY_VERTICES:
       return "OBJ: too many vertices";
-    case ARX_OBJ_TOO_MANY_NORMALS:
-      return "OBJ: too many normals";
-    case ARX_OBJ_TOO_MANY_TEXCOORDS:
-      return "OBJ: too many texture coordinates";
     case ARX_OBJ_TOO_MANY_TEXTURES:
       return "OBJ: too many textures";
-    case ARX_OBJ_TOO_MANY_MATERIALS:
-      return "OBJ: too many materials";
     case ARX_OBJ_TOO_MANY_FACES:
       return "OBJ: too many faces";
     case ARX_OBJ_NO_GEOMETRY:
       return "OBJ: no geometry found";
+    case ARX_OBJ_BAD_POSITION_INDEX:
+      return "OBJ: position index out of range";
+    case ARX_OBJ_BAD_TEXCOORD_INDEX:
+      return "OBJ: texture-coordinate index out of range";
+    case ARX_OBJ_BAD_NORMAL_INDEX:
+      return "OBJ: normal index out of range";
+    case ARX_OBJ_BAD_FACE:
+      return "OBJ: invalid face";
+    case ARX_OBJ_BAD_MTL:
+      return "OBJ: invalid material library";
+    case ARX_OBJ_BAD_ACTION_POINT:
+      return "OBJ: invalid action point";
+    case ARX_OBJ_TOO_MANY_ACTION_POINTS:
+      return "OBJ: too many action points";
+    case ARX_OBJ_BAD_MATERIAL_LIBRARY_NAME:
+      return "OBJ: invalid material-library name";
+    case ARX_OBJ_BAD_MATERIAL_NAME:
+      return "OBJ: invalid material name";
 
     // GLB
     case ARX_GLB_BAD_FORMAT:
@@ -478,12 +703,20 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "GLB: no usable Level geometry";
     case ARX_GLB_BAD_LEVEL_GEOMETRY:
       return "GLB: invalid Level geometry convention";
+    case ARX_GLB_BAD_LEVEL_POSITION_ATTRIBUTE:
+      return "GLB: invalid Level POSITION attribute";
+    case ARX_GLB_BAD_LEVEL_INDEX_ACCESSOR:
+      return "GLB: invalid Level primitive index accessor";
+    case ARX_GLB_BAD_LEVEL_NORMAL_ATTRIBUTE:
+      return "GLB: invalid Level NORMAL attribute";
+    case ARX_GLB_BAD_LEVEL_TEXCOORD_ATTRIBUTE:
+      return "GLB: missing or invalid Level TEXCOORD attribute";
+    case ARX_GLB_BAD_LEVEL_COLOR_ATTRIBUTE:
+      return "GLB: invalid Level COLOR attribute";
     case ARX_GLB_BAD_LEVEL_MATERIAL:
       return "GLB: invalid Level material convention";
     case ARX_GLB_BAD_LEVEL_MATERIAL_RESERVED_STEM:
       return "GLB: real texture uses a reserved Level material stem";
-    case ARX_GLB_BAD_LEVEL_MATERIAL_STEM_COLLISION:
-      return "GLB: Level material stem resolves to conflicting texture paths";
     case ARX_GLB_BAD_LEVEL_HIERARCHY:
       return "GLB: invalid Level node hierarchy";
     case ARX_GLB_BAD_LEVEL_ROOM:
@@ -506,16 +739,56 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "GLB: invalid Level path convention";
     case ARX_GLB_BAD_LEVEL_LIGHT:
       return "GLB: invalid Level light convention";
-    case ARX_GLB_MODEL_TOO_MANY_VERTICES:
-      return "GLB: expanded model primitive vertex count exceeds uint16 max";
+    case ARX_GLB_NO_MODEL_GEOMETRY:
+      return "GLB: no Model geometry";
+    case ARX_GLB_BAD_MODEL_GEOMETRY:
+      return "GLB: invalid Model geometry";
+    case ARX_GLB_BAD_MODEL_POSITION_ATTRIBUTE:
+      return "GLB: invalid Model POSITION attribute";
+    case ARX_GLB_BAD_MODEL_INDEX_ACCESSOR:
+      return "GLB: invalid Model primitive index accessor";
+    case ARX_GLB_BAD_MODEL_NORMAL_ATTRIBUTE:
+      return "GLB: invalid Model NORMAL attribute";
+    case ARX_GLB_BAD_MODEL_TEXCOORD_ATTRIBUTE:
+      return "GLB: missing or invalid Model TEXCOORD attribute";
+    case ARX_GLB_BAD_MODEL_MATERIAL:
+      return "GLB: invalid Model material";
+    case ARX_GLB_BAD_MODEL_HIERARCHY:
+      return "GLB: invalid Model node hierarchy";
+    case ARX_GLB_BAD_MODEL_SKELETON:
+      return "GLB: invalid Model skeleton convention";
+    case ARX_GLB_BAD_MODEL_SKINNING:
+      return "GLB: invalid Model skinning data";
+    case ARX_GLB_BAD_MODEL_BONE_HELPER:
+      return "GLB: invalid Model bone helper convention";
+    case ARX_GLB_BAD_MODEL_ACTION_POINT:
+      return "GLB: invalid Model action point convention";
+    case ARX_GLB_BAD_MODEL_SELECTION:
+      return "GLB: invalid Model selection convention";
     case ARX_GLB_MODEL_NON_UNIFORM_SCALE:
-      return "GLB: non-uniform scale or shear in mesh node chain or inverse bind matrix";
-    case ARX_GLB_MODEL_MULTIPLE_SKINS:
-      return "GLB: skins do not merge into a single connected armature";
-    case ARX_GLB_ANIMATION_GROUP_MISMATCH:
-      return "GLB: animation group count does not match model group count";
-    case ARX_GLB_ANIMATION_NO_MODEL_GROUPS:
-      return "GLB: animations supplied but the model has no bone groups";
+      return "GLB: unsupported Model reflection, non-uniform scale, or shear";
+    case ARX_GLB_BAD_ANIMATION_NAME:
+      return "GLB: animation name is missing or invalid";
+    case ARX_GLB_BAD_ANIMATION_HELPER:
+      return "GLB: animation helper is invalid";
+    case ARX_GLB_BAD_ANIMATION_SAMPLER:
+      return "GLB: animation sampler is invalid";
+    case ARX_GLB_BAD_ANIMATION_CHANNEL:
+      return "GLB: animation channel is invalid";
+    case ARX_GLB_BAD_ANIMATION_BINDING:
+      return "GLB: animation cannot bind to the Model skeleton";
+    case ARX_GLB_NO_AMBIANCE:
+      return "GLB: no Ambiance root";
+    case ARX_GLB_AMBIGUOUS_AMBIANCE:
+      return "GLB: multiple Ambiance roots";
+    case ARX_GLB_BAD_AMBIANCE_ROOT:
+      return "GLB: invalid Ambiance root convention";
+    case ARX_GLB_BAD_AMBIANCE_TRACK:
+      return "GLB: invalid Ambiance track convention";
+    case ARX_GLB_BAD_AMBIANCE_KEY:
+      return "GLB: invalid Ambiance key convention";
+    case ARX_GLB_BAD_AMBIANCE_AUTOMATION:
+      return "GLB: invalid Ambiance automation convention";
 
     // JSON
     case ARX_JSON_BAD_FORMAT:
@@ -524,6 +797,8 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "JSON: missing or wrong-type field";
     case ARX_JSON_LIMIT_EXCEEDED:
       return "JSON: target format limit exceeded";
+    case ARX_JSON_UNREPRESENTABLE_VALUE:
+      return "JSON: value cannot be represented";
     default:
       return "unknown error code";
   }

@@ -77,7 +77,7 @@ bool utf8ToWide(std::string_view utf8, std::wstring& out) {
   if (utf8.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
 
   const int input_size = static_cast<int>(utf8.size());
-  // Windows APIs consume explicit lengths; null termination is not required
+  // Explicit Windows API length; no terminator required
   // NOLINTBEGIN(bugprone-suspicious-stringview-data-usage)
   const int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), input_size, nullptr, 0);
   if (size <= 0) return false;
@@ -255,7 +255,7 @@ bool wideToUtf8(std::wstring_view wide, std::string& out) {
   if (wide.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) return false;
 
   const int input_size = static_cast<int>(wide.size());
-  // Windows APIs consume explicit lengths; null termination is not required
+  // Explicit Windows API length; no terminator required
   // NOLINTBEGIN(bugprone-suspicious-stringview-data-usage)
   const int size =
       WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), input_size, nullptr, 0, nullptr, nullptr);

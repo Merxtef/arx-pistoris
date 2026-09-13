@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
 #include "cgltf/cgltf.h"
 #include "utils/math/mat4.h"

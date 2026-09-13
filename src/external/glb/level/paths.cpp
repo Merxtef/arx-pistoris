@@ -3,21 +3,22 @@
 
 #include "paths.h"
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "coordinates.h"
-#include "external/glb/utils/level/tokens.h"
 #include "external/glb/utils/node.h"
+#include "external/glb/utils/tokens.h"
+#include "external/glb/utils/transform.h"
 #include "level/data.h"
 #include "modules/scene.h"
 #include "objects.h"
-#include "utils/math/mat3.h"
+#include "utils/log.h"
 #include "utils/math/mat4.h"
 #include "utils/name_tokens.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -29,9 +30,9 @@
 #include <vector>
 
 namespace pistoris::glb_level {
-namespace {
 
-constexpr float kTransformTolerance = 1.0e-4f;
+using glb::parseUnsignedToken;
+namespace {
 
 struct ParsedPathNode {
   std::uint32_t ordinal = 0;
@@ -52,7 +53,6 @@ bool parsePathName(std::string_view name, std::string& out) {
 std::optional<PathNodeType> pathNodeType(std::string_view token) {
   if (token == "STANDARD") return PathNodeType::kStandard;
   if (token == "BEZIER") return PathNodeType::kBezier;
-  if (token == "CONTROL") return PathNodeType::kControlPoint;
   return std::nullopt;
 }
 
@@ -62,8 +62,6 @@ std::string_view pathNodeType(PathNodeType type) {
       return "STANDARD";
     case PathNodeType::kBezier:
       return "BEZIER";
-    case PathNodeType::kControlPoint:
-      return "CONTROL";
   }
   return "STANDARD";
 }
@@ -71,7 +69,7 @@ std::string_view pathNodeType(PathNodeType type) {
 bool parsePathNodeName(std::string_view name, ParsedPathNode& out) {
   std::vector<std::string_view> tokens;
   splitDoubleUnderscore(name, tokens);
-  if (tokens.size() < 3 || tokens.size() > 4 || (tokens.size() == 4 && tokens.back().empty())) return false;
+  if (tokens.size() != 4 || tokens.back().empty()) return false;
 
   auto ordinal = parseUnsignedToken(tokens[0]);
   if (!ordinal) return false;
@@ -90,36 +88,11 @@ bool parsePathNodeName(std::string_view name, ParsedPathNode& out) {
   return true;
 }
 
-bool usableTransform(const math::Mat4& transform) {
-  ArxVector3 columns[3] = {
-      {transform(0, 0), transform(1, 0), transform(2, 0)},
-      {transform(0, 1), transform(1, 1), transform(2, 1)},
-      {transform(0, 2), transform(1, 2), transform(2, 2)},
-  };
-  float scale[3] = {math::lengthf(columns[0]), math::lengthf(columns[1]), math::lengthf(columns[2])};
-  for (float value : scale)
-    if (!std::isfinite(value) || value <= 0.0f) return false;
-  if (std::abs(math::dotf(columns[0], columns[1])) > kTransformTolerance * scale[0] * scale[1] ||
-      std::abs(math::dotf(columns[0], columns[2])) > kTransformTolerance * scale[0] * scale[2] ||
-      std::abs(math::dotf(columns[1], columns[2])) > kTransformTolerance * scale[1] * scale[2])
-    return false;
-
-  ArxMat3 rotation;
-  for (int row = 0; row < 3; ++row)
-    for (int column = 0; column < 3; ++column) rotation(row, column) = transform(row, column) / scale[column];
-  if (!std::isfinite(math::determinant(rotation)) || math::determinant(rotation) <= 0.0f) return false;
-
-  ArxVector3 position = math::translation(transform);
-  return std::isfinite(position.x) && std::isfinite(position.y) && std::isfinite(position.z);
-}
-
 std::string pathNodeName(const PathNode& node, std::string_view helper_label, std::size_t ordinal) {
   std::string ordinal_text = std::format("{:03}", ordinal);
   std::string time = std::format("TIME_{}", node.time_ms);
   return joinDoubleUnderscore({ordinal_text, pathNodeType(node.type), time, helper_label});
 }
-
-ArxVector3 subtract(const ArxVector3& a, const ArxVector3& b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
 
 }  // namespace
 
@@ -149,8 +122,7 @@ void exportPaths(const LevelModules& level, const ArxAabb& referenced_bounds, gl
 }
 
 ArxReturnCode importPaths(const cgltf_data& data, const std::vector<math::Mat4>& world,
-                          std::span<const std::size_t> roots, const ImportUnits& units, LevelModules& level,
-                          std::vector<std::string>& warnings) {
+                          std::span<const std::size_t> roots, const ImportUnits& units, LevelModules& level) {
   struct PendingPath {
     std::size_t node_index = 0;
     Path path;
@@ -165,7 +137,8 @@ ArxReturnCode importPaths(const cgltf_data& data, const std::vector<math::Mat4>&
 
     std::string path_name;
     if (!parsePathName(name, path_name)) return ARX_GLB_BAD_LEVEL_PATH;
-    if (!usableTransform(world[node_index])) return ARX_GLB_BAD_LEVEL_PATH;
+    glb::DecomposedTransform decomposed;
+    if (!glb::decomposeTransform(world[node_index], decomposed)) return ARX_GLB_BAD_LEVEL_PATH;
 
     std::vector<ParsedPathNode> nodes;
     std::vector<std::uint32_t> node_ordinals;
@@ -182,7 +155,7 @@ ArxReturnCode importPaths(const cgltf_data& data, const std::vector<math::Mat4>&
       node_ordinals.push_back(parsed_node.ordinal);
       parsed_node.node_index = static_cast<std::size_t>(child_index);
       parsed_node.position = math::translation(world[parsed_node.node_index]);
-      if (!usableTransform(world[parsed_node.node_index])) return ARX_GLB_BAD_LEVEL_PATH;
+      if (!glb::decomposeTransform(world[parsed_node.node_index], decomposed)) return ARX_GLB_BAD_LEVEL_PATH;
       nodes.push_back(parsed_node);
     }
     if (nodes.empty()) return ARX_GLB_BAD_LEVEL_PATH;
@@ -198,7 +171,7 @@ ArxReturnCode importPaths(const cgltf_data& data, const std::vector<math::Mat4>&
     pending.path.position = *position;
     pending.path.nodes.reserve(nodes.size());
     for (ParsedPathNode& node : nodes) {
-      const std::optional<ArxVector3> relative = toArxVector(subtract(node.position, nodes.front().position), units);
+      const std::optional<ArxVector3> relative = toArxVector(node.position - nodes.front().position, units);
       if (!relative) return ARX_GLB_BAD_FORMAT;
       pending.path.nodes.push_back({*relative, node.type, node.time_ms});
     }
@@ -212,8 +185,8 @@ ArxReturnCode importPaths(const cgltf_data& data, const std::vector<math::Mat4>&
   });
   level.scene.paths.reserve(paths.size());
   for (PendingPath& pending : paths) level.scene.paths.push_back(std::move(pending.path));
-  std::size_t renamed = scene::makePathNamesUnique(level.scene.paths);
-  if (renamed != 0) warnings.push_back(std::format("GLB -> Level repairs: {} duplicate path name(s) renamed", renamed));
+  const std::size_t repaired = scene::repairPathNames(level.scene.paths);
+  if (repaired != 0) log(ARX_LOG_WARN, "GLB -> Level repairs: {} path name(s) repaired", repaired);
   return ARX_OK;
 }
 

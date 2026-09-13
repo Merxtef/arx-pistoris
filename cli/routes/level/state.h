@@ -3,9 +3,14 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris.hpp"
+#include "arx_pistoris/level.hpp"
+#include "arx_pistoris/native/dlf.hpp"
+#include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/texture.hpp"
 
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -21,7 +26,6 @@ struct NativeLevelFiles {
   std::optional<pistoris::Fts> fts;
   std::optional<pistoris::Llf> llf;
   std::optional<pistoris::Dlf> dlf;
-  std::vector<pistoris::NativeTextureFile> texture_files;
 };
 
 struct IntermediateLevel {
@@ -32,6 +36,7 @@ struct IntermediateLevel {
   IntermediateLevel& operator=(IntermediateLevel&&) = delete;
 
   pistoris::Level level;
+  std::vector<std::string> texture_source_paths;
   pistoris::ArxVector3 source_fts_offset = {};
 };
 

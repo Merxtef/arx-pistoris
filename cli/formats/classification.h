@@ -6,11 +6,14 @@
 #include "arx_pistoris/paths/types.h"
 
 #include "formats/format.h"
+#include "resources/layout.h"
 #include "resources/selector.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cli {
@@ -25,6 +28,7 @@ enum class PayloadKind : std::uint8_t {
   kFts,
   kLlf,
   kDlf,
+  kAmb,
   kObj,
 };
 
@@ -40,8 +44,9 @@ struct ClassifiedPath {
   FileFacts facts{};
   std::size_t positional_index = 0;
   ArxResourceKind resource_kind = ARX_RESOURCE_KIND_NONE;
+  ResourceLayout layout = ResourceLayout::kLoose;
 };
 
-FileFacts classifyInput(const std::vector<std::uint8_t>& buffer, const char* path);
+FileFacts classifyInput(std::span<const std::uint8_t> buffer, std::string_view path);
 
 }  // namespace cli

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include "console/diagnostics.h"
 #include "formats/format.h"
@@ -29,6 +29,7 @@ class GlbUnitsModule final : public FormatModifierModule<formatBit(Format::kGlb)
   ModuleHelp help(const RouteDescriptor* route) const noexcept override {
     const char* usage = "--glb-arx-units-per-unit <UNITS>";
     if (route && route->kind == RouteKind::kModel) usage = "--glb-arx-units-per-unit <UNITS=10>";
+    if (route && route->kind == RouteKind::kAmbiance) usage = "--glb-arx-units-per-unit <UNITS=10>";
     if (route && route->kind == RouteKind::kLevel) usage = "--glb-arx-units-per-unit <UNITS=100>";
     return {HelpSection::kOptions, usage, "Override Arx units represented by one GLB unit where supported."};
   }
@@ -57,10 +58,11 @@ class GlbOffsetModule final : public FormatModifierModule<formatBit(Format::kGlb
     return kKeywords;
   }
 
-  ModuleHelp help(const RouteDescriptor*) const noexcept override {
+  ModuleHelp help(const RouteDescriptor* route) const noexcept override {
+    if (route && route->kind != RouteKind::kLevel) return {};
     return {HelpSection::kOptions,
             "--glb-offset <X=0> <Y=0> <Z=0>",
-            "Override the Arx-space origin used for GLB conversion where supported."};
+            "Set the Arx-space origin used for Level GLB conversion."};
   }
 
   ModuleParseResult parse(ModuleParseContext& ctx) const override {

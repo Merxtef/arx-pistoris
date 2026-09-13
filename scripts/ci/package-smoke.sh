@@ -27,6 +27,7 @@ for name in \
   README.md \
   cgltf-LICENSE \
   stb-LICENSE \
+  dr_libs-LICENSE \
   blast-LICENSE \
   pklib-LICENSE \
   nlohmann-json-LICENSE \

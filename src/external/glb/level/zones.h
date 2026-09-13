@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "external/glb/container.h"
 #include "external/glb/writer.h"
@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -43,8 +42,8 @@ ArxReturnCode exportZones(const LevelModules& level, const ArxAabb& referenced_b
                           const Level::GlbExportOptions& options, glb::Builder& builder, Palette& palette);
 
 ArxReturnCode importZones(const glb::Asset& asset, const std::vector<math::Mat4>& world,
-                          std::span<const std::size_t> roots, const ImportUnits& units, std::vector<PendingZone>& zones,
-                          std::vector<std::string>& warnings);
+                          std::span<const std::size_t> roots, const ImportUnits& units,
+                          std::vector<PendingZone>& zones);
 
 std::vector<Zone> finalizeImportedZones(std::vector<PendingZone> pending, const ArxAabb& referenced_bounds);
 

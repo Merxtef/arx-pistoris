@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -14,38 +15,132 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_GLB = ROOT / "data" / "fixtures" / "model" / "glb" / "Adventurer.glb"
-MODEL_FTL = ROOT / "data" / "fixtures" / "model" / "native" / "Adventurer.ftl"
-ANIMATION_TEA = ROOT / "data" / "fixtures" / "animation" / "native" / "Adventurer_Idle.tea"
+FIXTURE_ROOT = ROOT / "data" / "fixtures"
+with (FIXTURE_ROOT / "catalog.json").open(encoding="utf-8") as fixture_catalog_stream:
+    FIXTURE_CATALOG = json.load(fixture_catalog_stream)
+
+
+def fixture_path(entry: dict[str, object], field: str) -> Path:
+    value = entry[field]
+    if isinstance(value, dict):
+        value = value["path"]
+    if not isinstance(value, str):
+        raise TypeError(f"Fixture field {field!r} must resolve to a path string")
+    return FIXTURE_ROOT / value
+
+
+def glb_document(path: Path) -> dict[str, object]:
+    data = path.read_bytes()
+    if len(data) < 20 or data[:4] != b"glTF":
+        raise ValueError(f"Not a GLB file: {path}")
+    chunk_length, chunk_type = struct.unpack_from("<II", data, 12)
+    if chunk_type != 0x4E4F534A or 20 + chunk_length > len(data):
+        raise ValueError(f"GLB has no valid JSON chunk: {path}")
+    document = json.loads(data[20 : 20 + chunk_length].decode("utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"GLB JSON chunk is not an object: {path}")
+    return document
+
+
+def glb_image_paths(path: Path) -> tuple[str, ...]:
+    result = []
+    for image in glb_document(path).get("images", ()):
+        if not isinstance(image, dict):
+            continue
+        value = image.get("uri", image.get("name"))
+        if isinstance(value, str):
+            result.append(value)
+    return tuple(result)
+
+
+def catalog_path(category: str, field: str) -> Path | None:
+    fixtures = FIXTURE_CATALOG[category]
+    return fixture_path(fixtures[0], field) if fixtures else None
+
+
+def catalog_model_animation_paths() -> tuple[Path | None, Path | None, Path | None]:
+    animations = FIXTURE_CATALOG["animations"]
+    if not animations:
+        return None, None, None
+
+    animation = animations[0]
+    model = next(
+        (candidate for candidate in FIXTURE_CATALOG["models"] if candidate["name"] == animation["model"]),
+        None,
+    )
+    if model is None:
+        raise ValueError(f"Animation fixture {animation['name']!r} references an unknown Model fixture")
+    return (
+        fixture_path(model, "glb"),
+        fixture_path(model, "ftl"),
+        fixture_path(animation, "tea"),
+    )
+
+
+MODEL_GLB, MODEL_FTL, ANIMATION_TEA = catalog_model_animation_paths()
+LEVEL_GLB = catalog_path("levels", "glb")
+assert LEVEL_GLB is not None
 
 
 def discover_arx_files(extension: str, root: Path = ROOT) -> tuple[Path, ...]:
-    directory = root / "data" / "arx" / extension.removeprefix(".")
-    files = (path for path in directory.glob(f"*{extension}") if path.is_file())
-    return tuple(sorted(files, key=lambda path: path.name))
+    mount = root / "data" / "arx"
+    normalized_extension = extension.lower()
+    files = (
+        path
+        for path in mount.rglob("*")
+        if path.is_file() and path.suffix.lower() == normalized_extension
+    )
+    return tuple(sorted(files, key=lambda path: path.as_posix().lower()))
 
 
 def discover_level_triplets(root: Path = ROOT) -> tuple[tuple[Path, Path, Path], ...]:
-    by_stem = []
-    for extension in (".fts", ".llf", ".dlf"):
-        by_stem.append({path.stem: path for path in discover_arx_files(extension, root)})
+    mount = root / "data" / "arx"
+    triplets = []
+    for dlf in discover_arx_files(".dlf", root):
+        relative = dlf.relative_to(mount)
+        llf = dlf.with_suffix(".llf")
+        fts = mount / "game" / relative.parent / "fast.fts"
+        if llf.is_file() and fts.is_file():
+            triplets.append((fts, llf, dlf))
+    return tuple(triplets)
 
-    complete_stems = sorted(set(by_stem[0]) & set(by_stem[1]) & set(by_stem[2]))
-    return tuple((by_stem[0][stem], by_stem[1][stem], by_stem[2][stem]) for stem in complete_stems)
 
-
-LEVEL_FTS_FILES = discover_arx_files(".fts")
-LEVEL_TRIPLETS = discover_level_triplets()
+CATALOG_LEVEL_TRIPLETS = tuple(
+    (
+        FIXTURE_ROOT / fixture["fts"],
+        FIXTURE_ROOT / fixture["llf"],
+        FIXTURE_ROOT / fixture["dlf"],
+    )
+    for fixture in FIXTURE_CATALOG["levels"]
+)
+LEVEL_FTS_FILES = tuple(triplet[0] for triplet in CATALOG_LEVEL_TRIPLETS) + discover_arx_files(".fts")
+LEVEL_TRIPLETS = CATALOG_LEVEL_TRIPLETS + discover_level_triplets()
 LEVEL_FTS_AVAILABLE = bool(LEVEL_FTS_FILES)
 LEVEL_BUNDLE_AVAILABLE = bool(LEVEL_TRIPLETS)
-LEVEL_FTS = LEVEL_FTS_FILES[0] if LEVEL_FTS_AVAILABLE else MODEL_GLB
-LEVEL_BUNDLE_FTS, LEVEL_LLF, LEVEL_DLF = LEVEL_TRIPLETS[0] if LEVEL_BUNDLE_AVAILABLE else (MODEL_GLB,) * 3
+LEVEL_FTS = LEVEL_FTS_FILES[0] if LEVEL_FTS_AVAILABLE else LEVEL_GLB
+LEVEL_BUNDLE_FTS, LEVEL_LLF, LEVEL_DLF = LEVEL_TRIPLETS[0] if LEVEL_BUNDLE_AVAILABLE else (LEVEL_GLB,) * 3
+if CATALOG_LEVEL_TRIPLETS:
+    LEVEL_BUNDLE_NAME = Path(FIXTURE_CATALOG["levels"][0]["dlf"]).stem
+    LEVEL_BUNDLE_SELECTOR = FIXTURE_CATALOG["levels"][0]["selector"]
+else:
+    LEVEL_BUNDLE_NAME = LEVEL_DLF.stem
+    LEVEL_BUNDLE_SELECTOR = f"level:{LEVEL_BUNDLE_NAME.removeprefix('level')}"
 
 
-def run(cli: Path, *args: str | Path, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
+def run(
+    cli: Path,
+    *args: str | Path,
+    cwd: Path = ROOT,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    process_env = None
+    if env is not None:
+        process_env = os.environ.copy()
+        process_env.update(env)
     return subprocess.run(
         [str(cli), *(str(arg) for arg in args)],
         cwd=cwd,
+        env=process_env,
         text=True,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
@@ -88,17 +183,15 @@ def expect_success_not_contains(cli: Path, absent_text: str, *args: str | Path) 
         raise AssertionError(f"{args}: did not expect {absent_text!r} in output\n{text}")
 
 
-def expect_success_order(cli: Path, expected_texts: tuple[str, ...], *args: str | Path) -> None:
-    proc = run(cli, *args)
-    text = proc.stdout + proc.stderr
-    if proc.returncode != 0:
-        raise AssertionError(f"{args}: expected success, got {proc.returncode}\n{text}")
-    offset = -1
-    for expected_text in expected_texts:
-        found = text.find(expected_text, offset + 1)
-        if found == -1:
-            raise AssertionError(f"{args}: expected {expected_text!r} after offset {offset}\n{text}")
-        offset = found
+def help_output(cli: Path, *topics: str) -> str:
+    proc = run(cli, "--help", *topics)
+    if proc.returncode != 0 or not proc.stdout or proc.stderr:
+        raise AssertionError(
+            f"help {topics}: expected successful stdout-only output\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
+    if "\x1b" in proc.stdout:
+        raise AssertionError(f"help {topics}: redirected output must not contain ANSI escapes\n{proc.stdout}")
+    return proc.stdout
 
 
 def make_level_fts_json(level: int) -> dict[str, object]:
@@ -140,7 +233,93 @@ def make_level_fts_json(level: int) -> dict[str, object]:
     }
 
 
+def make_amb_track(sample_path: str, *, master: bool, loop_minus_one: int = 0) -> bytes:
+    setting = lambda value: struct.pack("<ffII", value, value, 0, 0)
+    key = struct.pack("<IIIII", 0, 0, loop_minus_one, 0, 0)
+    key += setting(1.0) + setting(1.0)
+    key += setting(0.0) * 4
+    flags = 1 | (4 if master else 0)
+    return sample_path.encode("utf-8") + b"\0" + struct.pack("<II", flags, 1) + key
+
+
+def make_amb_bytes(sample_path: str = "sfx/ambiance/test.wav") -> bytes:
+    return struct.pack("<III", 0x424D4147, 0x01000001, 1) + make_amb_track(sample_path, master=True)
+
+
+def make_timed_amb_bytes() -> bytes:
+    return (
+        struct.pack("<III", 0x424D4147, 0x01000001, 2)
+        + make_amb_track("master.wav", master=True)
+        + make_amb_track("child.wav", master=False, loop_minus_one=2)
+    )
+
+
+def make_bmp_bytes() -> bytes:
+    return bytes(
+        (
+            66, 77, 58, 0, 0, 0, 0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0,
+            1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 24, 0, 0, 0, 0, 0, 0, 0,
+            4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 255, 0,
+        )
+    )
+
+
+def make_wav_bytes(sample_count: int = 1) -> bytes:
+    sample = b"\x80" * sample_count
+    return (
+        b"RIFF"
+        + struct.pack("<I", 36 + len(sample))
+        + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 8000, 1, 8)
+        + b"data"
+        + struct.pack("<I", len(sample))
+        + sample
+    )
+
+
+def make_animation_json() -> dict[str, object]:
+    return {
+        "$schema": "https://arx-tools.github.io/schemas/tea.schema.json",
+        "header": {"name": "contract", "totalNumberOfFrames": 1},
+        "keyframes": [
+            {
+                "flags": -1,
+                "frame": 0,
+                "groups": [
+                    {
+                        "isKey": True,
+                        "quaternion": {"w": 1, "x": 0, "y": 0, "z": 0},
+                        "translate": {"x": 0, "y": 0, "z": 0},
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def make_empty_animation_json() -> dict[str, object]:
+    return make_zero_group_animation_json("empty_contract")
+
+
+def make_zero_group_animation_json(
+    name: str, first_keyframe: dict[str, object] | None = None
+) -> dict[str, object]:
+    first = {"flags": -1, "frame": 0, "groups": []}
+    if first_keyframe:
+        first.update(first_keyframe)
+    return {
+        "$schema": "https://arx-tools.github.io/schemas/tea.schema.json",
+        "header": {"name": name, "totalNumberOfFrames": 24},
+        "keyframes": [
+            first,
+            {"flags": -1, "frame": 24, "groups": []},
+        ],
+    }
+
+
 def main() -> int:
+    global ANIMATION_TEA, MODEL_FTL, MODEL_GLB
     if len(sys.argv) != 2:
         print("usage: cli_contract_tests.py <arx-pistor executable>", file=sys.stderr)
         return 2
@@ -171,8 +350,219 @@ def main() -> int:
         bad_fts.write_bytes(b"not an FTS file")
         bad_llf.write_bytes(b"not an LLF file")
         bad_dlf.write_bytes(b"not a DLF file")
+        if MODEL_FTL is None:
+            model_obj = tmp / "contract-model.obj"
+            model_obj.write_text(
+                "mtllib contract-model.mtl\n"
+                "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                "usemtl contract\nf 1 2 3\n",
+                encoding="utf-8",
+            )
+            (tmp / "contract-model.mtl").write_text(
+                "newmtl contract\nmap_Kd contract-model.bmp\n", encoding="utf-8"
+            )
+            (tmp / "contract-model.bmp").write_bytes(make_bmp_bytes())
+            MODEL_FTL = tmp / "contract-model.ftl"
+            expect_success(cli, model_obj, MODEL_FTL)
+        if ANIMATION_TEA is None:
+            animation_json = tmp / "contract-animation.tea.json"
+            animation_json.write_text(json.dumps(make_animation_json()), encoding="utf-8")
+            ANIMATION_TEA = tmp / "contract-animation.tea"
+            expect_success(cli, animation_json, ANIMATION_TEA)
+
+        expect_code(
+            cli,
+            1,
+            "[CLI_RESOURCE_NOT_FOUND]",
+            tmp / "missing-input.ftl",
+            tmp / "missing-input.json",
+        )
+        missing_mtl_obj = tmp / "missing-mtl.obj"
+        missing_mtl_obj.write_text("mtllib absent.mtl\n", encoding="utf-8")
+        expect_code(
+            cli,
+            1,
+            "[CLI_RESOURCE_NOT_FOUND]",
+            missing_mtl_obj,
+            tmp / "missing-mtl.ftl",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_RESOURCE_NOT_FOUND]",
+            "--input-icon",
+            tmp / "missing-icon.png",
+            MODEL_FTL,
+            tmp / "missing-icon.glb",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_RESOURCE_NOT_FOUND]",
+            "--ftl-reference",
+            tmp / "missing-reference.ftl",
+            "--snap-bone-origins",
+            MODEL_FTL,
+            tmp / "missing-reference.glb",
+        )
+        dash_input = tmp / "-input.tea"
+        dash_output = tmp / "-output.json"
+        shutil.copyfile(ANIMATION_TEA, dash_input)
+        dash_result = run(cli, "--", dash_input.name, dash_output.name, cwd=tmp)
+        if dash_result.returncode != 0 or not dash_output.is_file():
+            raise AssertionError(
+                "-- must make option-like paths positional\n"
+                + dash_result.stdout
+                + dash_result.stderr
+            )
+        empty_animation_json = tmp / "empty-animation.tea.json"
+        empty_animation_json.write_text(json.dumps(make_empty_animation_json()), encoding="utf-8")
+        empty_animation_tea = tmp / "empty-animation.tea"
+        expect_success(cli, empty_animation_json, empty_animation_tea)
+        if not empty_animation_tea.is_file():
+            raise AssertionError("standalone Animation output must write an empty Animation")
+        active_collision_json = tmp / "active-collision.tea.json"
+        active_collision_json.write_text(
+            json.dumps(
+                make_zero_group_animation_json(
+                    "empty_contract", {"translate": {"x": 1, "y": 0, "z": 0}}
+                )
+            ),
+            encoding="utf-8",
+        )
+        active_collision_tea = tmp / "active-collision.tea"
+        expect_success(cli, active_collision_json, active_collision_tea)
+        zero_group_nonempty_animations: list[tuple[str, Path]] = []
+        for name, keyframe in (
+            ("root_translation", {"translate": {"x": 1, "y": 0, "z": 0}}),
+            ("root_rotation", {"quaternion": {"w": 0, "x": 0, "y": 1, "z": 0}}),
+            ("footstep", {"flags": 9}),
+            ("referenced_sound", {"sample": {"name": "contract.wav"}}),
+        ):
+            source_json = tmp / f"{name}.tea.json"
+            source_json.write_text(json.dumps(make_zero_group_animation_json(name, keyframe)), encoding="utf-8")
+            source_tea = tmp / f"{name}.tea"
+            expect_success(cli, source_json, source_tea)
+            zero_group_nonempty_animations.append((name, source_tea))
+        referenced_sound_animation = dict(zero_group_nonempty_animations)["referenced_sound"]
+        model_glb = tmp / "model.glb"
+        expect_success(cli, MODEL_FTL, model_glb)
+        if MODEL_GLB is None:
+            MODEL_GLB = model_glb
+
+        icon_input_directory = tmp / "icon-input"
+        icon_input_directory.mkdir()
+        icon_input = icon_input_directory / "source.ftl"
+        shutil.copyfile(MODEL_FTL, icon_input)
+        icon = make_bmp_bytes()
+        (icon_input_directory / "source[icon].bmp").write_bytes(icon)
+
+        native_icon_directory = tmp / "icon-native"
+        native_icon_directory.mkdir()
+        native_icon_output = native_icon_directory / "model.ftl"
+        expect_success(cli, "--skip-texture-export", icon_input, native_icon_output)
+        if (native_icon_directory / "model[icon].bmp").read_bytes() != icon:
+            raise AssertionError("direct native Model output must preserve its inventory icon")
+
+        intermediate_icon_directory = tmp / "icon-intermediate"
+        intermediate_icon_directory.mkdir()
+        intermediate_icon_output = intermediate_icon_directory / "model.glb"
+        expect_success(cli, icon_input, intermediate_icon_output)
+        intermediate_icon = (intermediate_icon_directory / "model[icon].png").read_bytes()
+        if not intermediate_icon.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise AssertionError("intermediate Model output must render its inventory icon as PNG")
+
+        derived_native_directory = tmp / "icon-derived-native"
+        derived_native_directory.mkdir()
+        derived_native_output = derived_native_directory / "model.ftl"
+        expect_success(cli, "--skip-texture-export", "--icon-slots", "-", "-", icon_input, derived_native_output)
+        derived_native_icon = (derived_native_directory / "model[icon].png").read_bytes()
+        if not derived_native_icon.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise AssertionError("explicit icon operations must route native output through Model rendering")
+
+        centered_icon_output = intermediate_icon_directory / "centered.glb"
+        expect_success(cli, "--icon-slots", "2", "1", "--icon-layout", "c", icon_input, centered_icon_output)
+        centered_icon = (intermediate_icon_directory / "centered[icon].png").read_bytes()
+        if struct.unpack_from(">II", centered_icon, 16) != (64, 32):
+            raise AssertionError("--icon-slots must set the rendered inventory footprint")
+
+        stretched_icon_output = intermediate_icon_directory / "stretched.glb"
+        expect_success(cli, "--icon-slots", "2", "1", "--icon-layout", "stretch", icon_input, stretched_icon_output)
+        stretched_icon = (intermediate_icon_directory / "stretched[icon].png").read_bytes()
+        if struct.unpack_from(">II", stretched_icon, 16) != (64, 32) or stretched_icon == centered_icon:
+            raise AssertionError("--icon-layout stretch must fill the rendered inventory footprint")
+
+        bottom_right_prefix_output = intermediate_icon_directory / "bottom-right-prefix.glb"
+        expect_success(
+            cli,
+            "--icon-slots",
+            "2",
+            "1",
+            "--icon-layout",
+            "bottom-r",
+            icon_input,
+            bottom_right_prefix_output,
+        )
+        bottom_right_full_output = intermediate_icon_directory / "bottom-right-full.glb"
+        expect_success(
+            cli,
+            "--icon-slots",
+            "2",
+            "1",
+            "--icon-layout",
+            "bottom-right",
+            icon_input,
+            bottom_right_full_output,
+        )
+        if (intermediate_icon_directory / "bottom-right-prefix[icon].png").read_bytes() != (
+            intermediate_icon_directory / "bottom-right-full[icon].png"
+        ).read_bytes():
+            raise AssertionError("unambiguous icon-layout prefixes must resolve to the full layout")
+
+        invalid_icon_directory = tmp / "icon-invalid"
+        invalid_icon_directory.mkdir()
+        invalid_icon_input = invalid_icon_directory / "source.ftl"
+        shutil.copyfile(MODEL_FTL, invalid_icon_input)
+        invalid_icon = invalid_icon_directory / "source[icon].png"
+        invalid_icon.write_bytes(b"not an image")
+        invalid_native_output = invalid_icon_directory / "native.ftl"
+        expect_success_contains(
+            cli,
+            "Invalid Model inventory icon was skipped",
+            "--skip-texture-export",
+            invalid_icon_input,
+            invalid_native_output,
+        )
+        if (invalid_icon_directory / "native[icon].png").exists():
+            raise AssertionError("invalid automatically discovered icon must be omitted")
+        expect_success_contains(
+            cli,
+            "Invalid Model inventory icon was skipped",
+            invalid_icon_input,
+            invalid_icon_directory / "automatic.glb",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_MODEL_INPUT_FAILED]",
+            "--input-icon",
+            invalid_icon,
+            invalid_icon_input,
+            invalid_icon_directory / "explicit.glb",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_MODEL_INPUT_FAILED]",
+            "--skip-texture-export",
+            "--input-icon",
+            invalid_icon,
+            invalid_icon_input,
+            invalid_icon_directory / "explicit.ftl",
+        )
+
         glb_as_fts = tmp / "glb-as-fts.fts"
-        glb_as_fts.write_bytes(MODEL_GLB.read_bytes())
+        glb_as_fts.write_bytes(model_glb.read_bytes())
         fts_header = bytearray(280)
         struct.pack_into("<i", fts_header, 256, -1)
         struct.pack_into("<f", fts_header, 260, 0.141)
@@ -191,67 +581,212 @@ def main() -> int:
         out_glb = tmp / "out.glb"
         level_json = tmp / "level1.fts.json"
         level_json.write_text(json.dumps(make_level_fts_json(1)), encoding="utf-8")
+        ambiance_amb = tmp / "ambiance.amb"
+        ambiance_amb.write_bytes(make_amb_bytes())
+        ambiance_collision_input = tmp / "ambiance-collision-source.amb"
+        ambiance_collision_input.write_bytes(make_amb_bytes("ambiance-collision.amb"))
+        ambiance_collision_output = tmp / "ambiance-collision.amb"
+        ambiance_collision_audio = make_wav_bytes()
+        ambiance_collision_output.write_bytes(ambiance_collision_audio)
 
-        help_result = run(cli, "--help")
-        if help_result.returncode != 0 or not help_result.stdout or help_result.stderr:
-            raise AssertionError(
-                "explicit help must be successful stdout-only output\n"
-                f"stdout={help_result.stdout}\nstderr={help_result.stderr}"
-            )
-        expect_success_order(
-            cli,
-            ("CLI options:", "Animation options:", "Model options:", "Level options:"),
-            "--help",
-        )
-        expect_success_contains(cli, "--generate-room-distances", "--help")
-        expect_success_contains(cli, "--weld-vertices", "--help")
-        expect_success_contains(cli, "    --weld-radius", "--help")
-        expect_success_contains(cli, "--weld-radius <UNITS=0.0001>", "--help")
-        expect_success_contains(cli, "--weld-metric <MODE=euclidean>", "--help")
-        expect_success_contains(cli, "--weld-degenerate-faces <MODE=preserve>", "--help")
-        expect_success_contains(cli, "    --nav-from-floor", "--help")
-        expect_success_contains(cli, "    --nav-radius", "--help")
-        expect_success_contains(cli, "--nav-radius <UNITS=50>", "--help")
-        expect_success_contains(cli, "--prune-nav-surface-islands", "--help")
-        expect_success_contains(cli, "    --nav-prune-min-area", "--help")
-        expect_success_contains(cli, "    --rdist-spacing", "--help")
-        expect_success_contains(cli, "    --rdist-offset", "--help")
-        expect_success_contains(cli, "    --rdist-height", "--help")
-        expect_success_contains(cli, "    --rdist-link-distance", "--help")
-        expect_success_contains(cli, "--connect-anchors", "--help")
-        expect_success_contains(cli, "--prune-anchor-islands", "--help")
-        expect_success_contains(cli, "    --anchor-prune-min-count", "--help")
-        expect_success_contains(cli, "--anchor-spacing <UNITS=2*radius>", "--help")
-        expect_success_contains(cli, "--generate-static-lighting", "--help")
-        expect_success_contains(cli, "    --light-ambient", "--help")
-        expect_success_contains(cli, "--mount <FOLDER>", "--help")
-        expect_success_contains(cli, "level:<N>", "--help")
-        expect_success_contains(cli, "current directory is the only mount", "--help")
-        expect_success_contains(cli, "--no-compression", "--help")
-        expect_success_contains(cli, "--glb-arx-units-per-unit <UNITS=10>", "--help", "model")
-        expect_success_contains(cli, "--glb-arx-units-per-unit <UNITS=100>", "--help", "level")
-        expect_success_contains(cli, "--glb-offset <X=0> <Y=0> <Z=0>", "--help", "model")
-        expect_success_contains(cli, "--glb-offset <X=0> <Y=0> <Z=0>", "--help", "level")
-        expect_success_not_contains(cli, "--glb-arx-units-per-unit", "--help", "animation")
-        expect_success_not_contains(cli, "--output-texture-folder", "--help", "model")
-        expect_success_not_contains(cli, "--overwrite-texture", "--help", "level")
-        expect_success_contains(cli, "--dlf-only", "--help")
-        expect_success_contains(cli, "--no-quad-reconstruction", "--help")
-        expect_success_contains(cli, "--skip-texture-export", "--help")
-        expect_success_contains(cli, "--input-texture-folder", "--help")
-        expect_success_contains(cli, "--output-texture-folder", "--help")
-        expect_success_contains(cli, "--fts-scene-directory", "--help")
-        expect_success_contains(cli, "--pretty", "--help", "level")
+        cli_help = help_output(cli)
+        if help_output(cli, "cli") != cli_help:
+            raise AssertionError("--help and --help cli must select the same page")
+        if not cli_help.startswith("CLI / GENERAL\n"):
+            raise AssertionError(f"default help must identify its page\n{cli_help}")
+        for expected in (
+            "arx-pistor --auto-mount level:1 level1.glb",
+            "--mount <FOLDER>",
+            "--auto-mount",
+            "--keep-first-resource",
+            "cli selectors",
+            "cli formats",
+            "level debug",
+        ):
+            if expected not in cli_help:
+                raise AssertionError(f"default help is missing {expected!r}\n{cli_help}")
+        if "Perform conversion and validation without writing output files." not in " ".join(cli_help.split()):
+            raise AssertionError(f"default help must describe dry-run behavior directly\n{cli_help}")
+        for route_option in ("--gen-minimap", "--skip-texture-export", "--skip-sound-export"):
+            if route_option in cli_help:
+                raise AssertionError(f"default help must not dump route option {route_option!r}\n{cli_help}")
+        if str(cli) in cli_help:
+            raise AssertionError(f"help examples must use the stable product name\n{cli_help}")
+
+        selectors_help = help_output(cli, "cli", "selectors")
+        if not selectors_help.startswith("CLI / SELECTORS\n"):
+            raise AssertionError(f"selector help must identify its page\n{selectors_help}")
+        for selector in (
+            "level:<N>",
+            "model:<type>:<name>[:<tweak>]",
+            "anim:<npc|fix_inter>:<name>",
+            "ambiance:<name>",
+            "cinematic:<name>",
+            "Without an explicit --mount, reads begin in the current directory",
+        ):
+            if selector not in selectors_help:
+                raise AssertionError(f"selector help is missing {selector!r}\n{selectors_help}")
+        if "--mount folders are searched from left to right" not in selectors_help:
+            raise AssertionError(f"selector help must explain mount priority directly\n{selectors_help}")
+
+        formats_help = help_output(cli, "cli", "formats")
+        if not formats_help.startswith("CLI / FORMATS\n"):
+            raise AssertionError(f"format help must identify its page\n{formats_help}")
+        for formats in (
+            "Primary inputs    TEA, JSON",
+            "Primary inputs    AMB, JSON, GLB",
+            "Primary inputs    FTL, OBJ, JSON, GLB",
+            "Primary inputs    FTS, DLF, JSON, GLB",
+        ):
+            if formats not in formats_help:
+                raise AssertionError(f"format help is missing {formats!r}\n{formats_help}")
+        if "Companion inputs" not in formats_help or "Additional inputs" in formats_help:
+            raise AssertionError(f"format help must identify companion inputs consistently\n{formats_help}")
+
+        level_help = help_output(cli, "level")
+        model_help = help_output(cli, "model")
+        animation_help = help_output(cli, "animation")
+        ambiance_help = help_output(cli, "ambiance")
+        for page, heading in (
+            (level_help, "LEVEL / GENERAL"),
+            (model_help, "MODEL / GENERAL"),
+            (animation_help, "ANIMATION / GENERAL"),
+            (ambiance_help, "AMBIANCE / GENERAL"),
+        ):
+            if not page.startswith(heading + "\n"):
+                raise AssertionError(f"route help must start with {heading!r}\n{page}")
+
+        for expected in (
+            "Convert native Level bundles, compatible JSON, and editable Level GLB.",
+            "--gen-room-distances",
+            "--gen-nav-surface",
+            "--gen-anchors",
+            "--weld-vertices",
+            "    --weld-radius",
+            "--weld-radius <UNITS=0.0001>",
+            "--weld-metric <MODE=euclidean>",
+            "--weld-degenerate-faces <MODE=preserve>",
+            "    --nav-from-floor",
+            "    --nav-radius",
+            "--nav-radius <UNITS=50>",
+            "--prune-nav-surface-islands",
+            "    --nav-prune-min-area",
+            "    --rdist-spacing",
+            "    --rdist-offset",
+            "    --rdist-height",
+            "    --rdist-link-distance",
+            "--connect-anchors",
+            "--prune-anchor-islands",
+            "    --anchor-prune-min-count",
+            "--anchor-spacing <UNITS=2*radius>",
+            "--gen-static-lighting",
+            "    --light-ambient",
+            "--gen-minimap",
+            "--minimap-border-color",
+            "    --minimap-fg-color",
+            "    --minimap-fg-image",
+            "    --minimap-bg-color",
+            "    --minimap-bg-image",
+            "    --minimap-halo-radius",
+            "    --nav-max-slope",
+            "--glb-arx-units-per-unit <UNITS=100>",
+            "--glb-offset <X=0> <Y=0> <Z=0>",
+            "--dlf-only",
+            "--no-quad-reconstruction",
+            "--dlf-scene-directory",
+            "--pretty",
+        ):
+            if expected not in level_help:
+                raise AssertionError(f"Level help is missing {expected!r}\n{level_help}")
+        for absent in ("--minimap-projection-offset", "--skip-sound-export"):
+            if absent in level_help:
+                raise AssertionError(f"Level help unexpectedly contains {absent!r}\n{level_help}")
+
+        for expected in (
+            "--glb-arx-units-per-unit <UNITS=10>",
+            "--rebase-textures",
+            "--skip-texture-export",
+            "--skip-sound-export",
+            "--input-sound-folder <PATH>",
+            "--rebase-sounds <RESOURCE-DIRECTORY>",
+            "--allow-empty-animation",
+            "--icon-slots",
+            "--icon-layout <LAYOUT=CENTER>",
+        ):
+            if expected not in model_help:
+                raise AssertionError(f"Model help is missing {expected!r}\n{model_help}")
+        if "--glb-offset" in model_help:
+            raise AssertionError(f"Model help must not advertise its ignored GLB offset\n{model_help}")
+        for retired_model_option in (
+            "--overwrite-texture",
+            "--rename-selections",
+            "--autosize-to-reference",
+            "--snap-action-points-to-reference",
+            "--copy-synthetic-selection-affiliations",
+            "--center-icon",
+            "--stretch-icon",
+        ):
+            if retired_model_option in model_help:
+                raise AssertionError(f"Model help contains retired option {retired_model_option!r}\n{model_help}")
+
+        for expected in ("--skip-sound-export", "--input-sound-folder <PATH>", "--rebase-sounds <RESOURCE-DIRECTORY>"):
+            if expected not in animation_help:
+                raise AssertionError(f"Animation help is missing {expected!r}\n{animation_help}")
+        for absent in ("--glb-arx-units-per-unit", "--skip-texture-export"):
+            if absent in animation_help:
+                raise AssertionError(f"Animation help unexpectedly contains {absent!r}\n{animation_help}")
+
+        for expected in (
+            "--glb-arx-units-per-unit <UNITS=10>",
+            "--trim-to-master",
+            "--reference-model <MODEL-PATH>",
+            "--skip-sound-export",
+            "--input-sound-folder <PATH>",
+            "--rebase-sounds <RESOURCE-DIRECTORY>",
+        ):
+            if expected not in ambiance_help:
+                raise AssertionError(f"Ambiance help is missing {expected!r}\n{ambiance_help}")
+        for absent in ("--glb-offset", "--skip-texture-export"):
+            if absent in ambiance_help:
+                raise AssertionError(f"Ambiance help unexpectedly contains {absent!r}\n{ambiance_help}")
+
+        for page, expected in (
+            (model_help, "model:npc:human_base anim:npc:human_normal_walk human_base.glb"),
+            (animation_help, "anim:npc:human_normal_walk human_normal_walk.json"),
+            (ambiance_help, "ambiance:ambient_cave_a ambient_cave_a.glb"),
+        ):
+            if expected not in page:
+                raise AssertionError(f"route help is missing usable stock-resource example {expected!r}\n{page}")
+        if "textures referenced by a loose --reference-model input" not in " ".join(ambiance_help.split()):
+            raise AssertionError(f"Ambiance help must explain reference Model texture lookup\n{ambiance_help}")
+
+        level_debug_help = help_output(cli, "level", "debug")
+        if not level_debug_help.startswith("LEVEL / DEBUG\n"):
+            raise AssertionError(f"Level debug help must identify its page\n{level_debug_help}")
+        for option in ("--debug-cells", "--debug-navigation", "--debug-room-distances"):
+            if option not in level_debug_help:
+                raise AssertionError(f"Level debug help is missing {option!r}\n{level_debug_help}")
+        if "--gen-minimap" in level_debug_help:
+            raise AssertionError(f"Level debug help must not contain normal Level options\n{level_debug_help}")
+
+        if help_output(cli, "lev") != level_help or help_output(cli, "level", "d") != level_debug_help:
+            raise AssertionError("unambiguous help topic prefixes must resolve to the same pages")
+        if help_output(cli, "levle") != cli_help or help_output(cli, "--gen-minimap") != cli_help:
+            raise AssertionError("unknown or option-like primary help words must keep CLI / GENERAL")
+        if help_output(cli, "level", "ambiance") != level_help or help_output(cli, "level", "--gen-minimap") != level_help:
+            raise AssertionError("unknown or option-like refinements must keep the selected general page")
+        expect_code(cli, 1, "[CLI_HELP_TOPIC_AMBIGUOUS]", "--help", "a")
+
         expect_success_contains(cli, "arx-pistor", "--version", "--ignored-after-version")
         expect_code(cli, 1, "[CLI_DUPLICATE_MODULE]", "--pretty", "--pretty")
-        expect_code(cli, 1, "[CLI_AMBIGUOUS_OPTION]", "--overw")
+        expect_code(cli, 1, "[CLI_AMBIGUOUS_OPTION]", "--glb")
         expect_code(cli, 1, "[CLI_UNKNOWN_OPTION]", "--definitely-missing")
         parse_error = run(cli, "--definitely-missing")
         if (
             parse_error.stdout
             or "Usage:" in parse_error.stderr
-            or "Run " not in parse_error.stderr
-            or "--help for usage." not in parse_error.stderr
+            or "Run arx-pistor --help for usage." not in parse_error.stderr
+            or "\x1b" in parse_error.stderr
         ):
             raise AssertionError(
                 f"parse failure emitted the wrong streams or full usage\n{parse_error.stdout}{parse_error.stderr}"
@@ -261,10 +796,57 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_UNKNOWN_OPTION]", "--debug-fts-rooms")
         expect_code(cli, 1, "[CLI_UNKNOWN_OPTION]", "--weld-debug")
         expect_code(cli, 1, "[CLI_UNKNOWN_OPTION]", "--normal-weld-degrees")
+        for retired_level_option in (
+            "--generate-anchors",
+            "--generate-minimap",
+            "--generate-nav-surface",
+            "--generate-room-distances",
+            "--generate-static-lighting",
+            "--minimap-foreground-color",
+            "--minimap-foreground-image",
+            "--minimap-background-color",
+            "--minimap-background-image",
+            "--nav-max-slope-degrees",
+            "--fts-scene-directory",
+        ):
+            expect_code(cli, 1, "[CLI_UNKNOWN_OPTION]", retired_level_option)
         expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--input-texture-folder")
-        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--output-texture-folder")
-        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--fts-scene-directory")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--input-icon")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--icon-slots")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--icon-slots", "1")
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--icon-slots", "0", "1")
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--icon-slots", "-", "4")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--icon-layout")
+        expect_code(cli, 1, "[CLI_INVALID_MODE]", "--icon-layout", "b")
+        expect_code(cli, 1, "[CLI_INVALID_MODE]", "--icon-layout", "middle")
+        expect_code(
+            cli,
+            1,
+            "[CLI_DUPLICATE_MODULE]",
+            "--icon-layout",
+            "center",
+            "--icon-layout",
+            "stretch",
+        )
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--rebase-textures")
+        expect_code(cli, 1, "[CLI_RESOURCE_PATH_INVALID]", "--rebase-textures", "", MODEL_FTL, out_glb)
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--input-sound-folder")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--rebase-sounds")
+        expect_code(cli, 1, "[CLI_RESOURCE_PATH_INVALID]", "--rebase-sounds", "", ambiance_amb, out_glb)
+        expect_code(
+            cli,
+            1,
+            "[CLI_DUPLICATE_MODULE]",
+            "--trim-to-master",
+            "--trim-to-master",
+            ambiance_amb,
+            tmp / "duplicate-trim.json",
+        )
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--dlf-scene-directory")
         expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--mount")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--write-mount")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--write-mount", "", MODEL_FTL, out_glb)
+        expect_code(cli, 1, "[CLI_DUPLICATE_MODULE]", "--write-mount", ".", "--write-mount", ".")
         expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--log-level")
         expect_code(cli, 1, "[CLI_LOG_LEVEL_INVALID]", "--log-level", "verbose")
         expect_code(cli, 1, "[CLI_DUPLICATE_MODULE]", "--log-level", "info", "--log-level", "warn")
@@ -273,6 +855,34 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_UNSUPPORTED_OUTPUT_FORMAT]", MODEL_GLB, tmp / "out.bin")
         expect_code(cli, 1, "[CLI_RESOURCE_SELECTOR_INVALID]", MODEL_FTL, "anim:items:bad")
         expect_code(cli, 1, "[CLI_RESOURCE_SELECTOR_INVALID]", "level:not-a-number", out_glb)
+        expect_code(
+            cli,
+            1,
+            "[CLI_ROUTE_CONSTRAINT_CONFLICT]",
+            "--kind",
+            "level",
+            "--skip-sound-export",
+            level_json,
+            out_glb,
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_ROUTE_CONSTRAINT_CONFLICT]",
+            "--kind",
+            "ambiance",
+            "--skip-texture-export",
+            ambiance_amb,
+            tmp / "ambiance-skip-texture.json",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_ROUTE_INPUT_MISMATCH]",
+            ANIMATION_TEA,
+            ANIMATION_TEA,
+            tmp / "multiple-animation-inputs.tea",
+        )
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--overwrite", "--no-overwrite", MODEL_GLB, out_glb)
         expect_code(
             cli,
@@ -289,7 +899,7 @@ def main() -> int:
             cli,
             1,
             "[CLI_OUTPUT_CONVERTER_CONFLICT]",
-            "--generate-anchors",
+            "--gen-anchors",
             "--debug-navigation",
             "--debug-room-distances",
             LEVEL_FTS,
@@ -299,10 +909,128 @@ def main() -> int:
             cli,
             1,
             "[CLI_MISSING_DEPENDENCY]",
-            "--snap-bone-origins-to-reference",
-            "snap-origins",
+            "--snap-bone-origins",
             MODEL_GLB,
             out_glb,
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_INVALID_MODULE_VALUE]",
+            "--ftl-reference",
+            MODEL_FTL,
+            MODEL_GLB,
+            out_glb,
+        )
+        expect_success(
+            cli,
+            "--ftl-reference",
+            MODEL_FTL,
+            "--snap-bone-origins",
+            "--copy-bone-selections",
+            "--copy-action-selections",
+            "--skip-texture-export",
+            MODEL_FTL,
+            tmp / "snapped-reference.ftl",
+        )
+        expect_success(
+            cli,
+            "--infer-bone-selections",
+            "--skip-texture-export",
+            MODEL_FTL,
+            tmp / "inferred-bone-selections.ftl",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_INCOMPATIBLE_MODULES]",
+            "--ftl-reference",
+            MODEL_FTL,
+            "--copy-bone-selections",
+            "--infer-bone-selections",
+            MODEL_FTL,
+            tmp / "conflicting-bone-selections.ftl",
+        )
+        ambiance_glb = tmp / "ambiance.glb"
+        expect_success(cli, ambiance_amb, ambiance_glb)
+        expect_success(cli, "--kind", "ambiance", ambiance_glb, tmp / "ambiance-roundtrip.amb")
+        ambiance_json = tmp / "ambiance.json"
+        expect_success(cli, ambiance_amb, ambiance_json)
+        ambiance_payload = json.loads(ambiance_json.read_text(encoding="utf-8"))
+        if ambiance_payload.get("$schema") != "https://arx-tools.github.io/schemas/amb.schema.json":
+            raise AssertionError(f"AMB JSON schema mismatch: {ambiance_payload.get('$schema')}")
+        expect_success(cli, ambiance_json, tmp / "ambiance-json-roundtrip.amb")
+
+        one_track_trimmed = tmp / "ambiance-one-track-trimmed.json"
+        expect_success(cli, "--trim-to-master", "--skip-sound-export", ambiance_amb, one_track_trimmed)
+
+        trim_input = tmp / "ambiance-trim-input"
+        trim_input.mkdir()
+        timed_ambiance = trim_input / "timed.amb"
+        timed_ambiance.write_bytes(make_timed_amb_bytes())
+        (trim_input / "master.wav").write_bytes(make_wav_bytes(8000))
+        (trim_input / "child.wav").write_bytes(make_wav_bytes(8000))
+        trim_output = tmp / "ambiance-trim-output"
+        trim_output.mkdir()
+        trimmed_json = trim_output / "timed.json"
+        expect_success_contains(
+            cli,
+            "trimmed 1 non-master Ambiance track(s) to the master duration",
+            "--trim-to-master",
+            "--skip-sound-export",
+            timed_ambiance,
+            trimmed_json,
+        )
+        trimmed_payload = json.loads(trimmed_json.read_text(encoding="utf-8"))
+        if trimmed_payload["tracks"][1]["keys"][0]["loop"] != 1:
+            raise AssertionError("--trim-to-master must reduce trailing child-track repetitions")
+        if tuple(trim_output.rglob("*.wav")):
+            raise AssertionError("--skip-sound-export must suppress audio output needed only for trimming")
+
+        missing_trim_input = tmp / "ambiance-trim-missing"
+        missing_trim_input.mkdir()
+        missing_timed_ambiance = missing_trim_input / "timed.amb"
+        missing_timed_ambiance.write_bytes(make_timed_amb_bytes())
+        missing_trim_output = tmp / "ambiance-trim-missing.json"
+        expect_code(
+            cli,
+            1,
+            "[CLI_AMBIANCE_MODULE_FAILED]",
+            "--trim-to-master",
+            "--skip-sound-export",
+            missing_timed_ambiance,
+            missing_trim_output,
+        )
+        if missing_trim_output.exists():
+            raise AssertionError("failed Ambiance track trimming must not publish output")
+
+        expect_code(
+            cli,
+            1,
+            "[CLI_RESOURCE_OUTPUT_COLLISION]",
+            "--overwrite",
+            ambiance_collision_input,
+            ambiance_collision_output,
+        )
+        if ambiance_collision_output.read_bytes() != ambiance_collision_audio:
+            raise AssertionError("Ambiance resource collisions must be resolved before writing the primary output")
+        expect_success(
+            cli,
+            ambiance_amb,
+            tmp / "ambiance-reference.glb",
+            "--reference-model",
+            MODEL_FTL,
+            "--input-texture-folder",
+            tmp / "unused-reference-textures",
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_MODULE_OUTPUT_MISMATCH]",
+            ambiance_amb,
+            tmp / "ambiance-reference.amb",
+            "--reference-model",
+            MODEL_FTL,
         )
         expect_code(cli, 1, "[CLI_AMBIGUOUS_ROUTE]", MODEL_GLB, out_glb)
         expect_code(cli, 1, "[CLI_AMBIGUOUS_ROUTE]", unknown_json, out_json)
@@ -372,11 +1100,10 @@ def main() -> int:
             level_json,
             tmp / "level7.fts.json",
         )
-        expect_code(
+        expect_success(
             cli,
-            1,
-            "[CLI_MODULE_OUTPUT_MISMATCH]",
-            "--output-texture-folder",
+            "--overwrite",
+            "--rebase-textures",
             "graph/obj3d/textures",
             level_json,
             tmp / "level8.fts.json",
@@ -385,21 +1112,12 @@ def main() -> int:
             cli,
             1,
             "[CLI_MODULE_OUTPUT_MISMATCH]",
-            "--fts-scene-directory",
+            "--dlf-scene-directory",
             "graph/levels/custom",
             level_json,
             tmp / "level8.fts.json",
         )
-        expect_code(
-            cli,
-            1,
-            "[CLI_MODULE_OUTPUT_MISMATCH]",
-            "--skip-texture-export",
-            level_json,
-            tmp / "level8.fts.json",
-        )
-
-        expect_code(cli, 1, "[CLI_AMBIGUOUS_ROUTE]", unknown_json, ANIMATION_TEA, out_json)
+        expect_code(cli, 1, "[CLI_MODEL_INPUT_FAILED]", unknown_json, ANIMATION_TEA, out_json)
         expect_code(cli, 1, "[CLI_MODEL_INPUT_FAILED]", unknown_json, tmp / "claimed-model.ftl")
         expect_code(cli, 1, "[CLI_ANIMATION_INPUT_FAILED]", unknown_json, tmp / "claimed-animation.tea")
         expect_code(cli, 1, "[CLI_LEVEL_INPUT_FAILED]", "--debug-cells", empty_glb, out_glb)
@@ -419,25 +1137,25 @@ def main() -> int:
             "--dlf-only",
             "--no-quad-reconstruction",
             "--skip-texture-export",
-            "--output-texture-folder",
+            "--rebase-textures",
             "graph/obj3d/textures",
             empty_glb,
             tmp / "empty.fts",
         )
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--generate-nav-surface", "--debug-cells", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--generate-nav-surface", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-nav-surface", "--debug-cells", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--gen-nav-surface", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--prune-nav-surface-islands", "--debug-cells", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--prune-nav-surface-islands", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--generate-room-distances", "--debug-cells", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--generate-room-distances", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--generate-anchors", "--debug-cells", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--generate-anchors", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-room-distances", "--debug-cells", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--gen-room-distances", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-anchors", "--debug-cells", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--gen-anchors", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--connect-anchors", "--debug-cells", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--connect-anchors", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--prune-anchor-islands", "--debug-cells", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--prune-anchor-islands", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--generate-static-lighting", "--debug-cells", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--generate-static-lighting", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-static-lighting", "--debug-cells", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--gen-static-lighting", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--nav-radius", "50", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--nav-from-floor", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--nav-prune-ratio", "0.1", LEVEL_FTS, out_glb)
@@ -459,7 +1177,7 @@ def main() -> int:
             cli,
             1,
             "[CLI_INCOMPATIBLE_MODULES]",
-            "--generate-nav-surface",
+            "--gen-nav-surface",
             "--nav-from-floor",
             "--nav-radius",
             "50",
@@ -470,7 +1188,7 @@ def main() -> int:
             cli,
             1,
             "[CLI_INCOMPATIBLE_MODULES]",
-            "--generate-nav-surface",
+            "--gen-nav-surface",
             "--nav-height",
             "165",
             "--nav-from-floor",
@@ -516,29 +1234,29 @@ def main() -> int:
             LEVEL_FTS,
             out_glb,
         )
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-nav-surface", "--nav-radius", "4", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-nav-surface", "--nav-height", "-1", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-nav-surface", "--nav-clearance", "-1", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-nav-surface", "--nav-radius", "4", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-nav-surface", "--nav-height", "-1", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-nav-surface", "--nav-clearance", "-1", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--prune-nav-surface-islands", "--nav-prune-ratio", "1.1", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--prune-nav-surface-islands", "--nav-prune-min-area", "-1", LEVEL_FTS, out_glb)
         expect_code(
             cli,
             1,
             "[CLI_INVALID_MODULE_VALUE]",
-            "--generate-nav-surface",
-            "--nav-max-slope-degrees",
+            "--gen-nav-surface",
+            "--nav-max-slope",
             "91",
             LEVEL_FTS,
             out_glb,
         )
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-spacing", "0", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-spacing", "19", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-offset", "0", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-offset", "51", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-height", "0", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-height", "49", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-link-distance", "0", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-room-distances", "--rdist-spacing", "100", "--rdist-link-distance", "109", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-spacing", "0", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-spacing", "19", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-offset", "0", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-offset", "51", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-height", "0", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-height", "49", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-link-distance", "0", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-room-distances", "--rdist-spacing", "100", "--rdist-link-distance", "109", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--anchor-radius", "50", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--anchor-link-distance", "150", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--anchor-link-radius-scale", "0.9", LEVEL_FTS, out_glb)
@@ -546,9 +1264,21 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--light-global-factor", "0.85", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--light-no-normals", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--light-no-shadows", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-anchors", "--anchor-spacing", "9", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-anchors", "--anchor-radius", "4", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-anchors", "--anchor-height", "-1", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--minimap-halo-radius", "5", LEVEL_FTS, out_glb)
+        expect_code(
+            cli,
+            1,
+            "[CLI_MISSING_DEPENDENCY]",
+            "--minimap-fg-color",
+            "0.18",
+            "0.34",
+            "0.80",
+            LEVEL_FTS,
+            out_glb,
+        )
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-anchors", "--anchor-spacing", "9", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-anchors", "--anchor-radius", "4", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-anchors", "--anchor-height", "-1", LEVEL_FTS, out_glb)
         expect_code(
             cli,
             1,
@@ -563,23 +1293,165 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--connect-anchors", "--anchor-link-radius-scale", "1.01", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--prune-anchor-islands", "--anchor-prune-ratio", "1.1", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_NUMBER]", "--prune-anchor-islands", "--anchor-prune-min-count", "-1", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-static-lighting", "--light-ambient", "-0.1", "0.25", "0.25", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--generate-static-lighting", "--light-global-factor", "-1", LEVEL_FTS, out_glb)
-        expect_code(cli, 1, "[CLI_ROUTE_CONSTRAINT_CONFLICT]", "--kind", "level", "--overwrite-texture", "foo", MODEL_FTL, out_glb)
-        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--scale", "1", ANIMATION_TEA, out_json)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-static-lighting", "--light-ambient", "-0.1", "0.25", "0.25", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-static-lighting", "--light-global-factor", "-1", LEVEL_FTS, out_glb)
+        expect_code(
+            cli,
+            1,
+            "[CLI_INVALID_MODULE_VALUE]",
+            "--minimap-border-color",
+            "1",
+            "-0.1",
+            "1",
+            LEVEL_FTS,
+            out_glb,
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_INVALID_MODULE_VALUE]",
+            "--gen-minimap",
+            "--minimap-lava-color",
+            "0.25",
+            "1.1",
+            "0.90",
+            LEVEL_FTS,
+            out_glb,
+        )
+        expect_code(
+            cli,
+            1,
+            "[CLI_RESOURCE_NOT_FOUND]",
+            "--gen-minimap",
+            "--minimap-water-image",
+            tmp / "missing-minimap-water.bmp",
+            LEVEL_FTS,
+            out_glb,
+        )
+        minimap_sampler = tmp / "minimap-sampler.bmp"
+        minimap_sampler.write_bytes(make_bmp_bytes())
+        generated_minimap = tmp / "generated-minimap.glb"
+        expect_success_contains(
+            cli,
+            "Level minimap generated:",
+            "--gen-minimap",
+            "--minimap-fg-image",
+            minimap_sampler,
+            "--minimap-fg-color",
+            "1",
+            "1",
+            "1",
+            LEVEL_GLB,
+            generated_minimap,
+        )
+        if b"arx_minimap__map" not in generated_minimap.read_bytes():
+            raise AssertionError("generated Level GLB must contain the minimap root")
+        expect_success(cli, "--scale", "2", ANIMATION_TEA, tmp / "scaled-animation.json")
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--scale", "0", MODEL_FTL, out_json)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--scale", "nan", MODEL_FTL, out_json)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--rotate", "inf", "0", "0", MODEL_FTL, out_json)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--offset", "0", "nan", "0", MODEL_FTL, out_json)
-        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--generate-room-distances", ANIMATION_TEA, out_glb)
+        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--gen-room-distances", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--weld-vertices", ANIMATION_TEA, out_glb)
-        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--generate-anchors", ANIMATION_TEA, out_glb)
+        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--gen-anchors", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--connect-anchors", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--prune-nav-surface-islands", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--prune-anchor-islands", ANIMATION_TEA, out_glb)
-        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--generate-static-lighting", ANIMATION_TEA, out_glb)
+        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--gen-static-lighting", ANIMATION_TEA, out_glb)
+        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--gen-minimap", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_MODULE_OUTPUT_MISMATCH]", "--pretty", ANIMATION_TEA, tmp / "out.tea")
         expect_code(cli, 1, "[CLI_MODULE_OUTPUT_MISMATCH]", "--no-compression", ANIMATION_TEA, tmp / "out.tea")
+        expect_code(
+            cli,
+            1,
+            "[CLI_MODULE_OUTPUT_MISMATCH]",
+            "--allow-empty-animation",
+            MODEL_FTL,
+            empty_animation_tea,
+            tmp / "empty-animation-model.glb",
+        )
+
+        empty_default_dir = tmp / "empty-animation-default"
+        empty_default_model = empty_default_dir / "model.ftl"
+        empty_default = run(cli, MODEL_FTL, empty_animation_tea, empty_default_model)
+        empty_default_text = empty_default.stdout + empty_default.stderr
+        if empty_default.returncode != 0 or not empty_default_model.is_file():
+            raise AssertionError(f"empty Model Animation omission failed\n{empty_default_text}")
+        if (
+            "Empty Animation 'empty_contract' omitted" not in empty_default_text
+            or "empty_contract.tea" not in empty_default_text
+        ):
+            raise AssertionError(f"empty Animation omission did not identify its planned output\n{empty_default_text}")
+        if (empty_default_dir / "empty_contract.tea").exists():
+            raise AssertionError("empty Model Animation sidecar must be omitted by default")
+
+        empty_collision_dir = tmp / "empty-animation-collision"
+        empty_collision_model = empty_collision_dir / "model.ftl"
+        empty_collision = run(
+            cli, MODEL_FTL, empty_animation_tea, active_collision_tea, empty_collision_model
+        )
+        empty_collision_text = empty_collision.stdout + empty_collision.stderr
+        if empty_collision.returncode != 0:
+            raise AssertionError(f"empty Animation collision planning failed\n{empty_collision_text}")
+        if not (empty_collision_dir / "empty_contract.tea").is_file():
+            raise AssertionError("emitted Animation must retain the natural output name")
+        if (empty_collision_dir / "empty_contract2.tea").exists():
+            raise AssertionError("omitted Animation must not reserve an output name")
+        if "empty_contract2.tea" not in empty_collision_text:
+            raise AssertionError("omitted Animation warning must report its post-output candidate path")
+
+        empty_intermediate_default_dir = tmp / "empty-animation-intermediate-default"
+        empty_intermediate_default_model = empty_intermediate_default_dir / "model.ftl"
+        expect_success(cli, "--scale", "1", MODEL_FTL, empty_animation_tea, empty_intermediate_default_model)
+        if (empty_intermediate_default_dir / "empty_contract.tea").exists():
+            raise AssertionError("empty intermediate Model Animation sidecar must be omitted by default")
+
+        empty_intermediate_dir = tmp / "empty-animation-intermediate"
+        empty_intermediate_model = empty_intermediate_dir / "model.ftl"
+        expect_success(
+            cli,
+            "--scale",
+            "1",
+            "--allow-empty-animation",
+            MODEL_FTL,
+            empty_animation_tea,
+            empty_intermediate_model,
+        )
+        if not (empty_intermediate_dir / "empty_contract.tea").is_file():
+            raise AssertionError("--allow-empty-animation must write an empty intermediate Model sidecar")
+
+        empty_json_default_dir = tmp / "empty-animation-json-default"
+        empty_json_default_model = empty_json_default_dir / "model.json"
+        expect_success(cli, MODEL_FTL, empty_animation_tea, empty_json_default_model)
+        if (empty_json_default_dir / "empty_contract.json").exists():
+            raise AssertionError("empty Model Animation JSON sidecar must be omitted by default")
+
+        empty_json_allowed_dir = tmp / "empty-animation-json-allowed"
+        empty_json_allowed_model = empty_json_allowed_dir / "model.json"
+        expect_success(
+            cli,
+            "--scale",
+            "1",
+            "--allow-empty-animation",
+            MODEL_FTL,
+            empty_animation_tea,
+            empty_json_allowed_model,
+        )
+        if not (empty_json_allowed_dir / "empty_contract.json").is_file():
+            raise AssertionError("--allow-empty-animation must write an empty intermediate JSON sidecar")
+
+        for name, animation in zero_group_nonempty_animations:
+            native_dir = tmp / f"zero-group-{name}-native"
+            native_model = native_dir / "model.ftl"
+            expect_success(cli, "--skip-sound-export", MODEL_FTL, animation, native_model)
+            if not (native_dir / f"{name}.tea").is_file():
+                raise AssertionError(f"zero-group Animation with {name} must survive direct native output")
+
+            intermediate_dir = tmp / f"zero-group-{name}-intermediate"
+            intermediate_model = intermediate_dir / "model.json"
+            expect_success(cli, "--scale", "1", "--skip-sound-export", MODEL_FTL, animation, intermediate_model)
+            if not (intermediate_dir / f"{name}.json").is_file():
+                raise AssertionError(f"zero-group Animation with {name} must survive intermediate JSON output")
         expect_code(cli, 1, "[CLI_MODULE_OUTPUT_MISMATCH]", "--no-compression", MODEL_FTL, out_glb)
         expect_code(
             cli,
@@ -608,7 +1480,7 @@ def main() -> int:
             cli,
             1,
             "[CLI_MODULE_OUTPUT_MISMATCH]",
-            "--generate-anchors",
+            "--gen-anchors",
             "--connect-anchors",
             "--debug-navigation",
             LEVEL_FTS,
@@ -617,7 +1489,7 @@ def main() -> int:
         if LEVEL_FTS_AVAILABLE:
             expect_success(
                 cli,
-                "--generate-nav-surface",
+                "--gen-nav-surface",
                 "--nav-from-floor",
                 "--prune-nav-surface-islands",
                 "--nav-prune-ratio",
@@ -628,7 +1500,15 @@ def main() -> int:
                 LEVEL_FTS,
                 out_glb,
             )
-        expect_code(cli, 1, "[CLI_MODULE_OUTPUT_MISMATCH]", "--output-texture-folder", "graph", LEVEL_FTS, out_glb)
+        if LEVEL_FTS_AVAILABLE:
+            expect_success(
+                cli,
+                "--overwrite",
+                "--rebase-textures",
+                "graph",
+                LEVEL_FTS,
+                tmp / "rebased.glb",
+            )
         if LEVEL_FTS_AVAILABLE:
             expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--rotate", "0", "0", "0", LEVEL_FTS, out_glb)
             expect_code(
@@ -642,7 +1522,6 @@ def main() -> int:
                 LEVEL_FTS,
                 tmp / "out.fts",
             )
-        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--overwrite-texture", "foo", ANIMATION_TEA, out_json)
         if LEVEL_BUNDLE_AVAILABLE:
             expect_code(
                 cli,
@@ -661,14 +1540,30 @@ def main() -> int:
             expect_success(cli, LEVEL_FTS, level_glb)
             expect_success(cli, "--debug-cells", level_glb, tmp / "debug-from-level.glb")
 
-            direct_mount = tmp / "direct-level-mount"
+            passthrough_mount = tmp / "passthrough-level-mount"
             expect_success(
                 cli,
-                "--mount",
-                direct_mount,
+                "--write-mount",
+                passthrough_mount,
                 "--no-compression",
                 "--skip-texture-export",
                 LEVEL_FTS,
+                "passthrough-level.dlf",
+            )
+            passthrough_dlf = passthrough_mount / "passthrough-level.dlf"
+            passthrough_llf = passthrough_mount / "passthrough-level.llf"
+            passthrough_fts = passthrough_mount / "game" / "graph" / "levels" / "passthrough-level" / "fast.fts"
+            if not passthrough_fts.exists() or passthrough_dlf.exists() or passthrough_llf.exists():
+                raise AssertionError("direct native output must preserve the supplied FTS-only carrier set")
+
+            direct_mount = tmp / "direct-level-mount"
+            expect_success(
+                cli,
+                "--write-mount",
+                direct_mount,
+                "--no-compression",
+                "--skip-texture-export",
+                level_glb,
                 "direct-level.dlf",
             )
             direct_dlf = direct_mount / "direct-level.dlf"
@@ -688,7 +1583,7 @@ def main() -> int:
                 "direct-level.llf",
                 tmp / "invalid-direct-level.glb",
             )
-            expect_code(cli, 1, "[CLI_RESOURCE_SELECTOR_INVALID]", direct_dlf, tmp / "absolute-dlf-input.glb")
+            expect_code(cli, 1, "[CLI_LEVEL_INPUT_FAILED]", direct_dlf, tmp / "absolute-dlf-input.glb")
             expect_code(cli, 1, "[CLI_LEVEL_OUTPUT_FAILED]", LEVEL_FTS, tmp / "absolute-dlf-output.dlf")
 
             dlf_only_fts = tmp / "dlf-only-level.fts"
@@ -698,7 +1593,7 @@ def main() -> int:
                 "--dlf-only",
                 "--no-quad-reconstruction",
                 "--skip-texture-export",
-                "--output-texture-folder",
+                "--rebase-textures",
                 "graph/obj3d/textures",
                 "--no-compression",
                 LEVEL_FTS,
@@ -713,7 +1608,7 @@ def main() -> int:
                 "--overwrite",
                 "--no-compression",
                 "--skip-texture-export",
-                "--fts-scene-directory",
+                "--dlf-scene-directory",
                 "custom-scenes/new-scene",
                 LEVEL_FTS,
                 custom_scene_fts,
@@ -729,11 +1624,11 @@ def main() -> int:
             custom_scene_mount = tmp / "custom-scene-mount"
             expect_success(
                 cli,
-                "--mount",
+                "--write-mount",
                 custom_scene_mount,
                 "--no-compression",
                 "--skip-texture-export",
-                "--fts-scene-directory",
+                "--dlf-scene-directory",
                 "graph/my-level-folder/placed-scene/",
                 LEVEL_FTS,
                 "placed.dlf",
@@ -744,15 +1639,15 @@ def main() -> int:
             expect_code(
                 cli,
                 1,
-                "[CLI_LEVEL_OUTPUT_FAILED]",
-                "--fts-scene-directory",
+                "[CLI_RESOURCE_PATH_INVALID]",
+                "--dlf-scene-directory",
                 "../invalid-scene",
                 LEVEL_FTS,
                 tmp / "invalid-scene.fts",
             )
 
             dlf_selector_mount = tmp / "dlf-selector-mount"
-            expect_success(cli, "--mount", dlf_selector_mount, "--dlf-only", LEVEL_FTS, "level:24")
+            expect_success(cli, "--write-mount", dlf_selector_mount, "--dlf-only", LEVEL_FTS, "level:24")
             selector_dlf = dlf_selector_mount / "graph" / "levels" / "level24" / "level24.dlf"
             selector_llf = dlf_selector_mount / "graph" / "levels" / "level24" / "level24.llf"
             selector_fts = dlf_selector_mount / "game" / "graph" / "levels" / "level24" / "fast.fts"
@@ -780,7 +1675,7 @@ def main() -> int:
             expect_success(
                 cli,
                 "--no-compression",
-                "--output-texture-folder",
+                "--rebase-textures",
                 r"Graph\Obj3D\Textures",
                 LEVEL_BUNDLE_FTS,
                 LEVEL_LLF,
@@ -794,7 +1689,7 @@ def main() -> int:
             expect_success(
                 cli,
                 "--no-compression",
-                "--output-texture-folder",
+                "--rebase-textures",
                 "-foo",
                 LEVEL_BUNDLE_FTS,
                 LEVEL_LLF,
@@ -838,9 +1733,15 @@ def main() -> int:
             listing_high / "graph/levels/level2/level2.dlf",
             listing_low / "graph/levels/level2/level2.dlf",
             listing_low / "graph/levels/level3/level3.dlf",
+            listing_high / "graph/levels/level10/level10.dlf",
             listing_high / "game/graph/obj3d/interactive/npc/hero/hero.ftl",
+            listing_low / "game/graph/obj3d/interactive/npc/guard2/guard2.ftl",
+            listing_low / "game/graph/obj3d/interactive/npc/guard10/guard10.ftl",
             listing_low / "game/graph/obj3d/interactive/npc/human/tweaks/red.ftl",
             listing_low / "game/graph/obj3d/interactive/items/armor/chest/chest.ftl",
+            listing_high / "game/graph/interface/book/runes/aam.ftl",
+            listing_low / "game/graph/interface/menus/main.ftl",
+            listing_low / "game/editor/obj3d/light.ftl",
             listing_high / "graph/obj3d/anims/npc/walk.tea",
             listing_low / "graph/obj3d/anims/fix_inter/open.tea",
             listing_high / "graph/interface/illustrations/intro.cin",
@@ -859,23 +1760,83 @@ def main() -> int:
             "--mount",
             listing_low,
         )
-        expected_listing = sorted(
-            (
-                "ambiance:cave/water",
-                "anim:fix_inter:open",
-                "anim:npc:walk",
-                "cinematic:intro",
-                "level:2",
-                "level:3",
-                "model:armor:chest",
-                "model:npc:hero",
-                "model:npc:human:red",
-            )
-        )
+        expected_listing = [
+            "ambiance:cave/water",
+            "anim:fix_inter:open",
+            "anim:npc:walk",
+            "cinematic:intro",
+            "level:2",
+            "level:3",
+            "level:10",
+            "model:armor:chest",
+            "model:editor:light",
+            "model:npc:guard2",
+            "model:npc:guard10",
+            "model:npc:hero",
+            "model:npc:human:red",
+            "model:ui-menus:main",
+            "model:ui-runes:aam",
+        ]
         if listing.returncode != 0 or listing.stdout.splitlines() != expected_listing:
             raise AssertionError(
-                "resource listing must merge mounts by priority and emit sorted exact selectors\n"
+                "resource listing must merge mounts by priority and emit naturally sorted exact selectors\n"
                 f"{listing.stdout}{listing.stderr}"
+            )
+
+        expect_success_contains(
+            cli,
+            "[INFO/CLI] duplicate mount ignored",
+            "--mount",
+            listing_high,
+            "--mount",
+            f"{listing_high}/",
+            "--list-resources",
+            "all",
+        )
+
+        appended_listing = run(
+            cli,
+            "missing-level.fts",
+            "ignored-output.glb",
+            "--gen-anchors",
+            "--list-resources",
+            "model",
+            "--mount",
+            listing_high,
+            "--mount",
+            listing_low,
+        )
+        expected_models = [resource for resource in expected_listing if resource.startswith("model:")]
+        if appended_listing.returncode != 0 or appended_listing.stdout.splitlines() != expected_models:
+            raise AssertionError(
+                "resource listing appended to a conversion command must bypass route resolution\n"
+                f"{appended_listing.stdout}{appended_listing.stderr}"
+            )
+
+        model_listing = run(
+            cli,
+            "--mount",
+            listing_high,
+            "--list-resources",
+            "mod",
+            "--mount",
+            listing_low,
+        )
+        if model_listing.returncode != 0 or model_listing.stdout.splitlines() != expected_models:
+            raise AssertionError(
+                "resource listing kinds must accept unambiguous prefixes\n"
+                f"{model_listing.stdout}{model_listing.stderr}"
+            )
+
+        ambiguous_listing = run(cli, "--list-resources", "a")
+        if (
+            ambiguous_listing.returncode != 1
+            or "[CLI_INVALID_MODE]" not in ambiguous_listing.stderr
+            or "ambiguous resource kind 'a'" not in ambiguous_listing.stderr
+        ):
+            raise AssertionError(
+                "ambiguous resource listing prefixes must be rejected\n"
+                f"{ambiguous_listing.stdout}{ambiguous_listing.stderr}"
             )
 
         empty_listing_mount = tmp / "empty-listing-mount"
@@ -904,7 +1865,7 @@ def main() -> int:
         relative_output_mount.mkdir()
         relative_output = run(
             cli,
-            "--mount",
+            "--write-mount",
             relative_output_mount,
             MODEL_FTL,
             "nested/mounted-model.json",
@@ -918,11 +1879,26 @@ def main() -> int:
             raise AssertionError("relative raw output must be written through the write mount")
         if (tmp / "nested" / "mounted-model.json").exists():
             raise AssertionError("relative raw output must not bypass the write mount")
+
+        read_only_output = run(
+            cli,
+            "--mount",
+            relative_output_mount,
+            MODEL_FTL,
+            "nested/default-write-model.json",
+            cwd=tmp,
+        )
+        if read_only_output.returncode != 0:
+            raise AssertionError(f"read-only mount conversion failed\n{read_only_output.stdout}{read_only_output.stderr}")
+        if not (tmp / "nested" / "default-write-model.json").is_file():
+            raise AssertionError("read mounts must not change the default write root")
+        if (relative_output_mount / "nested" / "default-write-model.json").exists():
+            raise AssertionError("read mounts must never receive outputs implicitly")
         missing_mount = tmp / "missing-mount"
         expect_success_contains(
             cli,
-            "[INFO/CLI] write mount not found; using as write-only and will create on actual write",
-            "--mount",
+            "[INFO/CLI] write mount not found; will create on actual write",
+            "--write-mount",
             missing_mount,
             MODEL_FTL,
             tmp / "invalid-mount-model.json",
@@ -933,7 +1909,7 @@ def main() -> int:
         missing_read_mount = tmp / "missing-read-mount"
         expect_success_contains(
             cli,
-            "[WARN/CLI] mount not found; excluding from readable mounts",
+            "[WARN/CLI] mount not found; excluding from reads",
             "--mount",
             first_mount,
             "--mount",
@@ -942,8 +1918,126 @@ def main() -> int:
             tmp / "missing-read-mount.json",
         )
 
+        auto_workspace = tmp / "auto-mount-workspace"
+        auto_workspace.mkdir()
+        current_only_input = Path(f"current-only-{tmp.name}") / "auto-input.ftl"
+        (auto_workspace / current_only_input).parent.mkdir()
+        shutil.copyfile(MODEL_FTL, auto_workspace / current_only_input)
+        auto_environment = None
+        if sys.platform != "win32":
+            auto_environment = {
+                "XDG_DATA_HOME": str(tmp / "auto-xdg"),
+                "HOME": str(tmp / "auto-home"),
+            }
+        auto_with_implicit_current = run(
+            cli,
+            "--auto-mount",
+            current_only_input.as_posix(),
+            "auto-output.json",
+            cwd=auto_workspace,
+            env=auto_environment,
+        )
+        if auto_with_implicit_current.returncode != 0 or not (auto_workspace / "auto-output.json").is_file():
+            raise AssertionError(
+                "--auto-mount must retain the implicit current-directory read mount\n"
+                f"{auto_with_implicit_current.stdout}{auto_with_implicit_current.stderr}"
+            )
+        auto_without_current = run(
+            cli,
+            "--auto-mount",
+            "--mount",
+            first_mount,
+            current_only_input.as_posix(),
+            "explicit-auto-output.json",
+            cwd=auto_workspace,
+            env=auto_environment,
+        )
+        if auto_without_current.returncode != 1 or "[CLI_RESOURCE_NOT_FOUND]" not in auto_without_current.stderr:
+            raise AssertionError(
+                "an explicit mount must suppress the implicit current-directory read mount\n"
+                f"{auto_without_current.stdout}{auto_without_current.stderr}"
+            )
+
+        automatic_write = run(
+            cli,
+            "--auto-mount",
+            "--dry-run",
+            MODEL_FTL,
+            "model:npc:auto_mount_default",
+            env=auto_environment,
+        )
+        expected_suffix = Path(
+            "game/graph/obj3d/interactive/npc/auto_mount_default/auto_mount_default.ftl"
+        )
+        if automatic_write.returncode == 0:
+            expected_parts = tuple(part.lower() for part in expected_suffix.parts)
+            dry_run_destinations = tuple(
+                Path(line.split(" to: ", 1)[1])
+                for line in automatic_write.stderr.splitlines()
+                if "[INFO/CLI] dry-run: would write" in line and " to: " in line
+            )
+            if not any(
+                destination.is_absolute()
+                and tuple(part.lower() for part in destination.parts[-len(expected_parts) :]) == expected_parts
+                for destination in dry_run_destinations
+            ):
+                raise AssertionError(
+                    "--auto-mount must resolve game-layout output under an absolute default game root\n"
+                    f"{automatic_write.stdout}{automatic_write.stderr}"
+                )
+        elif (
+            automatic_write.returncode != 1
+            or "[CLI_DEFAULT_GAME_ROOT_UNAVAILABLE]" not in automatic_write.stderr
+        ):
+            raise AssertionError(
+                "automatic game write mount must resolve or report unavailable root\n"
+                f"{automatic_write.stdout}{automatic_write.stderr}"
+            )
+
+        if sys.platform != "win32":
+            unavailable_write = run(
+                cli,
+                "--auto-mount",
+                "--dry-run",
+                MODEL_FTL,
+                "model:npc:auto_mount_unavailable",
+                env={"XDG_DATA_HOME": "relative-data", "HOME": "relative-home"},
+            )
+            if (
+                unavailable_write.returncode != 1
+                or "[CLI_DEFAULT_GAME_ROOT_UNAVAILABLE]" not in unavailable_write.stderr
+            ):
+                raise AssertionError(
+                    "unavailable automatic game root must report its dedicated diagnostic\n"
+                    f"{unavailable_write.stdout}{unavailable_write.stderr}"
+                )
+        for index, arguments in enumerate(
+            (
+                ("--auto-mount", "--write-mount"),
+                ("--write-mount", "--auto-mount"),
+            )
+        ):
+            explicit_auto_write = tmp / f"auto-write-{index}"
+            if arguments[0] == "--auto-mount":
+                command = (arguments[0], arguments[1], explicit_auto_write)
+            else:
+                command = (arguments[0], explicit_auto_write, arguments[1])
+            expect_success(cli, *command, MODEL_FTL, f"model:npc:auto_write_{index}")
+            expected = (
+                explicit_auto_write
+                / "game"
+                / "graph"
+                / "obj3d"
+                / "interactive"
+                / "npc"
+                / f"auto_write_{index}"
+                / f"auto_write_{index}.ftl"
+            )
+            if not expected.is_file():
+                raise AssertionError(f"explicit --write-mount did not override --auto-mount: {expected}")
+
         prospective_mount = tmp / "prospective-mount"
-        expect_success(cli, "--mount", prospective_mount, MODEL_FTL, "model:npc:prospective")
+        expect_success(cli, "--write-mount", prospective_mount, MODEL_FTL, "model:npc:prospective")
         prospective_model = (
             prospective_mount
             / "game"
@@ -962,7 +2056,7 @@ def main() -> int:
             cli,
             "[INFO/CLI] dry-run: would write",
             "--dry-run",
-            "--mount",
+            "--write-mount",
             dry_mount,
             MODEL_FTL,
             "model:npc:dry_mount",
@@ -982,6 +2076,16 @@ def main() -> int:
             MODEL_FTL,
             tmp / "invalid-mount-output.json",
         )
+        expect_code(
+            cli,
+            1,
+            "[CLI_IO_STAT_FAILED]",
+            "--dry-run",
+            "--write-mount",
+            mount_file / "child",
+            MODEL_FTL,
+            tmp / "invalid-write-mount-output.json",
+        )
         if sys.platform == "win32":
             expect_code(
                 cli,
@@ -993,13 +2097,297 @@ def main() -> int:
                 MODEL_FTL,
                 tmp / "invalid-native-mount.json",
             )
-        expect_code(cli, 1, "[CLI_IO_CREATE_FAILED]", "--mount", first_mount, MODEL_FTL, "model:npc:NUL")
+        expect_code(cli, 1, "[CLI_RESOURCE_SELECTOR_INVALID]", "--mount", first_mount, MODEL_FTL, "model:npc:NUL")
+        if sys.platform == "win32":
+            expect_code(cli, 1, "[CLI_IO_PATH_INVALID]", MODEL_FTL, tmp / "invalid*output.ftl")
 
         model_input_mount = tmp / "model-input-mount"
         mounted_model = model_input_mount / "game" / "graph" / "obj3d" / "interactive" / "npc" / "Adventurer" / "Adventurer.ftl"
         mounted_model.parent.mkdir(parents=True)
         shutil.copyfile(MODEL_FTL, mounted_model)
         expect_success(cli, "--mount", model_input_mount, "model:npc:Adventurer", tmp / "mounted-model-input.json")
+
+        selector_model_mount = tmp / "selector-model-mount"
+        selector_model = (
+            selector_model_mount
+            / "game"
+            / "graph"
+            / "obj3d"
+            / "interactive"
+            / "npc"
+            / "contract"
+            / "contract.ftl"
+        )
+        selector_animation = selector_model_mount / "graph" / "obj3d" / "anims" / "fix_inter" / "sound.tea"
+        selector_model.parent.mkdir(parents=True)
+        selector_animation.parent.mkdir(parents=True)
+        shutil.copyfile(MODEL_FTL, selector_model)
+        shutil.copyfile(referenced_sound_animation, selector_animation)
+
+        selected_model_glb = tmp / "selected-model.glb"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "model:npc:contract",
+            selected_model_glb,
+        )
+        if not any(path.startswith("textures/") for path in glb_image_paths(selected_model_glb)):
+            raise AssertionError("Model selector input must use the local authoring texture directory")
+
+        raw_model_glb = tmp / "raw-model.glb"
+        expect_success(cli, selector_model, raw_model_glb)
+        if any(path.startswith("textures/") for path in glb_image_paths(raw_model_glb)):
+            raise AssertionError("raw Model input must preserve texture paths")
+
+        selected_model_override_glb = tmp / "selected-model-override.glb"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--rebase-textures",
+            "custom/textures",
+            "model:npc:contract",
+            selected_model_override_glb,
+        )
+        if not any(path.startswith("custom/textures/") for path in glb_image_paths(selected_model_override_glb)):
+            raise AssertionError("explicit texture rebase must override the Model input selector default")
+
+        selected_sound_glb = tmp / "selected-sound.glb"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--skip-sound-export",
+            "model:npc:contract",
+            "anim:fix_inter:sound",
+            selected_sound_glb,
+        )
+        if b"sounds/contract.wav" not in selected_sound_glb.read_bytes():
+            raise AssertionError("selected sound-bearing Animations must use the local authoring sound directory")
+        (tmp / "contract.wav").write_bytes(make_wav_bytes())
+        selected_sound_directory = tmp / "sounds"
+        selected_sound_directory.mkdir()
+        (selected_sound_directory / "contract.wav").write_bytes(make_wav_bytes())
+
+        selected_loose_native = tmp / "selected-loose-native"
+        selected_loose_native.mkdir()
+        selected_loose_ftl = selected_loose_native / "model.ftl"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--skip-texture-export",
+            "--skip-sound-export",
+            "--no-compression",
+            "--scale",
+            "1",
+            "model:npc:contract",
+            "anim:fix_inter:sound",
+            selected_loose_ftl,
+        )
+        if b"textures/" not in selected_loose_ftl.read_bytes():
+            raise AssertionError("Model selector input must rebase textures for any loose intermediate output")
+        selected_loose_teas = list(selected_loose_native.glob("*.tea"))
+        if len(selected_loose_teas) != 1 or b"sounds/contract" not in selected_loose_teas[0].read_bytes():
+            raise AssertionError("Animation selector input must rebase sounds for loose Model output")
+
+        same_game_mount = tmp / "same-game-rebase"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--write-mount",
+            same_game_mount,
+            "--skip-texture-export",
+            "--skip-sound-export",
+            "--scale",
+            "1",
+            "model:npc:contract",
+            "anim:fix_inter:sound",
+            "model:npc:contract_copy",
+        )
+        same_game_ftl = (
+            same_game_mount
+            / "game"
+            / "graph"
+            / "obj3d"
+            / "interactive"
+            / "npc"
+            / "contract_copy"
+            / "contract_copy.ftl"
+        )
+        same_game_tea = same_game_mount / "graph" / "obj3d" / "anims" / "fix_inter" / "sound.tea"
+        if b"graph/obj3d/textures/" in same_game_ftl.read_bytes():
+            raise AssertionError("Game selector to Game selector must preserve Model texture paths")
+        if b"sfx/contract.wav" in same_game_tea.read_bytes() or b"sounds/contract.wav" in same_game_tea.read_bytes():
+            raise AssertionError("Game selector to Game selector must preserve Animation Sound paths")
+
+        standalone_selected_json = tmp / "standalone-selected.json"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--skip-sound-export",
+            "--rotate",
+            "0",
+            "0",
+            "0",
+            "anim:fix_inter:sound",
+            standalone_selected_json,
+        )
+        if "sounds/contract" not in standalone_selected_json.read_text(encoding="utf-8"):
+            raise AssertionError("standalone Animation selector input must rebase sounds for loose output")
+
+        raw_sound_glb = tmp / "raw-sound.glb"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--skip-sound-export",
+            "model:npc:contract",
+            referenced_sound_animation,
+            raw_sound_glb,
+        )
+        if b"sounds/contract.wav" in raw_sound_glb.read_bytes():
+            raise AssertionError("raw sound-bearing Animations must preserve Sound paths")
+
+        mixed_sound_glb = tmp / "mixed-sound.glb"
+        expect_success_contains(
+            cli,
+            "mixed Animation sound sources do not share an automatic rebase; preserving Sound paths",
+            "--mount",
+            selector_model_mount,
+            "--skip-sound-export",
+            "model:npc:contract",
+            "anim:fix_inter:sound",
+            referenced_sound_animation,
+            mixed_sound_glb,
+        )
+        if b"sounds/contract.wav" in mixed_sound_glb.read_bytes():
+            raise AssertionError("mixed sound-bearing Animation sources must preserve all Sound paths")
+
+        selected_with_soundless_raw_glb = tmp / "selected-with-soundless-raw.glb"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--skip-sound-export",
+            "model:npc:contract",
+            "anim:fix_inter:sound",
+            ANIMATION_TEA,
+            selected_with_soundless_raw_glb,
+        )
+        if b"sounds/contract.wav" not in selected_with_soundless_raw_glb.read_bytes():
+            raise AssertionError("soundless raw Animations must not suppress selected Sound rebasing")
+
+        mixed_sound_override_glb = tmp / "mixed-sound-override.glb"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--skip-sound-export",
+            "--rebase-sounds",
+            "custom/sounds",
+            "model:npc:contract",
+            "anim:fix_inter:sound",
+            referenced_sound_animation,
+            mixed_sound_override_glb,
+        )
+        if b"custom/sounds/contract.wav" not in mixed_sound_override_glb.read_bytes():
+            raise AssertionError("explicit Sound rebase must override mixed Animation source preservation")
+
+        ambiance_selector_mount = tmp / "ambiance-selector-mount"
+        selected_ambiance = ambiance_selector_mount / "sfx" / "ambiance" / "contract.amb"
+        selected_ambiance.parent.mkdir(parents=True)
+        shutil.copyfile(ambiance_amb, selected_ambiance)
+        selected_ambiance_glb = tmp / "selected-ambiance.glb"
+        expect_success(
+            cli,
+            "--mount",
+            ambiance_selector_mount,
+            "--skip-sound-export",
+            "ambiance:contract",
+            selected_ambiance_glb,
+        )
+        if b"sounds/test.wav" not in selected_ambiance_glb.read_bytes():
+            raise AssertionError("Ambiance selector input must use the local authoring sound directory")
+
+        ambiance_game_mount = tmp / "ambiance-game-rebase"
+        expect_success(
+            cli,
+            "--write-mount",
+            ambiance_game_mount,
+            "--skip-sound-export",
+            selected_ambiance_glb,
+            "ambiance:contract_copy",
+        )
+        ambiance_game = ambiance_game_mount / "sfx" / "ambiance" / "contract_copy.amb"
+        if b"sfx/ambiance/test.wav" not in ambiance_game.read_bytes():
+            raise AssertionError("loose Ambiance input must use the canonical selector Sound directory")
+
+        raw_ambiance_glb = tmp / "raw-ambiance.glb"
+        expect_success(cli, "--skip-sound-export", ambiance_amb, raw_ambiance_glb)
+        if b"sounds/test.wav" in raw_ambiance_glb.read_bytes():
+            raise AssertionError("raw Ambiance input must preserve Sound paths")
+
+        obj_project = tmp / "obj-project"
+        (obj_project / "materials").mkdir(parents=True)
+        (obj_project / "images").mkdir()
+        obj_input = obj_project / "source.obj"
+        obj_input.write_text(
+            "mtllib materials/library.mtl\n"
+            "v 0 0 0\n"
+            "v 1 0 0\n"
+            "v 0 1 0\n"
+            "usemtl wall\n"
+            "f 1 2 3\n",
+            encoding="utf-8",
+        )
+        (obj_project / "materials" / "library.mtl").write_text(
+            "newmtl wall\nmap_Kd images/wall.bmp\n",
+            encoding="utf-8",
+        )
+        image = make_bmp_bytes()
+        (obj_project / "images" / "wall.bmp").write_bytes(image)
+        obj_output = tmp / "obj-output" / "model.obj"
+        expect_success(cli, obj_input, obj_output)
+        if "mtllib model.mtl" not in obj_output.read_text(encoding="utf-8"):
+            raise AssertionError("OBJ output must reference its generated MTL")
+        if "map_Kd images/wall.bmp" not in obj_output.with_suffix(".mtl").read_text(encoding="utf-8"):
+            raise AssertionError("OBJ output must preserve the Model texture path in map_Kd")
+        if (obj_output.parent / "images" / "wall.bmp").read_bytes() != image:
+            raise AssertionError("OBJ output must write texture sidecars relative to the OBJ")
+
+        skipped_obj_output = tmp / "obj-output-skipped" / "model.obj"
+        expect_success(cli, "--skip-texture-export", obj_input, skipped_obj_output)
+        if (skipped_obj_output.parent / "images" / "wall.bmp").exists():
+            raise AssertionError("--skip-texture-export must not write OBJ texture sidecars")
+
+        tweak_model = (
+            model_input_mount
+            / "game"
+            / "graph"
+            / "obj3d"
+            / "interactive"
+            / "npc"
+            / "human_base"
+            / "tweaks"
+            / "human_kultar.ftl"
+        )
+        tweak_model.parent.mkdir(parents=True)
+        shutil.copyfile(MODEL_FTL, tweak_model)
+        tweak_preview = tmp / "tweak-preview.glb"
+        expect_success(
+            cli,
+            "--mount",
+            model_input_mount,
+            "model:npc:human_base:human_kultar",
+            tweak_preview,
+            "--as-level-preview",
+        )
+        if b"CLASS_model:npc:human_base__" not in tweak_preview.read_bytes():
+            raise AssertionError("Model tweak preview must use the base Model class path")
 
         implicit_mount = tmp / "implicit-mount"
         implicit_model = implicit_mount / "game" / "graph" / "obj3d" / "interactive" / "npc" / "Implicit" / "Implicit.ftl"
@@ -1011,6 +2399,173 @@ def main() -> int:
         implicit_output = implicit_mount / "game" / "graph" / "obj3d" / "interactive" / "npc" / "Written" / "Written.ftl"
         if not implicit_output.is_file():
             raise AssertionError(f"expected implicit mounted output at {implicit_output}")
+
+        rebase_mount = tmp / "selector-rebase-mount"
+        native_rebase_source = tmp / "native-rebase-source.ftl"
+        expect_success(
+            cli,
+            "--no-compression",
+            "--skip-texture-export",
+            obj_input,
+            native_rebase_source,
+        )
+        native_selector = "model:npc:native_texture_paths"
+        expect_success(
+            cli,
+            "--write-mount",
+            rebase_mount,
+            "--overwrite",
+            "--no-compression",
+            "--skip-texture-export",
+            native_rebase_source,
+            native_selector,
+        )
+        native_selector_ftl = (
+            rebase_mount
+            / "game"
+            / "graph"
+            / "obj3d"
+            / "interactive"
+            / "npc"
+            / "native_texture_paths"
+            / "native_texture_paths.ftl"
+        )
+        if b"graph/obj3d/textures/" in native_selector_ftl.read_bytes():
+            raise AssertionError("direct native Model selector output must preserve texture identities")
+
+        intermediate_selector = "model:npc:intermediate_texture_paths"
+        expect_success(
+            cli,
+            "--write-mount",
+            rebase_mount,
+            "--overwrite",
+            "--no-compression",
+            "--skip-texture-export",
+            "--scale",
+            "1",
+            native_rebase_source,
+            intermediate_selector,
+        )
+        intermediate_selector_ftl = (
+            rebase_mount
+            / "game"
+            / "graph"
+            / "obj3d"
+            / "interactive"
+            / "npc"
+            / "intermediate_texture_paths"
+            / "intermediate_texture_paths.ftl"
+        )
+        if b"graph/obj3d/textures/" not in intermediate_selector_ftl.read_bytes():
+            raise AssertionError("intermediate Model selector output must use the canonical texture directory")
+
+        model_sound_game_mount = tmp / "model-sound-game-rebase"
+        expect_success(
+            cli,
+            "--write-mount",
+            model_sound_game_mount,
+            "--skip-texture-export",
+            "--scale",
+            "1",
+            selected_sound_glb,
+            "model:npc:sound_game_rebase",
+        )
+        model_sound_game_teas = list(model_sound_game_mount.rglob("*.tea"))
+        if len(model_sound_game_teas) != 1 or not (model_sound_game_mount / "sfx" / "contract.wav").is_file():
+            raise AssertionError("loose Model Animation input must use the canonical selector Sound directory")
+
+        standalone_game_mount = tmp / "standalone-game-rebase"
+        expect_success(
+            cli,
+            "--write-mount",
+            standalone_game_mount,
+            "--rotate",
+            "0",
+            "0",
+            "0",
+            referenced_sound_animation,
+            "anim:fix_inter:standalone_game_rebase",
+        )
+        standalone_game_teas = list(standalone_game_mount.rglob("*.tea"))
+        if len(standalone_game_teas) != 1 or not (standalone_game_mount / "sfx" / "contract.wav").is_file():
+            raise AssertionError("loose standalone Animation input must use the canonical selector Sound directory")
+
+        standalone_same_game_mount = tmp / "standalone-same-game"
+        expect_success(
+            cli,
+            "--mount",
+            selector_model_mount,
+            "--write-mount",
+            standalone_same_game_mount,
+            "--skip-sound-export",
+            "--rotate",
+            "0",
+            "0",
+            "0",
+            "anim:fix_inter:sound",
+            "anim:fix_inter:sound_copy",
+        )
+        standalone_same_game_teas = list(standalone_same_game_mount.rglob("*.tea"))
+        if len(standalone_same_game_teas) != 1:
+            raise AssertionError("standalone Game selector output did not write exactly one Animation")
+        standalone_same_game_bytes = standalone_same_game_teas[0].read_bytes()
+        if b"sfx/contract.wav" in standalone_same_game_bytes or b"sounds/contract.wav" in standalone_same_game_bytes:
+            raise AssertionError("standalone Game selector to Game selector must preserve Sound paths")
+
+        override_selector = "model:npc:override_texture_paths"
+        expect_success(
+            cli,
+            "--write-mount",
+            rebase_mount,
+            "--overwrite",
+            "--no-compression",
+            "--skip-texture-export",
+            "--rebase-textures",
+            "custom/textures",
+            MODEL_FTL,
+            override_selector,
+        )
+        override_selector_ftl = (
+            rebase_mount
+            / "game"
+            / "graph"
+            / "obj3d"
+            / "interactive"
+            / "npc"
+            / "override_texture_paths"
+            / "override_texture_paths.ftl"
+        )
+        if b"custom/textures/" not in override_selector_ftl.read_bytes():
+            raise AssertionError("explicit texture rebase must override the Model selector default")
+
+        ordinary_output = tmp / "ordinary-texture-paths.ftl"
+        expect_success(
+            cli,
+            "--overwrite",
+            "--no-compression",
+            "--skip-texture-export",
+            "--scale",
+            "1",
+            native_rebase_source,
+            ordinary_output,
+        )
+        if b"graph/obj3d/textures/" in ordinary_output.read_bytes():
+            raise AssertionError("ordinary intermediate Model output must not rebase texture identities")
+
+        level_rebase_mount = tmp / "level-selector-rebase-mount"
+        expect_success(
+            cli,
+            "--write-mount",
+            level_rebase_mount,
+            "--overwrite",
+            "--no-compression",
+            "--skip-texture-export",
+            LEVEL_GLB,
+            "level:43",
+        )
+        level_selector_fts = level_rebase_mount / "game" / "graph" / "levels" / "level43" / "fast.fts"
+        if b"graph/obj3d/textures/" not in level_selector_fts.read_bytes():
+            raise AssertionError("intermediate Level selector output must use the canonical texture directory")
 
         explicit_empty_mount = tmp / "explicit-empty-mount"
         explicit_empty_mount.mkdir()
@@ -1031,6 +2586,8 @@ def main() -> int:
             first_mount,
             "--mount",
             second_mount,
+            "--write-mount",
+            first_mount,
             "--overwrite",
             MODEL_FTL,
             ANIMATION_TEA,
@@ -1041,19 +2598,21 @@ def main() -> int:
             raise AssertionError(f"expected mounted Model output at {written_model}")
         if (second_mount / "game" / "graph" / "obj3d" / "interactive" / "npc" / "written" / "written.ftl").exists():
             raise AssertionError("mounted Model output must not fall through to the second mount")
-        written_animation = first_mount / "graph" / "obj3d" / "anims" / "npc" / "CharacterArmature_Idle.tea"
-        if not written_animation.is_file():
-            raise AssertionError(f"expected npc Model animation output at {written_animation}")
+        written_animation_directory = first_mount / "graph" / "obj3d" / "anims" / "npc"
+        written_animations = tuple(written_animation_directory.glob("*.tea"))
+        if len(written_animations) != 1:
+            raise AssertionError(f"expected one npc Model animation output in {written_animation_directory}")
+        animation_output_stem = written_animations[0].stem
 
-        collision_primary = tmp / "CharacterArmature_Idle.json"
+        collision_primary = tmp / f"{animation_output_stem}.json"
         expect_success(cli, "--overwrite", MODEL_FTL, ANIMATION_TEA, collision_primary)
-        collision_sidecar = tmp / "CharacterArmature_Idle2.json"
+        collision_sidecar = tmp / f"{animation_output_stem}2.json"
         if not collision_primary.is_file() or not collision_sidecar.is_file():
             raise AssertionError("model JSON and animation JSON targets must be disambiguated before writing")
 
         expect_success(
             cli,
-            "--mount",
+            "--write-mount",
             first_mount,
             "--overwrite",
             MODEL_FTL,
@@ -1073,7 +2632,7 @@ def main() -> int:
         )
         if not written_item.is_file():
             raise AssertionError(f"expected mounted item Model output at {written_item}")
-        fix_inter_animation = first_mount / "graph" / "obj3d" / "anims" / "fix_inter" / "CharacterArmature_Idle.tea"
+        fix_inter_animation = first_mount / "graph" / "obj3d" / "anims" / "fix_inter" / f"{animation_output_stem}.tea"
         if not fix_inter_animation.is_file():
             raise AssertionError(f"expected non-npc Model animation output at {fix_inter_animation}")
 
@@ -1111,24 +2670,36 @@ def main() -> int:
             first_mount,
             "--mount",
             second_mount,
+            "--write-mount",
+            first_mount,
             "--overwrite",
             ANIMATION_TEA,
             "anim:fix_inter:provided",
         )
-        named_animation = first_mount / "graph" / "obj3d" / "anims" / "fix_inter" / "CharacterArmature_Idle.tea"
+        named_animation = first_mount / "graph" / "obj3d" / "anims" / "fix_inter" / f"{animation_output_stem}.tea"
         if not named_animation.is_file():
             raise AssertionError(f"native TEA output must use the animation name: {named_animation}")
 
         if LEVEL_BUNDLE_AVAILABLE:
             level_input_mount = tmp / "level-input-mount"
-            mounted_level = level_input_mount / "graph" / "levels" / "level1"
+            mounted_level = level_input_mount / "graph" / "levels" / LEVEL_BUNDLE_NAME
             mounted_level.mkdir(parents=True)
-            mounted_game_level = level_input_mount / "game" / "graph" / "levels" / "level1"
+            mounted_game_level = level_input_mount / "game" / "graph" / "levels" / LEVEL_BUNDLE_NAME
             mounted_game_level.mkdir(parents=True)
-            shutil.copyfile(LEVEL_DLF, mounted_level / "level1.dlf")
-            shutil.copyfile(LEVEL_LLF, mounted_level / "level1.llf")
+            shutil.copyfile(LEVEL_DLF, mounted_level / f"{LEVEL_BUNDLE_NAME}.dlf")
+            shutil.copyfile(LEVEL_LLF, mounted_level / f"{LEVEL_BUNDLE_NAME}.llf")
             shutil.copyfile(LEVEL_BUNDLE_FTS, mounted_game_level / "fast.fts")
-            expect_success(cli, "--mount", level_input_mount, "level:1", tmp / "mounted-level-input.glb")
+            expect_success(
+                cli,
+                "--mount",
+                level_input_mount,
+                LEVEL_BUNDLE_SELECTOR,
+                tmp / "mounted-level-input.glb",
+            )
+            if not any(
+                path.startswith("textures/") for path in glb_image_paths(tmp / "mounted-level-input.glb")
+            ):
+                raise AssertionError("Level selector input must use the local authoring texture directory")
 
             expect_success(
                 cli,
@@ -1136,6 +2707,8 @@ def main() -> int:
                 first_mount,
                 "--mount",
                 second_mount,
+                "--write-mount",
+                first_mount,
                 "--overwrite",
                 LEVEL_BUNDLE_FTS,
                 LEVEL_LLF,
@@ -1156,7 +2729,7 @@ def main() -> int:
             unmounted_level_glb = tmp / "unmounted-level.glb"
             expect_success_contains(
                 cli,
-                "Level texture images were not found in the flat input folder",
+                "Level texture image not found:",
                 LEVEL_FTS,
                 unmounted_level_glb,
             )
@@ -1164,14 +2737,16 @@ def main() -> int:
             no_read_mount = tmp / "no-read-mount"
             expect_success_contains(
                 cli,
-                "Level texture images were not found in the flat input folder",
+                "Referenced Level texture image was not found because there are no readable mount folders:",
                 "--mount",
                 no_read_mount,
                 LEVEL_FTS,
                 tmp / "no-read-mount.glb",
             )
 
-        expect_success_contains(cli, "[INFO/PISTORIS]", "--log-level", "In", MODEL_FTL, tmp / "log-info.json")
+        log_result = run(cli, "--log-level", "In", MODEL_FTL, tmp / "log-info.json")
+        if log_result.returncode != 0 or "[INFO/PISTORIS]" not in log_result.stderr or "\x1b" in log_result.stderr:
+            raise AssertionError(f"captured logs must remain plain text\n{log_result.stdout}{log_result.stderr}")
         expect_success_not_contains(cli, "[INFO/PISTORIS]", "--log-level", "w", MODEL_FTL, tmp / "log-warn.json")
 
         dry_parent = tmp / "missing-parent"
@@ -1192,38 +2767,11 @@ def main() -> int:
         if eof_prompt_out.read_text(encoding="utf-8") != "keep":
             raise AssertionError("EOF at the overwrite prompt must skip the existing output")
 
-        expect_success(cli, "--help", "level", "--foo")
-        expect_success_contains(
-            cli,
-            "CLI conventions:",
-            "--help",
-            "lev",
-            "c",
-        )
-        expect_success_contains(
-            cli,
-            "Level GLB examples: docs/AUTHORING_GUIDE.md.",
-            "--help",
-            "level",
-            "conventions",
-        )
-        expect_success_contains(
-            cli,
-            "Exact Level GLB naming: docs/AUTHORING_REFERENCE.md.",
-            "--help",
-            "level",
-            "conventions",
-        )
-        expect_success_contains(
-            cli,
-            "Level outputs:           GLB, JSON, loose FTS bundle, DLF game-resource bundle",
-            "--help",
-        )
-        expect_success(cli, "--k", "a", ANIMATION_TEA, out_json, "--pre", "--overwrite")
+        expect_success(cli, "--ki", "ani", ANIMATION_TEA, out_json, "--pret", "--overwrite")
         expect_success(
             cli,
             "--kind",
-            "a",
+            "ani",
             ANIMATION_TEA,
             tmp / "rotated.json",
             "--rotate",

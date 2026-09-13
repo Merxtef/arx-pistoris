@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/runtime/types.h"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
 #include "modules/navigation/surface/internal.h"
 #include "modules/navigation/traversal.h"
 #include "utils/log.h"
-#include "utils/math/geometry.h"
+#include "utils/math/geometry_algorithms.h"
 
 #include <algorithm>
 #include <array>
@@ -18,9 +18,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <limits>
-#include <map>
+#include <numeric>
 #include <optional>
+#include <span>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,12 +45,31 @@ struct EdgeKey {
 struct TriangleKey {
   std::array<std::uint32_t, 3> vertices{};
 
-  friend bool operator<(const TriangleKey& a, const TriangleKey& b) { return a.vertices < b.vertices; }
+  bool operator==(const TriangleKey& other) const = default;
 };
 
-struct BoundaryTopology {  // NOLINT(bugprone-exception-escape): MSVC debug std::map move allocates its sentinel
-  std::vector<std::vector<std::uint32_t>> loops;
-  std::map<TriangleKey, bool> triangle_keys;
+struct TriangleKeyHash {
+  std::size_t operator()(const TriangleKey& key) const noexcept {
+    std::size_t seed = 0;
+    for (std::uint32_t vertex : key.vertices)
+      seed ^= std::hash<std::uint32_t>{}(vertex) + 0x9e3779b9U + (seed << 6U) + (seed >> 2U);
+    return seed;
+  }
+};
+
+struct BoundaryNeighbor {
+  std::uint32_t vertex = 0;
+  std::size_t edge = 0;
+};
+
+struct BoundaryTopology {
+  std::vector<EdgeKey> all_edges;
+  std::vector<EdgeKey> edges;
+  std::vector<std::size_t> offsets;
+  std::vector<std::size_t> write_offsets;
+  std::vector<BoundaryNeighbor> neighbors;
+  std::vector<std::uint8_t> visited;
+  std::unordered_set<TriangleKey, TriangleKeyHash> triangle_keys;
 };
 
 EdgeKey edgeKey(std::uint32_t a, std::uint32_t b) {
@@ -71,85 +93,99 @@ double signedLoopAreaXz(const NavSurface& surface, const std::vector<std::uint32
   return area * 0.5;
 }
 
-bool boundaryEdgeVisited(const std::map<EdgeKey, bool>& visited, std::uint32_t a, std::uint32_t b) {
-  auto it = visited.find(edgeKey(a, b));
-  return it == visited.end() || it->second;
+std::span<const BoundaryNeighbor> boundaryNeighbors(const BoundaryTopology& topology, std::uint32_t vertex) {
+  if (vertex + 1U >= topology.offsets.size()) return {};
+  const std::size_t first = topology.offsets[vertex];
+  return std::span<const BoundaryNeighbor>(topology.neighbors).subspan(first, topology.offsets[vertex + 1U] - first);
 }
 
-BoundaryTopology buildBoundaryTopology(const NavSurface& surface) {
-  BoundaryTopology topology;
-  std::map<EdgeKey, std::uint32_t> edge_counts;
+void buildBoundaryTopology(const NavSurface& surface, BoundaryTopology& topology) {
+  topology.all_edges.clear();
+  topology.edges.clear();
+  topology.offsets.clear();
+  topology.write_offsets.clear();
+  topology.neighbors.clear();
+  topology.visited.clear();
+  topology.triangle_keys.clear();
+  topology.all_edges.reserve(surface.triangles.size() * 3U);
+  topology.edges.reserve(surface.triangles.size() * 3U);
+  topology.triangle_keys.reserve(surface.triangles.size());
   for (const NavSurfaceTriangle& triangle : surface.triangles) {
     std::uint32_t a = triangle.vertices[0];
     std::uint32_t b = triangle.vertices[1];
     std::uint32_t c = triangle.vertices[2];
-    ++edge_counts[edgeKey(a, b)];
-    ++edge_counts[edgeKey(b, c)];
-    ++edge_counts[edgeKey(c, a)];
-    topology.triangle_keys.emplace(triangleKey(a, b, c), true);
+    topology.all_edges.push_back(edgeKey(a, b));
+    topology.all_edges.push_back(edgeKey(b, c));
+    topology.all_edges.push_back(edgeKey(c, a));
+    topology.triangle_keys.emplace(triangleKey(a, b, c));
   }
 
-  std::map<std::uint32_t, std::vector<std::uint32_t>> boundary_neighbors;
-  std::map<EdgeKey, bool> visited_edges;
-  for (const auto& [edge, count] : edge_counts) {
-    if (count != 1) continue;
-    boundary_neighbors[edge.first].push_back(edge.second);
-    boundary_neighbors[edge.second].push_back(edge.first);
-    visited_edges.emplace(edge, false);
+  std::sort(topology.all_edges.begin(), topology.all_edges.end());
+  for (std::size_t first = 0; first < topology.all_edges.size();) {
+    std::size_t last = first + 1U;
+    while (last < topology.all_edges.size() && !(topology.all_edges[first] < topology.all_edges[last]) &&
+           !(topology.all_edges[last] < topology.all_edges[first]))
+      ++last;
+    if (last == first + 1U && topology.all_edges[first].first < surface.vertices.size() &&
+        topology.all_edges[first].second < surface.vertices.size())
+      topology.edges.push_back(topology.all_edges[first]);
+    first = last;
   }
 
-  for (auto& [vertex, neighbors] : boundary_neighbors) {
-    (void)vertex;
-    std::sort(neighbors.begin(), neighbors.end());
-    neighbors.erase(std::unique(neighbors.begin(), neighbors.end()), neighbors.end());
+  topology.offsets.assign(surface.vertices.size() + 1U, 0);
+  for (const EdgeKey& edge : topology.edges) {
+    ++topology.offsets[edge.first + 1U];
+    ++topology.offsets[edge.second + 1U];
   }
+  std::partial_sum(topology.offsets.begin(), topology.offsets.end(), topology.offsets.begin());
+  topology.neighbors.resize(topology.offsets.back());
+  topology.write_offsets.assign(topology.offsets.begin(), topology.offsets.end() - 1);
+  for (std::size_t edge_index = 0; edge_index < topology.edges.size(); ++edge_index) {
+    const EdgeKey& edge = topology.edges[edge_index];
+    topology.neighbors[topology.write_offsets[edge.first]++] = {edge.second, edge_index};
+    topology.neighbors[topology.write_offsets[edge.second]++] = {edge.first, edge_index};
+  }
+  topology.visited.assign(topology.edges.size(), 0);
+}
 
-  for (auto& [start_edge, visited] : visited_edges) {
-    if (visited) continue;
-    std::uint32_t start = start_edge.first;
-    std::uint32_t prev = start_edge.first;
-    std::uint32_t cur = start_edge.second;
-    std::vector<std::uint32_t> loop{start};
-    visited = true;
-    bool valid = true;
-    for (;;) {
-      loop.push_back(cur);
-      auto neighbors_it = boundary_neighbors.find(cur);
-      if (neighbors_it == boundary_neighbors.end() || neighbors_it->second.size() != 2) {
-        valid = false;
-        break;
-      }
-
-      std::uint32_t next = neighbors_it->second[0] == prev ? neighbors_it->second[1] : neighbors_it->second[0];
-      if (next == start) {
-        visited_edges[edgeKey(cur, next)] = true;
-        break;
-      }
-      if (boundaryEdgeVisited(visited_edges, cur, next)) {
-        valid = false;
-        break;
-      }
-
-      visited_edges[edgeKey(cur, next)] = true;
-      prev = cur;
-      cur = next;
-      if (loop.size() > visited_edges.size() + 1) {
-        valid = false;
-        break;
-      }
+bool traceBoundaryLoop(BoundaryTopology& topology, std::size_t start_edge_index, std::vector<std::uint32_t>& loop) {
+  loop.clear();
+  if (start_edge_index >= topology.edges.size() || topology.visited[start_edge_index] != 0) return false;
+  const EdgeKey& start_edge = topology.edges[start_edge_index];
+  const std::uint32_t start = start_edge.first;
+  std::uint32_t current = start_edge.second;
+  std::size_t current_edge = start_edge_index;
+  loop.push_back(start);
+  topology.visited[current_edge] = 1;
+  for (;;) {
+    loop.push_back(current);
+    const std::span<const BoundaryNeighbor> neighbors = boundaryNeighbors(topology, current);
+    if (neighbors.size() != 2U) return false;
+    const BoundaryNeighbor* next = nullptr;
+    if (neighbors[0].edge == current_edge) {
+      next = &neighbors[1];
+    } else if (neighbors[1].edge == current_edge) {
+      next = &neighbors[0];
+    } else {
+      return false;
     }
-
-    if (valid && loop.size() >= 3) topology.loops.push_back(std::move(loop));
+    if (next->vertex == start) {
+      topology.visited[next->edge] = 1;
+      return loop.size() >= 3U;
+    }
+    if (topology.visited[next->edge] != 0) return false;
+    topology.visited[next->edge] = 1;
+    current = next->vertex;
+    current_edge = next->edge;
+    if (loop.size() > topology.edges.size() + 1U) return false;
   }
-
-  return topology;
 }
 
 bool validRepairShortcut(const geometry::SurfaceSupportIndex& index,
                          const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                         const SurfaceSupportFilter& final_support_filter, const StaticAnchorTraversal& traversal,
-                         const NavSurfaceGenOptions& options, const ArxVector3& a, const ArxVector3& b,
-                         const ArxVector3& c) {
+                         const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                         const NavSurfaceGenerationOptions& options, const ArxVector3& a, const ArxVector3& b,
+                         const ArxVector3& c, std::vector<geometry::SurfaceSupportHit>& scratch) {
   ArxVector3 support_a = navigationSupportPosition(a, options.clearance);
   ArxVector3 support_b = navigationSupportPosition(b, options.clearance);
   ArxVector3 support_c = navigationSupportPosition(c, options.clearance);
@@ -176,7 +212,8 @@ bool validRepairShortcut(const geometry::SurfaceSupportIndex& index,
     if (inside_len <= std::numeric_limits<float>::epsilon()) return false;
     x += inside.x / inside_len * offset;
     z += inside.z / inside_len * offset;
-    if (!validateSupportPoint(index, geometry_support, geometry, final_support_filter, traversal, options, x, z, y))
+    if (!validateSupportPoint(
+            index, geometry_support, geometry, final_support_filter, traversal, options, x, z, y, scratch))
       return false;
   }
   return true;
@@ -184,31 +221,37 @@ bool validRepairShortcut(const geometry::SurfaceSupportIndex& index,
 
 bool validRepairTriangle(const geometry::SurfaceSupportIndex& index,
                          const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                         const SurfaceSupportFilter& final_support_filter, const StaticAnchorTraversal& traversal,
-                         const NavSurfaceGenOptions& options, const NavSurface& surface,
-                         const BoundaryTopology& topology, std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+                         const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                         const NavSurfaceGenerationOptions& options, const NavSurface& surface,
+                         const BoundaryTopology& topology, std::uint32_t a, std::uint32_t b, std::uint32_t c,
+                         std::vector<geometry::SurfaceSupportHit>& scratch) {
   if (a == b || a == c || b == c) return false;
-  if (topology.triangle_keys.find(triangleKey(a, b, c)) != topology.triangle_keys.end()) return false;
+  if (topology.triangle_keys.contains(triangleKey(a, b, c))) return false;
   const ArxVector3& pa = surface.vertices[a].position;
   const ArxVector3& pb = surface.vertices[b].position;
   const ArxVector3& pc = surface.vertices[c].position;
   if (std::abs(math::projectedAreaXz2(pa, pb, pc)) <= kSurfaceTriangleAreaEpsilon) return false;
-  return validRepairShortcut(index, geometry_support, geometry, final_support_filter, traversal, options, pa, pb, pc);
+  return validRepairShortcut(
+      index, geometry_support, geometry, final_support_filter, traversal, options, pa, pb, pc, scratch);
 }
 
 }  // namespace
 
 std::size_t repairNavSurfaceEdges(const geometry::SurfaceSupportIndex& index,
                                   const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                                  const SurfaceSupportFilter& final_support_filter,
-                                  const StaticAnchorTraversal& traversal, const NavSurfaceGenOptions& options,
-                                  NavSurface& surface) {
+                                  const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                                  const NavSurfaceGenerationOptions& options, NavSurface& surface) {
   std::size_t total_added = 0;
   std::size_t total_considered = 0;
+  std::vector<geometry::SurfaceSupportHit> support_hits;
+  std::vector<std::uint32_t> loop;
+  BoundaryTopology topology;
+  std::vector<NavSurfaceTriangle> additions;
   for (int pass = 0; pass < kNavRepairMaxPasses; ++pass) {
-    BoundaryTopology topology = buildBoundaryTopology(surface);
-    std::vector<NavSurfaceTriangle> additions;
-    for (const std::vector<std::uint32_t>& loop : topology.loops) {
+    buildBoundaryTopology(surface, topology);
+    additions.clear();
+    for (std::size_t edge = 0; edge < topology.edges.size(); ++edge) {
+      if (!traceBoundaryLoop(topology, edge, loop)) continue;
       if (loop.size() < 4) continue;
       double loop_area = signedLoopAreaXz(surface, loop);
       if (std::abs(loop_area) <= kSurfaceTriangleAreaEpsilon) continue;
@@ -231,13 +274,14 @@ std::size_t repairNavSurfaceEdges(const geometry::SurfaceSupportIndex& index,
                                  topology,
                                  a,
                                  b,
-                                 c))
+                                 c,
+                                 support_hits))
           continue;
 
         std::optional<NavSurfaceTriangle> triangle = makeNavigationTriangle(surface, a, b, c);
         if (!triangle.has_value()) continue;
         additions.push_back(*triangle);
-        topology.triangle_keys.emplace(triangleKey(a, b, c), true);
+        topology.triangle_keys.emplace(triangleKey(a, b, c));
       }
     }
 
@@ -247,9 +291,9 @@ std::size_t repairNavSurfaceEdges(const geometry::SurfaceSupportIndex& index,
   }
 
   log(ARX_LOG_DEBUG,
-      std::format("Level navigation surface boundary repair: considered {} dent triangle(s), added {} triangle(s)",
-                  total_considered,
-                  total_added));
+      "Navigation surface boundary repair: considered {} dent triangle(s), added {} triangle(s)",
+      total_considered,
+      total_added);
   return total_added;
 }
 

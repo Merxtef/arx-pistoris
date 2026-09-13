@@ -51,7 +51,7 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -140,4 +140,7 @@ struct Data {
 };
 
 }  // namespace dlf
+
+using Dlf = dlf::Data;
+
 }  // namespace pistoris

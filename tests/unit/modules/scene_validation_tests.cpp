@@ -3,10 +3,12 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/scene.h"
 #include "utils/math/quat.h"
+#include "utils/math/rotation.h"
 
 #include <limits>
 #include <string>
@@ -20,7 +22,6 @@ namespace {
 SceneData makeScene() {
   SceneData scene;
   scene.player_spawn = PlayerSpawn{{1.0f, 2.0f, 3.0f}, math::angleToQuat({4.0f, 5.0f, 6.0f})};
-  scene.player_spawn_is_fallback = false;
   scene.entities.push_back({"graph/obj3d/interactive/items/torch", -1, {1.0f, 2.0f, 3.0f}, {}, "torch"});
   Fog fog;
   fog.position = {1.0f, 2.0f, 3.0f};
@@ -43,7 +44,8 @@ SceneData makeScene() {
 TEST_SUITE("scene::validation") {
   TEST_CASE("Accepts valid scene data") {
     SceneData scene = makeScene();
-    CHECK(scene::validatePlayerSpawn(scene.player_spawn) == scene::Error::kNone);
+    REQUIRE(scene.player_spawn.has_value());
+    CHECK(scene::validatePlayerSpawn(scene.player_spawn.value()) == scene::Error::kNone);
     CHECK(scene::validateEntities(scene.entities) == scene::Error::kNone);
     CHECK(scene::validateFogs(scene.fogs) == scene::Error::kNone);
     CHECK(scene::validateZones(scene.zones) == scene::Error::kNone);
@@ -53,28 +55,31 @@ TEST_SUITE("scene::validation") {
 
   TEST_CASE("Rejects bad player spawn") {
     SceneData scene = makeScene();
-    scene.player_spawn.rotation.x = std::numeric_limits<float>::infinity();
+    scene.player_spawn.value().rotation.x = std::numeric_limits<float>::infinity();
     CHECK(scene::validate(scene) == scene::Error::kBadPlayerSpawn);
 
     scene = makeScene();
-    scene.player_spawn.rotation.w = 2.0f;
-    scene.player_spawn.rotation.x = 0.0f;
-    scene.player_spawn.rotation.y = 0.0f;
-    scene.player_spawn.rotation.z = 0.0f;
+    scene.player_spawn.value().rotation.w = 2.0f;
+    scene.player_spawn.value().rotation.x = 0.0f;
+    scene.player_spawn.value().rotation.y = 0.0f;
+    scene.player_spawn.value().rotation.z = 0.0f;
     CHECK(scene::validate(scene) == scene::Error::kBadPlayerSpawn);
+  }
 
-    scene = makeScene();
-    scene.player_spawn_is_fallback = true;
-    CHECK(scene::validate(scene) == scene::Error::kBadPlayerSpawn);
+  TEST_CASE("Accepts absent player spawn") {
+    SceneData scene = makeScene();
+    scene.player_spawn.reset();
+    CHECK(scene::validatePlayerSpawn(scene) == scene::Error::kNone);
+    CHECK(scene::validate(scene) == scene::Error::kNone);
   }
 
   TEST_CASE("Normalizes valid rotations and rejects near-zero rotations") {
     ArxQuat rotation{2.0f, 0.0f, 0.0f, 0.0f};
-    CHECK(scene::normalizeRotation(rotation));
+    CHECK(math::normalizeRotation(rotation));
     CHECK(rotation.w == doctest::Approx(1.0f));
 
     rotation = {1.0e-7f, 0.0f, 0.0f, 0.0f};
-    CHECK_FALSE(scene::normalizeRotation(rotation));
+    CHECK_FALSE(math::normalizeRotation(rotation));
   }
 
   TEST_CASE("Rejects bad entities") {
@@ -92,6 +97,10 @@ TEST_SUITE("scene::validation") {
 
     scene = makeScene();
     scene.entities[0].class_path = "graph/obj3d/interactive/items/torch__lit";
+    CHECK(scene::validateEntity(scene.entities[0]) == scene::Error::kNone);
+
+    scene = makeScene();
+    scene.entities[0].class_path = "graph/obj3d/interactive/items/torch?lit";
     CHECK(scene::validateEntity(scene.entities[0]) == scene::Error::kBadEntityClassPath);
 
     scene = makeScene();
@@ -136,7 +145,7 @@ TEST_SUITE("scene::validation") {
     add("graph/obj3d/interactive/fix_inter/_base/_base");
     add("graph/obj3d/interactive/fix_inter/marker/marker", "human_base");
 
-    scene::makeEntityNamesUnique(scene.entities);
+    CHECK(scene::repairEntityNames(scene.entities) == 6);
     REQUIRE(scene.entities.size() == 8);
     CHECK(scene.entities[0].name == "spider");
     CHECK(scene.entities[1].name == "spider_2");
@@ -144,7 +153,7 @@ TEST_SUITE("scene::validation") {
     CHECK(scene.entities[3].name == "human");
     CHECK(scene.entities[4].name == "human_1");
     CHECK(scene.entities[5].name == "human_2");
-    CHECK(scene.entities[6].name == "_base");
+    CHECK(scene.entities[6].name == "base");
     CHECK(scene.entities[7].name == "human_base");
     CHECK(scene::validateEntities(scene.entities) == scene::Error::kNone);
   }
@@ -178,14 +187,14 @@ TEST_SUITE("scene::validation") {
     scene.fogs.push_back(scene.fogs.front());
 
     CHECK(scene::validateFogs(scene.fogs) == scene::Error::kDuplicateFogName);
-    CHECK(scene::makeFogNamesUnique(scene.fogs) == 1);
+    CHECK(scene::repairFogNames(scene.fogs) == 1);
     CHECK(scene.fogs[0].name == "mist");
     CHECK(scene.fogs[1].name == "mist_1");
     CHECK(scene::validateFogs(scene.fogs) == scene::Error::kNone);
 
     scene = makeScene();
     scene.fogs.push_back(scene.fogs.front());
-    CHECK(scene::makeFogNamesUnique(scene.fogs) == 0);
+    CHECK(scene::repairFogNames(scene.fogs) == 0);
     CHECK(scene::validateFogs(scene.fogs) == scene::Error::kNone);
   }
 
@@ -227,25 +236,32 @@ TEST_SUITE("scene::validation") {
     CHECK(scene::validateZone(scene.zones[0]) == scene::Error::kBadZoneName);
 
     scene = makeScene();
-    scene.zones[0].ambiance->name = "ambient__cave";
+    scene.zones[0].ambiance->name = "ambient__cave.v2";
+    CHECK(scene::validateZone(scene.zones[0]) == scene::Error::kNone);
+
+    scene = makeScene();
+    scene.zones[0].ambiance->name = "ambient?cave";
     CHECK(scene::validateZone(scene.zones[0]) == scene::Error::kBadZoneAmbiance);
   }
 
-  TEST_CASE("Rejects and repairs case-insensitive duplicate zone names") {
+  TEST_CASE("Repairs zone names to unique lowercase identifiers") {
     SceneData scene = makeScene();
     scene.zones.push_back(scene.zones.front());
     scene.zones.back().name = "ZONE";
 
-    CHECK(scene::validateZones(scene.zones) == scene::Error::kDuplicateZoneName);
-    CHECK(scene::makeZoneNamesUnique(scene.zones) == 1);
+    CHECK(scene::validateZones(scene.zones) == scene::Error::kBadZoneName);
+    CHECK(scene::repairZoneNames(scene.zones) == 1);
     CHECK(scene.zones[0].name == "zone");
-    CHECK(scene.zones[1].name == "ZONE_1");
+    CHECK(scene.zones[1].name == "zone_1");
     CHECK(scene::validateZones(scene.zones) == scene::Error::kNone);
+
+    scene.zones[1].name = "zone";
+    CHECK(scene::validateZones(scene.zones) == scene::Error::kDuplicateZoneName);
   }
 
   TEST_CASE("Zone and path names use independent namespaces") {
     SceneData scene = makeScene();
-    scene.paths[0].name = "ZONE";
+    scene.paths[0].name = "zone";
 
     CHECK(scene::validate(scene) == scene::Error::kNone);
   }
@@ -264,7 +280,7 @@ TEST_SUITE("scene::validation") {
     CHECK(scene::validate(scene) == scene::Error::kBadPathFirstNode);
 
     scene = makeScene();
-    scene.paths[0].nodes.back().type = static_cast<PathNodeType>(10);
+    scene.paths[0].nodes.back().type = static_cast<PathNodeType>(2);
     CHECK(scene::validate(scene) == scene::Error::kBadPathNodeType);
 
     scene = makeScene();
@@ -289,9 +305,9 @@ TEST_SUITE("scene::validation") {
       scene.paths.push_back(path);
     }
 
-    CHECK(scene::makePathNamesUnique(scene.paths) == 2);
+    CHECK(scene::repairPathNames(scene.paths) == 3);
     REQUIRE(scene.paths.size() == 5);
-    CHECK(scene.paths[0].name == "patrol_");
+    CHECK(scene.paths[0].name == "patrol");
     CHECK(scene.paths[1].name == "patrol_1");
     CHECK(scene.paths[2].name == "patrol_2");
     CHECK(scene.paths[3].name == "guard");
@@ -299,15 +315,47 @@ TEST_SUITE("scene::validation") {
     CHECK(scene::validatePaths(scene.paths) == scene::Error::kNone);
   }
 
-  TEST_CASE("Path uniqueness is case insensitive") {
+  TEST_CASE("Repairs path names to unique lowercase identifiers") {
     SceneData scene = makeScene();
     scene.paths.push_back(scene.paths.front());
     scene.paths.back().name = "PATROL";
 
-    CHECK(scene::validatePaths(scene.paths) == scene::Error::kDuplicatePathName);
-    CHECK(scene::makePathNamesUnique(scene.paths) == 1);
+    CHECK(scene::validatePaths(scene.paths) == scene::Error::kBadPathName);
+    CHECK(scene::repairPathNames(scene.paths) == 1);
     CHECK(scene.paths[0].name == "patrol");
-    CHECK(scene.paths[1].name == "PATROL_1");
+    CHECK(scene.paths[1].name == "patrol_1");
     CHECK(scene::validatePaths(scene.paths) == scene::Error::kNone);
+
+    scene.paths[1].name = "patrol";
+    CHECK(scene::validatePaths(scene.paths) == scene::Error::kDuplicatePathName);
+  }
+
+  TEST_CASE("Zone and path edits publish lowercase names transactionally") {
+    SceneData scene = makeScene();
+    Zone zone = scene.zones.front();
+    zone.name = "UPPER-ZONE";
+    scene::repairZoneName(scene, zone);
+    REQUIRE(scene::validateZone(zone) == scene::Error::kNone);
+    const ZoneIndex zone_index = scene::addZone(scene, std::move(zone));
+    REQUIRE(zone_index == 1);
+    CHECK(scene.zones[zone_index].name == "upper-zone");
+
+    Zone invalid_zone = scene.zones.front();
+    invalid_zone.name = "bad__zone";
+    CHECK(scene::validateZone(invalid_zone) == scene::Error::kBadZoneName);
+    CHECK(scene.zones[zone_index].name == "upper-zone");
+
+    Path path = scene.paths.front();
+    path.name = "UPPER-PATH";
+    scene::repairPathName(scene, path);
+    REQUIRE(scene::validatePath(path) == scene::Error::kNone);
+    const PathIndex path_index = scene::addPath(scene, std::move(path));
+    REQUIRE(path_index == 1);
+    CHECK(scene.paths[path_index].name == "upper-path");
+
+    Path invalid_path = scene.paths.front();
+    invalid_path.name = "bad__path";
+    CHECK(scene::validatePath(invalid_path) == scene::Error::kBadPathName);
+    CHECK(scene.paths[path_index].name == "upper-path");
   }
 }

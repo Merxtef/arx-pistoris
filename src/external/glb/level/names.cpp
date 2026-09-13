@@ -28,6 +28,8 @@ bool isPlayerSpawnRootName(std::string_view name) { return singletonRootName(nam
 
 bool isNavSurfaceRootName(std::string_view name) { return singletonRootName(name, kNavSurfaceRootName); }
 
+bool isMinimapRootName(std::string_view name) { return singletonRootName(name, kMinimapRootName); }
+
 LevelObjectKind levelObjectKind(const cgltf_node& node) {
   const std::string_view name = node.name != nullptr ? node.name : "";
   if (isReservedRoomName(name)) return LevelObjectKind::kRoom;
@@ -40,6 +42,7 @@ LevelObjectKind levelObjectKind(const cgltf_node& node) {
   if (name.starts_with("arx_fog__")) return LevelObjectKind::kFog;
   if (name.starts_with("arx_path__")) return LevelObjectKind::kPath;
   if (singletonRootAttempt(name, kNavSurfaceRootName)) return LevelObjectKind::kNavSurface;
+  if (singletonRootAttempt(name, kMinimapRootName)) return LevelObjectKind::kMinimap;
   if (node.light != nullptr && node.light->type == cgltf_light_type_point) return LevelObjectKind::kLight;
   return LevelObjectKind::kNone;
 }

@@ -3,17 +3,20 @@
 
 #include "modules/navigation.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "../coordinates.h"
 #include "../palette.h"
+#include "api/status_boundary.h"
 #include "common.h"
-#include "modules/geometry.h"
+#include "level/data.h"
+#include "level/debug/access.h"
 #include "utils/log.h"
 
 #include <array>
@@ -83,42 +86,42 @@ void addNavigationDebugMarkerMesh(Builder& builder, Palette& palette, int parent
   addDebugMeshChildAtCenter(builder, parent, name, positions, indices, material, parent_origin);
 }
 
-void addNavSurfaceContextMesh(Builder& builder, Palette& palette, int parent, std::span<const ArxLevelVertex> vertices,
-                              std::span<const ArxLevelNavSurfaceTriangle> triangles) {
-  std::vector<pistoris::geometry::SurfaceSupportTriangle> faces;
-  faces.reserve(triangles.size());
-  for (const ArxLevelNavSurfaceTriangle& source : triangles) {
-    pistoris::geometry::SurfaceSupportTriangle face;
-    for (std::size_t i = 0; i < face.vertices.size(); ++i) face.vertices[i] = vertices[source.vertices[i]].position;
-    faces.push_back(face);
+void addNavSurfaceContextMesh(Builder& builder, Palette& palette, int parent, const NavSurface& surface) {
+  std::vector<GlbVec3> positions;
+  std::vector<std::uint32_t> indices;
+  positions.reserve(surface.triangles.size() * 3U);
+  indices.reserve(surface.triangles.size() * 3U);
+  for (const NavSurfaceTriangle& source : surface.triangles) {
+    const std::uint32_t base = static_cast<std::uint32_t>(positions.size());
+    for (NavSurfaceVertexIndex vertex : source.vertices) positions.push_back(toVec3(surface.vertices[vertex].position));
+    indices.insert(indices.end(), {base, base + 1U, base + 2U});
   }
   int material = palette.material(PaletteItem::kNavigationSurface);
-  addSurfaceSupportMeshChild(builder, parent, "navigation_debug_surface_context", faces, material);
+  addDebugMeshChild(builder, parent, "navigation_debug_surface_context", positions, indices, material);
 }
 
-void addAnchorContextNodes(Builder& builder, Palette& palette, int parent, std::span<const ArxLevelAnchor> anchors) {
+void addAnchorContextNodes(Builder& builder, Palette& palette, int parent, std::span<const Anchor> anchors) {
   if (anchors.empty()) return;
   std::vector<GlbVec3> positions;
   std::vector<std::uint32_t> indices;
   positions.reserve(anchors.size() * 6);
   indices.reserve(anchors.size() * 24);
-  for (const ArxLevelAnchor& anchor : anchors) {
+  for (const Anchor& anchor : anchors) {
     appendMarkerMeshData(anchor.position, 8.0f, positions, indices);
   }
   int material = palette.material(PaletteItem::kAnchor);
   addDebugMeshChildAtCenter(builder, parent, "navigation_debug_anchors", positions, indices, material, {});
 }
 
-void addAnchorConnectionContextMesh(Builder& builder, Palette& palette, int parent,
-                                    std::span<const ArxLevelAnchor> anchors,
-                                    std::span<const ArxLevelAnchorConnection> connections) {
+void addAnchorConnectionContextMesh(Builder& builder, Palette& palette, int parent, std::span<const Anchor> anchors,
+                                    std::span<const AnchorConnection> connections) {
   if (connections.empty()) return;
   constexpr float kHalfWidth = 3.0f;
   std::vector<GlbVec3> positions;
   std::vector<std::uint32_t> indices;
   positions.reserve(connections.size() * 4);
   indices.reserve(connections.size() * 6);
-  for (const ArxLevelAnchorConnection& connection : connections) {
+  for (const AnchorConnection& connection : connections) {
     if (connection.first >= anchors.size() || connection.second >= anchors.size()) continue;
     const ArxVector3& a = anchors[connection.first].position;
     const ArxVector3& b = anchors[connection.second].position;
@@ -436,8 +439,8 @@ namespace pistoris::level_debug {
 
 ArxReturnCode exportNavigationDebugGlb(const Level& level, std::vector<std::uint8_t>& out,
                                        const NavigationDiagnostics* diagnostics,
-                                       const Level::GlbExportOptions& options) {
-  return glb_level_debug::guardDebugExport("level_debug::exportNavigationDebugGlb", [&]() -> ArxReturnCode {
+                                       const Level::GlbExportOptions& options) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
     std::vector<std::uint8_t> tmp;
     ArxReturnCode rc = level.validateMesh();
     if (rc != ARX_OK) return rc;
@@ -447,7 +450,9 @@ ArxReturnCode exportNavigationDebugGlb(const Level& level, std::vector<std::uint
     if (rc != ARX_OK) return rc;
     rc = level.validateAnchorConnections();
     if (rc != ARX_OK) return rc;
-    std::optional<ArxAabb> referenced_bounds = level.referencedBounds();
+    const LevelModules& modules = LevelDebugAccess::modules(level);
+    const LevelValidationState& validation = LevelDebugAccess::validation(level);
+    const std::optional<ArxAabb>& referenced_bounds = validation.derived.referenced_bounds;
     if (!referenced_bounds) return ARX_LEVEL_NO_GEOMETRY;
 
     glb_level_debug::Builder builder;
@@ -459,35 +464,22 @@ ArxReturnCode exportNavigationDebugGlb(const Level& level, std::vector<std::uint
 
     int context = builder.addNode("navigation_debug_context");
     builder.addChild(root, context);
-    glb_level_debug::addGeometryContextMesh(builder, context, level, palette);
+    glb_level_debug::addGeometryContextMesh(builder, context, modules.geometry, palette);
     if (diagnostics)
       glb_level_debug::addNavigationSupportContextMesh(builder, palette, context, diagnostics->surface.support);
-    ArxLevelNavSurfaceInfo surface_info = level.navSurfaceInfo();
-    std::vector<ArxLevelVertex> surface_vertices(surface_info.vertex_count);
-    std::vector<ArxLevelNavSurfaceTriangle> surface_triangles(surface_info.triangle_count);
-    if (surface_info.has_surface != 0) {
-      rc = level.copyNavSurfaceVertices(0, surface_vertices.size(), surface_vertices.data());
-      if (rc != ARX_OK) return rc;
-      rc = level.copyNavSurfaceTriangles(0, surface_triangles.size(), surface_triangles.data());
-      if (rc != ARX_OK) return rc;
-      glb_level_debug::addNavSurfaceContextMesh(builder, palette, context, surface_vertices, surface_triangles);
-    }
-    std::vector<ArxLevelAnchor> anchors(level.anchorCount());
-    std::vector<ArxLevelAnchorConnection> connections(level.anchorConnectionCount());
-    rc = level.copyAnchors(0, anchors.size(), anchors.data());
-    if (rc != ARX_OK) return rc;
-    rc = level.copyAnchorConnections(0, connections.size(), connections.data());
-    if (rc != ARX_OK) return rc;
-    glb_level_debug::addAnchorContextNodes(builder, palette, root, anchors);
-    glb_level_debug::addAnchorConnectionContextMesh(builder, palette, root, anchors, connections);
+    if (modules.navigation.surface)
+      glb_level_debug::addNavSurfaceContextMesh(builder, palette, context, *modules.navigation.surface);
+    glb_level_debug::addAnchorContextNodes(builder, palette, root, modules.navigation.anchors);
+    glb_level_debug::addAnchorConnectionContextMesh(
+        builder, palette, root, modules.navigation.anchors, modules.navigation.connections);
     if (diagnostics)
       glb_level_debug::addNavigationDiagnostics(builder, palette, root, *diagnostics, *referenced_bounds);
 
     log(ARX_LOG_INFO,
-        std::format("Level navigation debug GLB export: {} anchor(s), {} connection(s), nav surface {}",
-                    anchors.size(),
-                    connections.size(),
-                    surface_info.has_surface != 0 ? "present" : "missing"));
+        "Level navigation debug GLB export: {} anchor(s), {} connection(s), nav surface {}",
+        modules.navigation.anchors.size(),
+        modules.navigation.connections.size(),
+        modules.navigation.surface ? "present" : "missing");
     rc = builder.write(tmp);
     if (rc == ARX_OK) out = std::move(tmp);
     return rc;

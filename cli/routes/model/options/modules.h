@@ -9,13 +9,17 @@
 
 namespace cli::model::options {
 
-const Module& overwriteTextureModule();
-const Module& renameSelectionsModule();
 const Module& ftlReferenceModule();
-const Module& autosizeToReferenceModule();
 const Module& snapBoneOriginsModule();
-const Module& snapActionPointsModule();
-const Module& copySyntheticSelectionAffiliationsModule();
+const Module& copyBoneSelectionsModule();
+const Module& copyActionSelectionsModule();
+const Module& inferBoneSelectionsModule();
+const Module& asLevelPreviewModule();
+const Module& previewClassPathModule();
+const Module& allowEmptyAnimationModule();
+const Module& inputIconModule();
+const Module& iconSlotsModule();
+const Module& iconLayoutModule();
 std::span<const ModuleRef> rootModules();
 
 }  // namespace cli::model::options

@@ -3,12 +3,13 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 #include "arx_pistoris/level.hpp"
 
 #include "../../cli/modules/implication.h"
 #include "../../cli/pipeline/execution_context.h"
 #include "../../cli/pipeline/parsed.h"
+#include "../../cli/routes/conversion_path.h"
 #include "../../cli/routes/descriptor.h"
 #include "../../cli/routes/level/options.h"
 #include "../../cli/routes/level/state.h"
@@ -39,9 +40,6 @@ template <typename T>
 concept HasRouteKind = requires(T value) { value.route_kind; };
 
 template <typename T>
-concept HasRouteConstraints = requires(T value) { value.route_constraints; };
-
-template <typename T>
 concept HasInputs = requires(T value) { value.inputs; };
 
 template <typename T>
@@ -51,10 +49,7 @@ template <typename T>
 concept HasModules = requires(T value) { value.modules; };
 
 template <typename T>
-concept HasModuleQueries = requires(const T& value, const cli::Module& module) {
-  value.hasModuleCategory(cli::ModuleCategory::kRoute);
-  value.hasModule(module);
-};
+concept HasParsedOptions = requires(T value) { value.options; };
 
 namespace {
 
@@ -118,7 +113,7 @@ class TestMountModule final : public cli::SystemModule {
   bool repeatable() const noexcept override { return true; }
   cli::ModuleParseResult parse(cli::ModuleParseContext& ctx) const override {
     if (ctx.index + 1 >= ctx.argc) return {.ok = false};
-    ctx.options.mounts.emplace_back(ctx.argv[++ctx.index]);
+    ctx.options.read_mounts.emplace_back(ctx.argv[++ctx.index]);
     return {};
   }
 };
@@ -241,7 +236,18 @@ TEST_SUITE("cli_resolver") {
     static_assert(!HasNativeOutput<cli::ExecutionContext>);
     static_assert(!HasOutputConverter<cli::ExecutionContext>);
     static_assert(!HasModules<cli::ExecutionContext>);
-    static_assert(HasModuleQueries<cli::ExecutionContext>);
+  }
+
+  TEST_CASE("Native conversion is used only when no intermediate work is required") {
+    CHECK(cli::selectConversionPath(true, true, false) == cli::ConversionPath::kNative);
+    CHECK(cli::selectConversionPath(true, true, true) == cli::ConversionPath::kIntermediate);
+    CHECK(cli::selectConversionPath(false, true, false) == cli::ConversionPath::kIntermediate);
+    CHECK(cli::selectConversionPath(true, false, false) == cli::ConversionPath::kIntermediate);
+  }
+
+  TEST_CASE("Route resolution does not expose parsed options or effective modules") {
+    static_assert(!HasParsedOptions<cli::RouteResolveContext>);
+    static_assert(!HasModules<cli::RouteResolveContext>);
   }
 
   TEST_CASE("LevelRouteStateCannotCopyOrMoveItsLevel") {
@@ -250,8 +256,6 @@ TEST_SUITE("cli_resolver") {
     static_assert(!std::is_move_constructible_v<cli::level::LevelInput>);
     static_assert(!std::is_move_assignable_v<cli::level::LevelInput>);
   }
-
-  TEST_CASE("RouteProbeReceivesResolvedConstraints") { static_assert(HasRouteConstraints<cli::RouteProbeContext>); }
 
   TEST_CASE("ParsedCliOwnsSplitPositionals") {
     static_assert(HasInputs<cli::ParsedCli>);
@@ -273,6 +277,55 @@ TEST_SUITE("cli_resolver") {
     CHECK(generation.sample_spacing == doctest::Approx(160.0f));
     CHECK(connection.max_distance == doctest::Approx(240.0f));
     CHECK(connection.radius_scale == doctest::Approx(0.9f));
+  }
+
+  TEST_CASE("LevelMinimapGenerationUsesLibraryDefaults") {
+    const cli::level::LevelOptions options;
+    const pistoris::Level::MinimapGenerationOptions& generation = options.minimap_generation;
+
+    CHECK(generation.foreground.color.r == doctest::Approx(0.18f));
+    CHECK(generation.foreground.color.g == doctest::Approx(0.34f));
+    CHECK(generation.foreground.color.b == doctest::Approx(0.80f));
+    CHECK(generation.background.color.r == doctest::Approx(0.56f));
+    CHECK(generation.background.color.g == doctest::Approx(0.68f));
+    CHECK(generation.background.color.b == doctest::Approx(0.90f));
+    CHECK(generation.water.color.r == doctest::Approx(0.72f));
+    CHECK(generation.water.color.g == doctest::Approx(0.60f));
+    CHECK(generation.water.color.b == doctest::Approx(0.45f));
+    CHECK(generation.lava.color.r == doctest::Approx(0.25f));
+    CHECK(generation.lava.color.g == doctest::Approx(0.80f));
+    CHECK(generation.lava.color.b == doctest::Approx(0.90f));
+    CHECK(generation.halo_color.r == doctest::Approx(1.0f));
+    CHECK(generation.halo_color.g == doctest::Approx(1.0f));
+    CHECK(generation.halo_color.b == doctest::Approx(1.0f));
+    CHECK(generation.halo_radius == 5);
+  }
+
+  TEST_CASE("LevelMinimapBorderColorUsesExplicitGenerationAndFallbackPrecedence") {
+    cli::level::LevelOptions options;
+    pistoris::ArxColor3 color = cli::level::effectiveMinimapBorderColor(options);
+    CHECK(color.r == doctest::Approx(1.0f));
+    CHECK(color.g == doctest::Approx(1.0f));
+    CHECK(color.b == doctest::Approx(1.0f));
+
+    options.generate_minimap = true;
+    options.minimap_generation.halo_color = {0.25f, 0.5f, 0.75f};
+    color = cli::level::effectiveMinimapBorderColor(options);
+    CHECK(color.r == doctest::Approx(0.25f));
+    CHECK(color.g == doctest::Approx(0.5f));
+    CHECK(color.b == doctest::Approx(0.75f));
+
+    options.minimap_generation.halo_radius = 0;
+    color = cli::level::effectiveMinimapBorderColor(options);
+    CHECK(color.r == doctest::Approx(1.0f));
+    CHECK(color.g == doctest::Approx(1.0f));
+    CHECK(color.b == doctest::Approx(1.0f));
+
+    options.minimap_border_color = pistoris::ArxColor3{0.1f, 0.2f, 0.3f};
+    color = cli::level::effectiveMinimapBorderColor(options);
+    CHECK(color.r == doctest::Approx(0.1f));
+    CHECK(color.g == doctest::Approx(0.2f));
+    CHECK(color.b == doctest::Approx(0.3f));
   }
 
   TEST_CASE("LevelAppliesExplicitGlbFormatModifiersOverItsDefaults") {
@@ -385,11 +438,11 @@ TEST_SUITE("cli_resolver") {
     std::vector<cli::ModuleInvocation> effective;
 
     REQUIRE(cli::resolveEffectiveModules(explicit_modules, options, effective));
-    REQUIRE(options.mounts.size() == 4);
-    CHECK(options.mounts[0] == "path1/");
-    CHECK(options.mounts[1] == "path2/");
-    CHECK(options.mounts[2] == "path3/");
-    CHECK(options.mounts[3] == "path4/");
+    REQUIRE(options.read_mounts.size() == 4);
+    CHECK(options.read_mounts[0] == "path1/");
+    CHECK(options.read_mounts[1] == "path2/");
+    CHECK(options.read_mounts[2] == "path3/");
+    CHECK(options.read_mounts[3] == "path4/");
   }
 
   TEST_CASE("ImplicationsExpandTransitively") {
@@ -409,12 +462,12 @@ TEST_SUITE("cli_resolver") {
   TEST_CASE("ImplicationCyclesFailWithoutPublishingPartialState") {
     const std::vector<cli::ModuleInvocation> explicit_modules = {invoke(cycleA())};
     cli::ParsedOptions options;
-    options.mounts.emplace_back("preserved");
+    options.read_mounts.emplace_back("preserved");
     std::vector<cli::ModuleInvocation> effective = {invoke(testMountModule(), {"preserved"})};
 
     CHECK_FALSE(cli::resolveEffectiveModules(explicit_modules, options, effective));
-    REQUIRE(options.mounts.size() == 1);
-    CHECK(options.mounts[0] == "preserved");
+    REQUIRE(options.read_mounts.size() == 1);
+    CHECK(options.read_mounts[0] == "preserved");
     REQUIRE(effective.size() == 1);
     CHECK(effective[0].module == &testMountModule());
   }

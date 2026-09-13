@@ -3,11 +3,11 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/ftl.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
-#include "arx/ftl.h"
 #include "helpers.h"
+#include "native/ftl.h"
 #include "utils/cursor.h"
 
 #include <cstdint>
@@ -339,40 +339,64 @@ TEST_SUITE("ftl") {
     CHECK(d.selections[0].name[63] == '\0');
   }
 
-  // group 1 origin (vertex 3) not in any earlier group's indices -> parent_bone[1] = -1
-  TEST_CASE("FtlOrphanBone") {
-    pistoris::ftl::Data d = makeData(4);
-    pistoris::ftl::Group g0{};
-    std::memcpy(g0.name, "root", 5);
-    g0.origin = 0;
-    g0.indices = {0, 1, 2};
-    pistoris::ftl::Group g1{};
-    std::memcpy(g1.name, "orphan", 7);
-    g1.origin = 3;  // vertex 3 is not in g0.indices and not in any group before g1
-    g1.indices = {3};
-    d.groups.push_back(std::move(g0));
-    d.groups.push_back(std::move(g1));
+  TEST_CASE("FtlLoadIsTransactional") {
+    pistoris::ftl::Data d = makeData(2);
+    d.header.origin = 1;
+    std::vector<uint8_t> buf = makeMinimalFtl();
+    buf.pop_back();
 
-    CHECK(pistoris::validateFtl(&d) == ARX_FTL_ORPHAN_BONE);
+    CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
+    CHECK(d.header.origin == 1);
+    CHECK(d.vertices.size() == 2);
   }
 
-  // group 1's origin is in group 0's indices -> g0 is its parent
-  TEST_CASE("FtlValidTwoBoneChain") {
-    pistoris::ftl::Data d = makeData(4);
+  TEST_CASE("FtlPreflightsGroupMembershipPayload") {
+    std::vector<uint8_t> buf = makeMinimalFtl();
+    const int32_t two = 2;
+    std::memcpy(buf.data() + kFtlNVertsOff, &two, sizeof(two));
+    std::memcpy(buf.data() + kFtlNGroupsOff, &two, sizeof(two));
+    const std::size_t group_base = kFtlDataOff + 2 * kFtlVertexSize;
+    buf.resize(group_base + 2 * kFtlGroupHeaderSize + sizeof(int32_t), 0);
+    std::memcpy(buf.data() + group_base + kFtlGroupOffIdxCount, &two, sizeof(two));
+    std::memcpy(buf.data() + group_base + kFtlGroupHeaderSize + kFtlGroupOffIdxCount, &two, sizeof(two));
+
+    pistoris::ftl::Data d;
+    CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
+  }
+
+  TEST_CASE("FtlPreflightsSelectionMembershipPayload") {
+    std::vector<uint8_t> buf = makeMinimalFtl();
+    const int32_t two = 2;
+    std::memcpy(buf.data() + kFtlNVertsOff, &two, sizeof(two));
+    std::memcpy(buf.data() + kFtlNSelsOff, &two, sizeof(two));
+    const std::size_t selection_base = kFtlDataOff + 2 * kFtlVertexSize;
+    buf.resize(selection_base + 2 * kFtlSelHeaderSize + sizeof(int32_t), 0);
+    std::memcpy(buf.data() + selection_base + kFtlSelOffIdxCount, &two, sizeof(two));
+    std::memcpy(buf.data() + selection_base + kFtlSelHeaderSize + kFtlSelOffIdxCount, &two, sizeof(two));
+
+    pistoris::ftl::Data d;
+    CHECK(load(buf, d) == ARX_UNEXPECTED_EOF);
+  }
+
+  TEST_CASE("FtlValidationAcceptsMultipleRoots") {
+    pistoris::ftl::Data d = makeData(5);
     pistoris::ftl::Group g0{};
-    std::memcpy(g0.name, "root", 5);
+    std::memcpy(g0.name, "root_0", 7);
     g0.origin = 0;
-    g0.indices = {0, 1, 2, 3};
+    g0.indices = {0, 1};
     pistoris::ftl::Group g1{};
-    std::memcpy(g1.name, "child", 6);
-    g1.origin = 1;  // vertex 1 is in g0.indices -> g0 is parent
-    g1.indices = {1, 2};
+    std::memcpy(g1.name, "root_1", 7);
+    g1.origin = 2;
+    g1.indices = {2, 3, 4};
+    pistoris::ftl::Group g2{};
+    std::memcpy(g2.name, "child", 6);
+    g2.origin = 3;
+    g2.indices = {3, 4};
     d.groups.push_back(std::move(g0));
     d.groups.push_back(std::move(g1));
+    d.groups.push_back(std::move(g2));
 
-    REQUIRE(pistoris::validateFtl(&d) == ARX_OK);
-    CHECK(d.extras.parent_bone[0] == -1);
-    CHECK(d.extras.parent_bone[1] == 0);
+    CHECK(pistoris::validateFtl(&d) == ARX_OK);
   }
 
 }  // TEST_SUITE("ftl")

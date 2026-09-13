@@ -3,7 +3,7 @@
 
 #include "app.h"
 
-#include "arx_pistoris/pistoris.hpp"
+#include "arx_pistoris/runtime.hpp"
 
 #include "console/diagnostics.h"
 #include "console/help.h"
@@ -37,7 +37,7 @@ const cli::TerminalActionModule* terminalAction(std::span<const cli::ModuleInvoc
 
 int dispatch(const cli::ParsedCli& parsed, std::span<const cli::ModuleInvocation> effective_modules) {
   const cli::ParsedOptions& options = parsed.options;
-  cli::IoService io{options.overwrite, options.dry_run, options.mounts};
+  cli::IoService io{options.overwrite, options.dry_run, options.read_mounts, options.write_mount, options.auto_mount};
   if (!io.valid()) return 1;
   if (const cli::TerminalActionModule* terminal = terminalAction(effective_modules)) {
     return terminal->execute(options, io);
@@ -58,12 +58,11 @@ int runCli(int argc, char* argv[]) {
 
     ParsedCli parsed;
     if (!parseArgs(argc, argv, parsed)) {
-      std::fprintf(stderr, "Run %s --help for usage.\n", argv[0]);
+      std::fputs("Run arx-pistor --help for usage.\n", stderr);
       return 1;
     }
     if (parsed.options.help) {
-      if (!validateHelpTopics(parsed.options.help_topics)) return 1;
-      printUsage(stdout, argv[0], parsed.options.help_topics);
+      printHelp(stdout, *parsed.options.help);
       return 0;
     }
 

@@ -1,5 +1,8 @@
 # Fidelity and Limitations
 
+This document is for users choosing a conversion path or deciding whether a
+roundtrip preserves the data they care about.
+
 Pistoris aims for semantically lossless conversion between supported native
 game formats and their coherent intermediate representation. It does not
 promise byte-identical output: records may be reordered, geometry may be
@@ -13,11 +16,12 @@ record.
 ## Compatible JSON
 
 JSON support matches arx-convert schemas. JSON is converted to or from native
-FTL, TEA, FTS, DLF, and LLF carriers; it is not a separate Pistoris
+FTL, TEA, FTS, DLF, LLF, and AMB carriers; it is not a separate Pistoris
 intermediate.
 
 Data absent from the compatibility schema cannot roundtrip through JSON.
-Prefer native carriers or Level GLB when the JSON ecosystem is not required.
+Prefer native carriers or the matching GLB authoring format when the JSON
+ecosystem is not required.
 
 ## Level Native Conversion
 
@@ -46,6 +50,16 @@ Quad reconstruction joins only compatible adjacent triangles. It does not
 change their independent corner normals or merge arbitrary fragmented
 geometry.
 
+### Independent face normals are derived
+
+Level exposes one normal per face corner. Native FTS also stores independent
+`norm` and `norm2` face normals, which Level regenerates from triangle geometry
+during FTS import. The original native values therefore do not survive an
+`FTS -> Level -> FTS` roundtrip.
+
+GLB import also derives Level face normals from triangle geometry. Standard GLB
+has no separate per-face normal attribute.
+
 ### Native limits are enforced
 
 Pistoris rejects FTS data that exceeds native representation limits, including:
@@ -64,10 +78,11 @@ must create those copies themselves.
 
 ### Room distances and anchor links
 
-Room distances and anchor connections are editable Level data, but neither has
-a vanilla-DCC-friendly GLB representation. Level GLB export omits them.
-Regenerate them explicitly after GLB import, or retain the in-memory Level when
-their exact authored values matter.
+Room distances and anchor connections are editable Level data without a
+vanilla-DCC-friendly GLB representation. Level GLB omits room distances and
+stores anchor connections as opaque node metadata. DCC tools may discard that
+metadata. Regenerate either collection explicitly after GLB import when its
+authored values did not survive.
 
 Native baking writes default `-1` room distances where the data is missing or
 incomplete and reports the omission.
@@ -83,6 +98,14 @@ reject, or discard faces that would collapse. It remains an inference:
 coincident positions alone cannot prove original topological identity.
 
 ## Level and GLB
+
+### Missing texture formats default to PNG
+
+GLB external image paths retain a known physical suffix independently from
+the logical texture identity. If a path-only texture has no retained suffix,
+GLB export assumes `.png`. The URI remains a best-effort reference; Pistoris
+does not read files or verify that the external image exists. The CLI can
+resolve and attach the referenced image before export.
 
 ### Coordinates differ
 
@@ -117,10 +140,11 @@ Level GLB does not retain:
 - FTS cell slicing and packing
 - FTS quad slots
 - room-distance records
-- anchor connections
 
-Cell layout and quads are rebuilt during native baking. Room distances and
-anchor links are generated only when explicitly requested.
+Cell layout and quads are rebuilt during native baking. Room distances are
+generated only when explicitly requested. Anchor links roundtrip through opaque
+node metadata when the editing tool preserves it; connection generation remains
+explicit and replaces the preserved graph.
 
 ### Materials collapse face data by identity
 
@@ -132,39 +156,31 @@ outside that range.
 GLB material properties also imply native flags:
 
 - `doubleSided=true` implies `DOUBLESIDED`
-- `alphaMode=BLEND` implies `TRANS`
+- `alphaMode=BLEND` implies `TRANS` when base alpha is below `1` or the material
+  carries `TRANS` or `TRANSVAL`
 - `alphaMode=MASK` is image cutout and does not imply `TRANS`
 
-When a material references a base-color image, that image defines texture
-identity. The material stem still defines flags.
+`BLEND` with base alpha `1` and no native transparency token imports without
+`TRANS`. If the resulting material has a texture, any texture alpha remains
+available as native cutout; otherwise the material is opaque. Import warns
+about this normalization.
 
-### Texture names use `__` as syntax
+Level cannot retain arbitrary GLB alpha-mask parameters. MASK base alpha and
+cutoff are normalized to `1` and `0.5`; other values warn and do not survive
+the conversion.
 
-`__` separates texture stems from face flags. Do not use it in newly authored
-texture names.
-
-The original game has exactly three known texture-path exceptions. Level maps
-them to safe aliases and restores the native identities during baking:
-
-```text
-graph/obj3d/textures/l4_dwarf_[stone]__wall01
-<-> graph/obj3d/textures/l4_dwarf_[stone]_wall01
-
-graph/obj3d/textures/l4_dwarf_[stone]__wall24
-<-> graph/obj3d/textures/l4_dwarf_[stone]_wall24
-
-graph/obj3d/textures/npc_human__base_hero_head
-<-> graph/obj3d/textures/npc_human_base_hero_head_1
-```
-
-No general escaping scheme exists for additional `__` texture names.
+For ordinary geometry materials, a referenced base-color image defines texture
+identity. Face-flag tokens in the material name still define flags; the
+fallback stem supplies texture identity only when no image is referenced.
+Level semantic material names are reserved and do not follow this fallback
+rule.
 
 ### Native texture dimensions
 
 Arx rendering expects power-of-two texture dimensions in paths that use its
-wrap-clamp behavior. Native Level baking preserves already compatible PNG,
-JPEG, BMP, or TGA bytes. A non-power-of-two image is resized independently on
-each axis to the next power of two and encoded as PNG.
+wrap-clamp behavior. Native Level and Model baking preserve already compatible
+PNG, JPEG, BMP, or TGA bytes. A non-power-of-two image is resized independently
+on each axis to the next power of two and encoded as PNG.
 
 GLB export embeds PNG and JPEG directly and converts BMP and TGA to PNG because
 core GLB supports only PNG and JPEG images.
@@ -173,7 +189,8 @@ core GLB supports only PNG and JPEG images.
 
 Zone import welds transformed positions before reconstructing the perimeter.
 This tolerates ordinary UV, normal, and material splits. Intentionally distinct
-zone columns cannot occupy exactly the same position.
+zone columns cannot occupy exactly the same position. Zone top and bottom
+surfaces are reconstructed as planes; deviations are flattened with a warning.
 
 ### Entity previews are not Level geometry
 
@@ -181,73 +198,178 @@ A static mesh attached to an `arx_entity__*` root is an authoring preview. It
 is ignored on Level import and is not baked into FTS geometry or Level
 textures.
 
-## FTL and OBJ
+## Model and FTL
 
-OBJ represents static FTL geometry and materials only. Skeletons, action
-points, vertex selections, and animations are not representable.
+Model retains every native FTL selection as a generic named selection.
+Selection names are normalized to ASCII lowercase and made unique with the
+lowest available `_N` suffix. Membership can cover geometry vertices, bones,
+action points, and the implicit origin.
 
-MTL has one opacity value per material. Faces that share a texture and flag set
-also share the imported transparency value. Pistoris cannot preserve distinct
-per-face `transval` values within that one material.
+For exact `cut_head`, `cut_torso`, `cut_larm`, `cut_rarm`, `cut_lleg`, and
+`cut_rleg` names, the first native member is represented as an optional
+selection leading vertex. Native baking emits an explicit leading vertex
+first. If a nonempty exact `cut_*` selection has no leading vertex, baking
+infers one from its first available member and logs the inferred position.
+Empty selections are valid Model data but are omitted from native FTL.
 
-Texture identity is selected from `# arx_path`, then `map_Kd`, then the decoded
-material stem.
+Model coordinates are relative to the native FTL origin. Import subtracts the
+origin from all represented positions, including selection leading vertices.
+Baking emits a synthetic origin at `(0,0,0)`. This preserves relative game
+geometry but not the original model-local offset or unused roleless native
+vertex data.
 
-## Legacy FTL and TEA GLB
+Model stores an independent face normal and one normal per face corner. Native
+FTL face normals are preserved. Baking duplicates native vertices when one
+Model vertex uses different corner normals. Native vertex numbering and unused
+unreferenced vertices are not preserved.
 
-### Transparency is material-wide
+Degenerate native faces are discarded during Model import. Native vertices
+referenced only by discarded faces and no semantic role are not retained.
+Bone and action-point names are normalized to ASCII lowercase. Bone-name
+collisions receive the lowest available `_N` suffix after the first spelling;
+duplicate action-point names are preserved.
 
-Legacy FTL GLB has no Level-style `TRANSVAL` name token. Faces grouped into one
-GLB material share its alpha value. Distinct native `transval` values within
-that material are averaged on export.
+## Model and GLB
 
-### Unused texture containers are omitted
+Model GLB is an authoring projection, not an archive of native FTL layout.
+Corner normal or UV differences may split one Model vertex into several GLB
+vertices. Otherwise export shares vertex data across material primitives and
+import preserves represented sharing. A DCC may still rewrite indices and
+sharing. Only Model vertices referenced by faces and referenced textures are
+emitted. Corner normals use the GLB `NORMAL` attribute. The independent Model
+face normal has no GLB representation and is regenerated from triangle
+positions on import. Model stores one bone per vertex; GLB import keeps only
+the greatest positive skin influence. An unskinned mesh on or below a joint
+identified by another skin binds rigidly to its nearest such joint. Other
+unskinned geometry and zero-weight vertices in a skin remain unbound.
 
-Only textures referenced by FTL faces are emitted to GLB. Unreferenced native
-texture-container records do not survive a GLB roundtrip. Referenced texture
-identity remains stable.
+The exact Model GLB grammar is documented in the
+[Model and Animation authoring reference](authoring/MODEL_REFERENCE.md).
 
-### Bone order depends on indexed names
+## GLB Material Fallbacks
 
-Exported bone names use exact zero-based prefixes such as `000__root`.
-Import restores FTL group order from those prefixes when every index is unique,
-complete, and topologically valid.
+Logical texture paths and GLB image URIs may contain `__`. Material names use
+that delimiter for face flags, so export collapses underscore runs in the
+fallback stem and warns once per affected texture. For ordinary materials, the
+referenced image remains authoritative. If that link is removed, the fallback
+cannot reconstruct the original repeated underscores.
 
-If a DCC removes or corrupts the prefixes, Pistoris warns and falls back to GLB
-joint order. The resulting model may remain internally valid but no longer
-match an existing TEA group order.
+## Animation and GLB
 
-### Selection names depend on DCC behavior
+Model GLB may carry Animation sidecars but is not an archive of native TEA
+layout.
+Without an `arx_model_origin__*` node, Model import uses scene identity and does
+not recover propelled Animation translation or rotation.
+For a rigged Model, propelled motion comes from translation and rotation on the
+shared ancestor of all imported meshes, root joints, and unbound positional
+helpers. An unrigged Model uses the semantic origin itself. A carrier below the
+semantic origin must have positive uniform default scale; that scale is part of
+the bind pose. Animated carrier scale is unsupported. Translation or rotation
+below the carrier is instead resolved into affected bone groups.
+Animation channels are sampled at 24 frames per second; native interval
+layout and GLB interpolation modes are not preserved. `CUBICSPLINE`
+interpolation is unsupported and causes the affected Animation to be skipped.
+Timelines that begin before zero are shifted forward. Every timestamp is
+rounded to the nearest 24 Hz frame, and distinct timestamps that land on the
+same frame collapse. Pistoris warns when one of these operations changes
+timing.
+Translation and rotation on intermediary hierarchy nodes are resolved into
+bone transforms, and bone scale is accounted for when recovering descendant
+translations. Intermediary scale cannot be represented. Native frame length,
+footsteps, and sample events use Model Animation helper nodes. Animation groups
+bind to Model bones by index over the available prefix. Groups beyond the Model
+are discarded with a warning. GLB import normalizes groups whose translation,
+rotation, and scale remain effectively identity within conversion tolerance for
+the whole animation. Non-trailing identity groups remain as exact-identity
+placeholders when a later group is retained. Trailing identity groups are
+removed unless explicit `CLAIM` metadata retains them. A group is normalized
+only when every keyframe remains within that tolerance; sub-tolerance values in
+a group that is active elsewhere remain unchanged. Invalid sidecars and those
+with unrepresentable timestamps are skipped and reported.
 
-FTL selections use custom GLB `VEC4` attributes plus an ordered
-`arx_selection_names` mesh extra. Exact names survive when the DCC preserves
-the extra. A DCC may rewrite attributes to positional names such as `COLOR_0`;
-the masks can remain recoverable while names require CLI repair.
+Model GLB keeps available Animation audio in external sidecars using its
+original WAV, MP3, or Ogg Vorbis encoding. Native Animation baking converts
+attached audio to PCM16 WAV and stores the sample reference below `sfx/`.
+Path-only Sounds remain valid references but are not decoded or validated by
+the library.
 
-Use `--rename-selections` to restore names by imported position.
+## Model and OBJ
 
-### Synthetic vertices need reference repair
+OBJ represents static Model geometry, materials, and positional action points.
+Skeletons, selections, animations, action-point bone bindings, and action-point
+selection membership are not representable. Face normals are regenerated from
+triangle geometry on import. Missing corner normals follow OBJ smoothing
+groups. OBJ positions and normals use the same fixed 180-degree X-axis basis
+conversion as Model GLB. OBJ `v=0` addresses the bottom texture edge while
+Model `v=0` addresses the top; conversion flips V without clamping tiled
+coordinates.
 
-GLB import synthesizes FTL-only vertices for the model origin, bone origins,
-and action points. Their original selection membership is not always editable
-through a DCC. Game-side model merge logic may depend on that membership and
-on bit-exact bone or action positions.
+MTL has one opacity value per material. Model export separates distinct
+per-face `transval` values into multiple materials and preserves every value in
+the `TRANSVAL` material-name token. Values inside `[0,1]` also emit MTL opacity;
+other values have no MTL opacity representation.
 
-Use a compatible base FTL with:
+For textured materials, `map_Kd` supplies texture identity and the decoded
+fallback stem is the fallback. A `no_tex` material is untextured only without
+`map_Kd`; a supplied path wins with a warning. The CLI resolves declared MTL
+files and texture images relative to the OBJ.
+
+Logical texture paths and `map_Kd` paths may contain `__`. Export collapses
+underscore runs only in the material fallback stem and warns once per affected
+texture. The `map_Kd` path remains authoritative; without it, the fallback
+cannot reconstruct the repeated underscores.
+
+## Model Reference Operations
+
+Game-side model-part replacement compares bone-origin positions exactly. Model
+authoring can change those positions even when the resulting skeleton remains
+otherwise coherent.
+
+Pair a compatible base FTL with one or more requested operations:
 
 ```text
---ftl-reference
---snap-bone-origins-to-reference
---snap-action-points-to-reference
---copy-synthetic-selection-affiliations
+--ftl-reference <PATH>
+--snap-bone-origins
+--copy-bone-selections
+--copy-action-selections
 ```
 
-Reference deformation modes are repair heuristics, not general mesh
-deformation solvers.
+Snapping and bone-origin selection copying require equal bone counts and parent
+topology. Action-point selection copying does not require matching skeletons.
+Bone-name mismatches warn but do not prevent the operation. Selection copy
+matches names already present in the target Model; it does not create
+reference-only selections. Copying replaces the requested membership category,
+so target-only memberships clear. Repeated action points match by name and
+occurrence order; unmatched target action-point memberships clear, while
+selection memberships on unmatched reference action points are omitted with a
+warning.
 
-### The model pivot is canonicalized
+`--infer-bone-selections` replaces bone-origin selection memberships using a
+90% threshold over geometry owned directly by each bone. It is an authoring
+helper rather than authoritative recovery and cannot be combined with
+`--copy-bone-selections`.
 
-FTL GLB export centers the mesh at the entity pivot. Import synthesizes the FTL
-header origin at `(0,0,0)`. Relative geometry, skeleton, and animation data are
-preserved, but an originally offset mesh-local coordinate frame does not
-roundtrip byte-for-byte.
+## Ambiance and Audio
+
+AMB versions 1.000 through 1.003 map to the version 1.001 carrier used for
+writing. Unused track names, padding, and flag bits are discarded. Settings
+that are inactive or unused by a constant automation value are normalized to
+zero.
+
+Native Ambiance baking converts attached WAV, MP3, and Ogg Vorbis data to
+PCM16 WAV. Positioned playback, nonzero panning, and dynamic panning require
+mono audio. A stereo Sound needed by both centered panning and spatial
+playback produces separate stereo and mono sidecars with collision-safe names.
+An existing `.wav` path is retained; any required mono conversion is emitted
+as a separate suffixed file.
+
+Native baking can warn when a non-master track's longest nominal duration
+exceeds the master's shortest nominal duration. The check requires attached
+audio and uses pitch and delay bounds; path-only Sounds are skipped. Runtime
+scheduling can still vary beyond this nominal envelope.
+
+Ambiance GLB keeps the original encoded audio in external sidecars and does
+not embed it. Path-only Sounds remain valid references but are not decoded or
+validated by the library. The exact node grammar and spatial projection are
+documented in the
+[Ambiance authoring reference](authoring/AMBIANCE_REFERENCE.md).

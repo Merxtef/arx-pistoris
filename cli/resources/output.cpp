@@ -3,14 +3,14 @@
 
 #include "resources/output.h"
 
+#include "io/path_location.h"
 #include "io/service.h"
-#include "resources/selector.h"
 
 #include <cstddef>
 
 namespace cli {
 
-bool writeOutput(IoService& io, const OutputTarget& target, const void* data, std::size_t size) {
+bool writeOutput(IoService& io, const PathLocation& target, const void* data, std::size_t size) {
   return io.writePath(target, data, size);
 }
 

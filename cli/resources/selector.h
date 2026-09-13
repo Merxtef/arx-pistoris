@@ -7,6 +7,7 @@
 
 #include "formats/format.h"
 #include "io/path_location.h"
+#include "resources/layout.h"
 
 #include <cstdint>
 #include <string>
@@ -32,14 +33,12 @@ struct ResourceSelector {
 struct OutputTarget : OutputLocation {
   ResourceSelector selector;
   Format format = Format::kUnknown;
+  ResourceLayout layout = ResourceLayout::kLoose;
 };
 
 SelectorParseStatus parseResourceSelector(std::string_view argument, ResourceSelector& out, std::string& error);
 class IoService;
 
 bool resolveOutputTarget(const char* argument, const IoService& io, OutputTarget& out);
-
-std::string resourceParentPath(std::string_view path);
-std::string resourceStem(std::string_view path, bool strip_any_extension = true);
 
 }  // namespace cli

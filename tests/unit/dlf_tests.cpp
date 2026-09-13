@@ -51,15 +51,16 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/llf.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
-#include "arx/dlf.h"
-#include "arx/lighting_io.h"
-#include "arx/resource_path.h"
 #include "external/json.h"
+#include "native/dlf.h"
+#include "native/lighting_layout.h"
+#include "paths/entity_class.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
 
@@ -312,11 +313,41 @@ TEST_SUITE("dlf") {
     CHECK(pistoris::normalizeEntityClassPath("graph/obj3d/interactive/items/key", normalized, removed_extension));
     CHECK(normalized == "graph/obj3d/interactive/items/key");
     CHECK(removed_extension.empty());
-    CHECK_FALSE(pistoris::normalizeEntityClassPath("obj3d/interactive/items/key", normalized, removed_extension));
+    CHECK(pistoris::normalizeEntityClassPath("graph/obj3d/interactive/npc/my__npc", normalized, removed_extension));
+    CHECK(normalized == "graph/obj3d/interactive/npc/my__npc");
     CHECK(removed_extension.empty());
+    CHECK_FALSE(
+        pistoris::normalizeEntityClassPath("graph/obj3d/interactive/npc/my?npc", normalized, removed_extension));
+    CHECK(pistoris::normalizeEntityClassPath("obj3d/interactive/items/key", normalized, removed_extension));
+    CHECK(normalized == "obj3d/interactive/items/key");
+    CHECK(removed_extension.empty());
+    bool discarded_prefix = false;
+    CHECK(
+        pistoris::normalizeEntityClassPath("prefix/graph/items/key", normalized, removed_extension, &discarded_prefix));
+    CHECK(normalized == "graph/items/key");
+    CHECK(discarded_prefix);
+    CHECK(pistoris::normalizeEntityClassPath(
+        "graph/folder/graph/items/key", normalized, removed_extension, &discarded_prefix));
+    CHECK(normalized == "graph/folder/graph/items/key");
+    CHECK_FALSE(discarded_prefix);
     CHECK_FALSE(pistoris::normalizeEntityClassPath("graph/../items/key", normalized, removed_extension));
     CHECK_FALSE(pistoris::normalizeEntityClassPath(
         std::string("graph/obj3d/items/key\0hidden", 28), normalized, removed_extension));
+  }
+
+  TEST_CASE("EntityClassPathClassificationMatchesEnginePrecedence") {
+    CHECK(pistoris::classifyEntityClassPath("graph/obj3d/interactive/items/npc_token/npc_token") ==
+          pistoris::InteractiveKind::kItem);
+    CHECK(pistoris::classifyEntityClassPath("graph/obj3d/interactive/npc/human_base/human_base") ==
+          pistoris::InteractiveKind::kNpc);
+    CHECK(pistoris::classifyEntityClassPath("graph/obj3d/interactive/fix_inter/door/door") ==
+          pistoris::InteractiveKind::kFix);
+    CHECK(pistoris::classifyEntityClassPath("graph/obj3d/interactive/camera/camera") ==
+          pistoris::InteractiveKind::kCamera);
+    CHECK(pistoris::classifyEntityClassPath("graph/obj3d/interactive/marker/marker") ==
+          pistoris::InteractiveKind::kMarker);
+    CHECK(pistoris::classifyEntityClassPath("graph/obj3d/interactive/system/system") ==
+          pistoris::InteractiveKind::kUnknown);
   }
 
   TEST_CASE("DlfReadNormalizesLegacyTeoEntityClasses") {
@@ -377,7 +408,7 @@ TEST_SUITE("dlf") {
       data.entities.push_back({"graph/obj3d/interactive/fix_inter/door/door"});
       REQUIRE(pistoris::validateDlf(&data) == ARX_OK);
 
-      data.entities[0].class_path = "door";
+      data.entities[0].class_path = "prefix/graph/obj3d/interactive/fix_inter/door/door";
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ENTITY_CLASS_PATH);
       data.entities[0].class_path = "graph/obj3d/interactive/fix_inter/door/door";
       data.entities[0].position.x = not_finite;
@@ -414,6 +445,8 @@ TEST_SUITE("dlf") {
 
       data.zones[0].name.clear();
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_NAME);
+      data.zones[0].name = std::string("zo\0ne", 5);
+      CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_NAME);
       data.zones[0].name = "zone";
       data.zones[0].position.y = not_finite;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_POSITION);
@@ -435,6 +468,8 @@ TEST_SUITE("dlf") {
       data.zones[0].farclip.reset();
       data.zones[0].ambiance = pistoris::dlf::ZoneAmbiance{"ambient", not_finite};
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_AMBIANCE);
+      data.zones[0].ambiance = pistoris::dlf::ZoneAmbiance{std::string("amb\0ient", 8), 1.0f};
+      CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_AMBIANCE);
     }
 
     SUBCASE("path") {
@@ -442,6 +477,8 @@ TEST_SUITE("dlf") {
       REQUIRE(pistoris::validateDlf(&data) == ARX_OK);
 
       data.paths[0].name.clear();
+      CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_PATH_NAME);
+      data.paths[0].name = std::string("pa\0th", 5);
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_PATH_NAME);
       data.paths[0].name = "path";
       data.paths[0].position.z = not_finite;
@@ -518,7 +555,9 @@ TEST_SUITE("dlf") {
     REQUIRE(loaded.zones[0].ambiance.has_value());
     CHECK(loaded.zones[0].ambiance->name == "ambient_cave_a");
     REQUIRE(loaded.paths.size() == 1);
+    REQUIRE(loaded.paths[0].nodes.size() == 3);
     CHECK(loaded.paths[0].nodes[1].type == pistoris::dlf::PathNodeType::kBezier);
+    CHECK(loaded.paths[0].nodes[2].type == pistoris::dlf::PathNodeType::kControlPoint);
     REQUIRE(loaded_lighting.has_value());
     CHECK(loaded_lighting->colors.size() == 1);
     CHECK(loaded_lighting->lights.size() == 1);

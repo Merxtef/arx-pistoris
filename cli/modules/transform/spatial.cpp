@@ -55,11 +55,10 @@ class ScaleModule final : public SharedConversionModule {
 
   ModuleParseResult parse(ModuleParseContext& ctx) const override {
     ParsedOptions& options = ctx.options;
-    if (ctx.index + 1 >= ctx.argc || !parseFloat(ctx.argv[ctx.index + 1], options.conversion.scale[0])) {
+    if (ctx.index + 1 >= ctx.argc || !parseFloat(ctx.argv[ctx.index + 1], options.conversion.scale)) {
       diagnostic(DiagnosticCode::kScaleInvalid, "--scale: expected one uniform numeric value");
       return {.ok = false};
     }
-    options.conversion.scale[1] = options.conversion.scale[2] = options.conversion.scale[0];
     options.conversion.has_xform = true;
     ++ctx.index;
     return {};
@@ -67,7 +66,7 @@ class ScaleModule final : public SharedConversionModule {
 
   bool validate(const ModuleValidationContext& context) const override {
     const ParsedOptions& options = context.options;
-    if (std::isfinite(options.conversion.scale[0]) && options.conversion.scale[0] > 0.0f) return true;
+    if (std::isfinite(options.conversion.scale) && options.conversion.scale > 0.0f) return true;
     diagnostic(DiagnosticCode::kInvalidModuleValue, "--scale must be positive and finite");
     return false;
   }
@@ -107,7 +106,8 @@ const Module& scaleModule() { return moduleInstance<ScaleModule>(); }
 const Module& offsetModule() { return moduleInstance<OffsetModule>(); }
 
 std::span<const ModuleRef> rootModules() {
-  static constexpr ModuleRef kModules[] = {rotateModule, scaleModule, offsetModule};
+  static constexpr ModuleRef kModules[] = {
+      rotateModule, scaleModule, offsetModule, rebaseTexturesModule, rebaseSoundsModule};
   return kModules;
 }
 

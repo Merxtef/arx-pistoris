@@ -1,5 +1,8 @@
 # Building
 
+This guide is for contributors and source users building Pistoris on Windows
+or Linux.
+
 ## Requirements
 
 - CMake 3.25 or newer
@@ -63,14 +66,15 @@ C++ library.
 ```text
 just release     # configure and build build-release/
 just sanitize    # configure, build, and test build-sanitize/
-just tidy        # enforced clang-tidy build in build-tidy/
+just tidy        # apply available clang-tidy fixes through build-tidy/
+just tidy-check  # enforced clang-tidy build in build-tidy-check/
 just fuzz-build  # libFuzzer build in build-fuzz/
 just package-smoke  # install and verify the release CLI package
 just pre-release    # complete local release gate
 ```
 
 Formatting and coverage are documented in
-[Testing and Fuzzing](https://github.com/Merxtef/arx-pistoris/blob/main/docs/TESTING.md).
+[Testing and Fuzzing](TESTING.md).
 
 ## Linking the Library
 

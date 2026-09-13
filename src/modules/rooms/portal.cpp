@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/rooms.h"
 #include "utils/math/finite.h"
-#include "utils/math/geometry.h"
+#include "utils/math/geometry_algorithms.h"
 
 #include <algorithm>
 #include <array>
@@ -24,14 +24,6 @@ constexpr double kPortalPlanarityDistanceCap = 5.0;
 constexpr double kPortalOrientationTolerance = 1.0e-8;
 
 using Vec3d = Vec3<double>;
-
-Vec3d toDouble(const ArxVector3& value) { return {value.x, value.y, value.z}; }
-
-Vec3d subtract(const Vec3d& lhs, const Vec3d& rhs) { return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z}; }
-
-Vec3d crossDouble(const Vec3d& lhs, const Vec3d& rhs) {
-  return {lhs.y * rhs.z - lhs.z * rhs.y, lhs.z * rhs.x - lhs.x * rhs.z, lhs.x * rhs.y - lhs.y * rhs.x};
-}
 
 bool samePortalPosition(const ArxVector3& a, const ArxVector3& b) {
   return math::lengthSquared(a - b) <= kPortalVertexDistanceTolerance * kPortalVertexDistanceTolerance;
@@ -66,7 +58,9 @@ ArxVector3 portalNormal(const Portal& portal) {
   return math::normalizeFiniteOr(math::cross(b - a, c - a), {0.0f, 0.0f, 1.0f});
 }
 
-RoomIndex portalSideRoom(const Portal& portal, bool front) { return front ? portal.room_1 : portal.room_2; }
+RoomIndex portalSideRoom(const Portal& portal, PortalSide side) {
+  return side == PortalSide::kFront ? portal.room_1 : portal.room_2;
+}
 
 bool connectsRooms(const Portal& portal, RoomIndex first, RoomIndex second) {
   return (portal.room_1 == first && portal.room_2 == second) || (portal.room_1 == second && portal.room_2 == first);
@@ -101,16 +95,16 @@ PortalValidation validatePortalGeometry(const Portal& portal) {
   ArxVector3 second_normal = math::cross(c - d, b - d);
   if (math::lengthSquared(second_normal) <= kPortalAreaSquaredTolerance) return PortalValidation::kDegenerate;
 
-  const Vec3d a_double = toDouble(a);
-  const Vec3d b_double = toDouble(b);
-  const Vec3d c_double = toDouble(c);
-  const Vec3d d_double = toDouble(d);
-  const Vec3d first_normal = crossDouble(subtract(b_double, a_double), subtract(c_double, a_double));
-  const Vec3d shared_diagonal = subtract(c_double, b_double);
-  const Vec3d second_normal_double = crossDouble(subtract(d_double, b_double), shared_diagonal);
+  const Vec3d a_double = math::toVec3d(a);
+  const Vec3d b_double = math::toVec3d(b);
+  const Vec3d c_double = math::toVec3d(c);
+  const Vec3d d_double = math::toVec3d(d);
+  const Vec3d first_normal = math::cross(b_double - a_double, c_double - a_double);
+  const Vec3d shared_diagonal = c_double - b_double;
+  const Vec3d second_normal_double = math::cross(d_double - b_double, shared_diagonal);
   const double first_normal_length = math::length(first_normal);
   const double shared_diagonal_length = math::length(shared_diagonal);
-  const double plane_distance = std::abs(math::dot(first_normal, subtract(d_double, a_double))) / first_normal_length;
+  const double plane_distance = std::abs(math::dot(first_normal, d_double - a_double)) / first_normal_length;
   const double planarity_scale = math::length(second_normal_double) / shared_diagonal_length;
   const double planarity_tolerance =
       std::min(planarity_scale * kPortalPlanarityRelativeTolerance, kPortalPlanarityDistanceCap);

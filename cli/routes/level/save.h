@@ -21,7 +21,7 @@ struct OutputConverterDescriptor {
   NativeWriter write_native = nullptr;
   IntermediateWriter write_intermediate = nullptr;
   DiagnosticFactory create_diagnostics = nullptr;
-  bool requires_texture_images = false;
+  bool supports_model_previews = false;
 };
 
 const OutputConverterDescriptor* outputConverterDescriptor(Format output, const Module* module);

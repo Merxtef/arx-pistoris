@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 
 #include "external/glb/level/zones.h"
-#include "external/glb/utils/level/tokens.h"
+#include "external/glb/utils/tokens.h"
 #include "internal.h"
 #include "modules/scene.h"
-#include "utils/log.h"
 #include "utils/name_tokens.h"
 
 #include <cstddef>
@@ -21,9 +20,9 @@
 
 namespace pistoris::glb_level::zone_internal {
 
-void logFailure(std::size_t node_index, std::string_view name, std::string_view reason) {
-  log(ARX_LOG_DEBUG, std::format("GLB -> Level object failure: zone node {} '{}' {}", node_index, name, reason));
-}
+using glb::formatFloatToken;
+using glb::parseFloatToken;
+using glb::parseUnsignedToken;
 
 ParsedName parseName(std::string_view name, std::size_t node_index) {
   constexpr std::string_view kPrefix = "arx_zone__";
@@ -89,20 +88,20 @@ ArxReturnCode parseSettings(std::string_view payload, Settings& out) {
   return ARX_OK;
 }
 
-std::string settingsHelperName(const Zone& zone) {
+std::string settingsHelperName(const Settings& settings, std::string_view label) {
   std::vector<std::string> storage;
   std::vector<std::string_view> tokens = {"SETTINGS"};
-  const auto& color = zone.color;
+  const auto& color = settings.color;
   if (color)
     storage.push_back(std::format(
         "RGB_{}_{}_{}", formatFloatToken(color->r), formatFloatToken(color->g), formatFloatToken(color->b)));
-  const auto& farclip = zone.farclip;
+  const auto& farclip = settings.farclip;
   if (farclip) storage.push_back("FARCLIP_" + formatFloatToken(*farclip));
-  const auto& ambiance = zone.ambiance;
-  if (ambiance && ambiance->volume != 100.0f) storage.push_back("VOLUME_" + formatFloatToken(ambiance->volume));
+  const auto& volume = settings.volume;
+  if (volume && *volume != 100.0f) storage.push_back("VOLUME_" + formatFloatToken(*volume));
   if (storage.empty()) return {};
   for (const std::string& token : storage) tokens.push_back(token);
-  tokens.push_back(zone.name);
+  tokens.push_back(label);
   return joinDoubleUnderscore(tokens);
 }
 

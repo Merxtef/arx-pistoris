@@ -3,9 +3,9 @@
 
 #include "writer.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 
 #include "cgltf/cgltf_write.h"
 #include "external/glb/accessor.h"
@@ -17,9 +17,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -37,7 +39,95 @@ void append32(std::vector<std::uint8_t>& out, std::uint32_t value) {
   std::memcpy(out.data() + offset, &value, sizeof(value));
 }
 
-char* strPtr(const std::string& value) { return value.empty() ? nullptr : const_cast<char*>(value.c_str()); }
+class JsonStringPool {
+ public:
+  char* pointer(const std::string& value) {
+    if (value.empty()) return nullptr;
+    if (!needsEscaping(value)) return const_cast<char*>(value.c_str());
+
+    escaped_.push_back(escape(value));
+    return escaped_.back().data();
+  }
+
+ private:
+  static bool needsEscaping(std::string_view value) noexcept {
+    for (unsigned char character : value)
+      if (character == '"' || character == '\\' || character < 0x20U) return true;
+    return false;
+  }
+
+  static std::string escape(std::string_view value) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string result;
+    result.reserve(value.size());
+    for (unsigned char character : value) {
+      switch (character) {
+        case '"':
+          result += "\\\"";
+          break;
+        case '\\':
+          result += "\\\\";
+          break;
+        case '\b':
+          result += "\\b";
+          break;
+        case '\f':
+          result += "\\f";
+          break;
+        case '\n':
+          result += "\\n";
+          break;
+        case '\r':
+          result += "\\r";
+          break;
+        case '\t':
+          result += "\\t";
+          break;
+        default:
+          if (character < 0x20U) {
+            result += "\\u00";
+            result.push_back(kHex[character >> 4U]);
+            result.push_back(kHex[character & 0xfU]);
+          } else {
+            result.push_back(static_cast<char>(character));
+          }
+          break;
+      }
+    }
+    return result;
+  }
+
+  std::deque<std::string> escaped_;
+};
+
+struct CgltfWriteProjection {
+  JsonStringPool strings;
+  std::vector<cgltf_buffer> buffers;
+  std::vector<cgltf_buffer_view> views;
+  std::vector<cgltf_accessor> accessors;
+  std::vector<cgltf_image> images;
+  std::vector<cgltf_texture> textures;
+  std::vector<cgltf_material> materials;
+  std::vector<cgltf_mesh> meshes;
+  std::vector<cgltf_primitive> primitives;
+  std::vector<cgltf_attribute> attributes;
+  std::vector<cgltf_light> lights;
+  std::vector<cgltf_skin> skins;
+  std::vector<cgltf_node*> joints;
+  std::vector<cgltf_node> nodes;
+  std::vector<cgltf_node*> children;
+  std::vector<cgltf_node*> roots;
+  std::vector<cgltf_animation> animations;
+  std::vector<cgltf_animation_sampler> samplers;
+  std::vector<cgltf_animation_channel> channels;
+  cgltf_scene scene{};
+};
+
+bool addCount(std::size_t& total, std::size_t count) noexcept {
+  if (count > std::numeric_limits<std::size_t>::max() - total) return false;
+  total += count;
+  return true;
+}
 
 bool validIndex(int value, std::size_t size) { return value >= 0 && static_cast<std::size_t>(value) < size; }
 
@@ -69,13 +159,35 @@ int Builder::addVec3Accessor(std::span<const Vec3> values) {
   if (content_basis_rotation_ == math::kIdentityQuat)
     return addAccessor(values, cgltf_component_type_r_32f, cgltf_type_vec3);
 
-  std::vector<Vec3> converted;
-  converted.reserve(values.size());
-  for (const Vec3& value : values) {
+  while (bin_.size() % 4 != 0) bin_.push_back(0);
+  AccessorDesc desc;
+  desc.offset = bin_.size();
+  desc.size = values.size_bytes();
+  desc.count = values.size();
+  desc.component_type = cgltf_component_type_r_32f;
+  desc.type = cgltf_type_vec3;
+  bin_.resize(desc.offset + desc.size);
+  for (std::size_t index = 0; index < values.size(); ++index) {
+    const Vec3& value = values[index];
     const ArxVector3 rotated = math::rotate(content_basis_rotation_, {value.x, value.y, value.z});
-    converted.push_back({rotated.x, rotated.y, rotated.z});
+    const Vec3 converted{rotated.x, rotated.y, rotated.z};
+    std::memcpy(bin_.data() + desc.offset + index * sizeof(Vec3), &converted, sizeof(converted));
   }
-  return addAccessor(std::span<const Vec3>(converted), cgltf_component_type_r_32f, cgltf_type_vec3);
+  const int result = static_cast<int>(accessors_.size());
+  accessors_.push_back(desc);
+  return result;
+}
+
+int Builder::addTimeAccessor(std::span<const float> values) {
+  const int index = addAccessor(values, cgltf_component_type_r_32f, cgltf_type_scalar);
+  if (!values.empty()) {
+    AccessorDesc& desc = accessors_[static_cast<std::size_t>(index)];
+    const auto [minimum, maximum] = std::minmax_element(values.begin(), values.end());
+    desc.has_min_max = true;
+    desc.minimum = *minimum;
+    desc.maximum = *maximum;
+  }
+  return index;
 }
 
 int Builder::addExternalTexture(std::string name, std::string uri) {
@@ -137,6 +249,18 @@ int Builder::addMesh(std::string name, std::vector<Primitive> primitives) {
   return index;
 }
 
+int Builder::addSkin(std::string name, std::span<const int> joints, int skeleton, int inverse_bind_matrices) {
+  const int index = static_cast<int>(skins_.size());
+  skins_.push_back({std::move(name), {joints.begin(), joints.end()}, skeleton, inverse_bind_matrices});
+  return index;
+}
+
+int Builder::addAnimation(std::string name, std::vector<AnimationChannel> channels) {
+  const int index = static_cast<int>(animations_.size());
+  animations_.push_back({std::move(name), std::move(channels)});
+  return index;
+}
+
 int Builder::addNode(std::string name, int mesh) {
   int index = static_cast<int>(nodes_.size());
   NodeDesc desc;
@@ -144,6 +268,11 @@ int Builder::addNode(std::string name, int mesh) {
   desc.mesh = mesh;
   nodes_.push_back(std::move(desc));
   return index;
+}
+
+void Builder::setNodeExtrasJson(int node, std::string json) {
+  if (!validIndex(node, nodes_.size())) return;
+  nodes_[static_cast<std::size_t>(node)].extras_json = std::move(json);
 }
 
 void Builder::setContentBasisRotation(const ArxQuat& rotation) { content_basis_rotation_ = math::normalize(rotation); }
@@ -165,6 +294,11 @@ void Builder::setNodeRotation(int node, const ArxQuat& rotation) {
 void Builder::setNodeLight(int node, int light) {
   if (!validIndex(node, nodes_.size()) || !validIndex(light, lights_.size())) return;
   nodes_[static_cast<std::size_t>(node)].light = light;
+}
+
+void Builder::setNodeSkin(int node, int skin) {
+  if (!validIndex(node, nodes_.size()) || !validIndex(skin, skins_.size())) return;
+  nodes_[static_cast<std::size_t>(node)].skin = skin;
 }
 
 void Builder::addChild(int parent, int child) {
@@ -199,15 +333,36 @@ int Builder::addDebugMeshNode(std::string name, std::span<const Vec3> positions,
 ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   if (bin_.size() > std::numeric_limits<std::uint32_t>::max()) return ARX_GLB_BAD_FORMAT;
 
-  std::vector<cgltf_buffer> buffers(1);
+  CgltfWriteProjection projection;
+  JsonStringPool& json_strings = projection.strings;
+  auto& buffers = projection.buffers;
+  auto& views = projection.views;
+  auto& accessors = projection.accessors;
+  auto& images = projection.images;
+  auto& textures = projection.textures;
+  auto& materials = projection.materials;
+  auto& meshes = projection.meshes;
+  auto& primitives = projection.primitives;
+  auto& attributes = projection.attributes;
+  auto& lights = projection.lights;
+  auto& skins = projection.skins;
+  auto& skin_joints = projection.joints;
+  auto& nodes = projection.nodes;
+  auto& children = projection.children;
+  auto& roots = projection.roots;
+  auto& animations = projection.animations;
+  auto& animation_samplers = projection.samplers;
+  auto& animation_channels = projection.channels;
+
+  buffers.resize(1);
   buffers[0].size = bin_.size();
   buffers[0].data = const_cast<std::uint8_t*>(bin_.data());
 
   std::size_t embedded_texture_count = 0;
   for (const TextureDesc& texture : textures_)
     if (texture.uri.empty()) ++embedded_texture_count;
-  std::vector<cgltf_buffer_view> views(accessors_.size() + embedded_texture_count);
-  std::vector<cgltf_accessor> accessors(accessors_.size());
+  views.resize(accessors_.size() + embedded_texture_count);
+  accessors.resize(accessors_.size());
   for (std::size_t i = 0; i < accessors_.size(); ++i) {
     const AccessorDesc& source = accessors_[i];
     cgltf_size stride = cgltf_calc_size(source.type, source.component_type);
@@ -223,17 +378,23 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     accessors[i].type = source.type;
     accessors[i].count = source.count;
     accessors[i].stride = stride;
+    if (source.has_min_max) {
+      accessors[i].has_min = 1;
+      accessors[i].has_max = 1;
+      accessors[i].min[0] = source.minimum;
+      accessors[i].max[0] = source.maximum;
+    }
   }
 
-  std::vector<cgltf_image> images(textures_.size());
-  std::vector<cgltf_texture> textures(textures_.size());
+  images.resize(textures_.size());
+  textures.resize(textures_.size());
   std::size_t next_view = accessors_.size();
   for (std::size_t i = 0; i < textures_.size(); ++i) {
     const TextureDesc& source = textures_[i];
     if (source.name.empty()) return ARX_GLB_BAD_FORMAT;
-    images[i].name = strPtr(source.name);
+    images[i].name = json_strings.pointer(source.name);
     if (!source.uri.empty()) {
-      images[i].uri = strPtr(source.uri);
+      images[i].uri = json_strings.pointer(source.uri);
     } else {
       if (source.mime_type.empty() || source.size == 0 || source.offset > bin_.size() ||
           source.size > bin_.size() - source.offset) {
@@ -243,18 +404,18 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
       views[next_view].offset = source.offset;
       views[next_view].size = source.size;
       images[i].buffer_view = &views[next_view];
-      images[i].mime_type = strPtr(source.mime_type);
+      images[i].mime_type = json_strings.pointer(source.mime_type);
       ++next_view;
     }
-    textures[i].name = strPtr(source.name);
+    textures[i].name = json_strings.pointer(source.name);
     textures[i].image = &images[i];
   }
 
-  std::vector<cgltf_material> materials(materials_.size());
+  materials.resize(materials_.size());
   for (std::size_t i = 0; i < materials_.size(); ++i) {
     const MaterialDesc& source = materials_[i];
     cgltf_material& material = materials[i];
-    material.name = strPtr(source.name);
+    material.name = json_strings.pointer(source.name);
     material.has_pbr_metallic_roughness = 1;
     std::copy(source.color.begin(), source.color.end(), material.pbr_metallic_roughness.base_color_factor);
     material.pbr_metallic_roughness.metallic_factor = 0.0f;
@@ -268,16 +429,24 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     }
   }
 
-  std::vector<cgltf_mesh> meshes(meshes_.size());
-  std::vector<std::vector<cgltf_primitive>> primitives(meshes_.size());
-  std::vector<std::vector<std::vector<cgltf_attribute>>> attributes(meshes_.size());
+  std::size_t primitive_count = 0;
+  std::size_t attribute_count = 0;
+  for (const MeshDesc& mesh : meshes_) {
+    if (!addCount(primitive_count, mesh.primitives.size())) return ARX_GLB_BAD_FORMAT;
+    for (const Primitive& primitive : mesh.primitives)
+      if (!addCount(attribute_count, primitive.attributes.size())) return ARX_GLB_BAD_FORMAT;
+  }
+  meshes.resize(meshes_.size());
+  primitives.resize(primitive_count);
+  attributes.resize(attribute_count);
+  std::size_t next_primitive = 0;
+  std::size_t next_attribute = 0;
   for (std::size_t i = 0; i < meshes_.size(); ++i) {
-    meshes[i].name = strPtr(meshes_[i].name);
-    primitives[i].resize(meshes_[i].primitives.size());
-    attributes[i].resize(meshes_[i].primitives.size());
+    meshes[i].name = json_strings.pointer(meshes_[i].name);
+    const std::size_t mesh_primitive_start = next_primitive;
     for (std::size_t j = 0; j < meshes_[i].primitives.size(); ++j) {
       const Primitive& source = meshes_[i].primitives[j];
-      cgltf_primitive& primitive = primitives[i][j];
+      cgltf_primitive& primitive = primitives[next_primitive++];
       primitive.type = cgltf_primitive_type_triangles;
       if (!validIndex(source.indices, accessors.size())) return ARX_GLB_BAD_FORMAT;
       primitive.indices = &accessors[static_cast<std::size_t>(source.indices)];
@@ -285,12 +454,12 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
         if (!validIndex(source.material, materials.size())) return ARX_GLB_BAD_FORMAT;
         primitive.material = &materials[static_cast<std::size_t>(source.material)];
       }
-      attributes[i][j].resize(source.attributes.size());
+      const std::size_t primitive_attribute_start = next_attribute;
       for (std::size_t k = 0; k < source.attributes.size(); ++k) {
         const auto& [name, accessor] = source.attributes[k];
         if (!validIndex(accessor, accessors.size())) return ARX_GLB_BAD_FORMAT;
-        cgltf_attribute& attribute = attributes[i][j][k];
-        attribute.name = strPtr(name);
+        cgltf_attribute& attribute = attributes[next_attribute++];
+        attribute.name = json_strings.pointer(name);
         attribute.data = &accessors[static_cast<std::size_t>(accessor)];
         attribute.type = cgltf_attribute_type_custom;
         if (name == "POSITION") {
@@ -324,23 +493,32 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
           position.has_max = 1;
         } else if (name == "NORMAL")
           attribute.type = cgltf_attribute_type_normal;
-        else if (name == "TEXCOORD_0")
+        else if (name == "TEXCOORD_0") {
           attribute.type = cgltf_attribute_type_texcoord;
-        else if (name == "COLOR_0")
+          attribute.index = 0;
+        } else if (name == "COLOR_0") {
           attribute.type = cgltf_attribute_type_color;
+          attribute.index = 0;
+        } else if (name == "JOINTS_0") {
+          attribute.type = cgltf_attribute_type_joints;
+          attribute.index = 0;
+        } else if (name == "WEIGHTS_0") {
+          attribute.type = cgltf_attribute_type_weights;
+          attribute.index = 0;
+        }
       }
-      primitive.attributes = attributes[i][j].data();
-      primitive.attributes_count = attributes[i][j].size();
+      primitive.attributes = source.attributes.empty() ? nullptr : attributes.data() + primitive_attribute_start;
+      primitive.attributes_count = source.attributes.size();
     }
-    meshes[i].primitives = primitives[i].data();
-    meshes[i].primitives_count = primitives[i].size();
+    meshes[i].primitives = meshes_[i].primitives.empty() ? nullptr : primitives.data() + mesh_primitive_start;
+    meshes[i].primitives_count = meshes_[i].primitives.size();
   }
 
-  std::vector<cgltf_light> lights(lights_.size());
+  lights.resize(lights_.size());
   for (std::size_t i = 0; i < lights_.size(); ++i) {
     const LightDesc& source = lights_[i];
     cgltf_light& light = lights[i];
-    light.name = strPtr(source.name);
+    light.name = json_strings.pointer(source.name);
     light.color[0] = source.color.x;
     light.color[1] = source.color.y;
     light.color[2] = source.color.z;
@@ -353,11 +531,21 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
       root_rotation_.w != 1.0f || root_rotation_.x != 0.0f || root_rotation_.y != 0.0f || root_rotation_.z != 0.0f;
   const bool transformed_roots = root_transform_enabled_;
   const std::size_t root_transform_index = nodes_.size();
-  std::vector<cgltf_node> nodes(nodes_.size() + (transformed_roots ? 1U : 0U));
-  std::vector<std::vector<cgltf_node*>> children(nodes.size());
+  std::size_t joint_count = 0;
+  for (const SkinDesc& skin : skins_)
+    if (!addCount(joint_count, skin.joints.size())) return ARX_GLB_BAD_FORMAT;
+  std::size_t child_count = transformed_roots ? roots_.size() : 0U;
+  for (const NodeDesc& node : nodes_)
+    if (!addCount(child_count, node.children.size())) return ARX_GLB_BAD_FORMAT;
+  skins.resize(skins_.size());
+  skin_joints.resize(joint_count);
+  nodes.resize(nodes_.size() + (transformed_roots ? 1U : 0U));
+  children.resize(child_count);
+  std::size_t next_child = 0;
   for (std::size_t i = 0; i < nodes_.size(); ++i) {
     const NodeDesc& source = nodes_[i];
-    nodes[i].name = strPtr(source.name);
+    nodes[i].name = json_strings.pointer(source.name);
+    nodes[i].extras.data = source.extras_json.empty() ? nullptr : const_cast<char*>(source.extras_json.c_str());
     if (source.mesh >= 0) {
       if (!validIndex(source.mesh, meshes.size())) return ARX_GLB_BAD_FORMAT;
       nodes[i].mesh = &meshes[static_cast<std::size_t>(source.mesh)];
@@ -365,6 +553,10 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     if (source.light >= 0) {
       if (!validIndex(source.light, lights.size())) return ARX_GLB_BAD_FORMAT;
       nodes[i].light = &lights[static_cast<std::size_t>(source.light)];
+    }
+    if (source.skin >= 0) {
+      if (!validIndex(source.skin, skins.size())) return ARX_GLB_BAD_FORMAT;
+      nodes[i].skin = &skins[static_cast<std::size_t>(source.skin)];
     }
     if (source.has_translation) {
       nodes[i].has_translation = 1;
@@ -379,19 +571,46 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
       nodes[i].rotation[2] = source.rotation.z;
       nodes[i].rotation[3] = source.rotation.w;
     }
-    children[i].reserve(source.children.size());
+    const std::size_t child_start = next_child;
     for (int child : source.children) {
       if (!validIndex(child, nodes_.size())) return ARX_GLB_BAD_FORMAT;
-      children[i].push_back(&nodes[static_cast<std::size_t>(child)]);
+      cgltf_node* child_node = &nodes[static_cast<std::size_t>(child)];
+      if (child_node->parent != nullptr) return ARX_GLB_BAD_FORMAT;
+      child_node->parent = &nodes[i];
+      children[next_child++] = child_node;
     }
-    nodes[i].children = children[i].data();
-    nodes[i].children_count = children[i].size();
+    nodes[i].children = source.children.empty() ? nullptr : children.data() + child_start;
+    nodes[i].children_count = source.children.size();
   }
 
-  std::vector<cgltf_node*> roots;
+  std::size_t next_joint = 0;
+  for (std::size_t i = 0; i < skins_.size(); ++i) {
+    const SkinDesc& source = skins_[i];
+    if (source.joints.empty() || !validIndex(source.skeleton, nodes_.size())) return ARX_GLB_BAD_FORMAT;
+    cgltf_accessor* inverse_bind = nullptr;
+    if (source.inverse_bind_matrices >= 0) {
+      if (!validIndex(source.inverse_bind_matrices, accessors.size())) return ARX_GLB_BAD_FORMAT;
+      inverse_bind = &accessors[static_cast<std::size_t>(source.inverse_bind_matrices)];
+      if (inverse_bind->type != cgltf_type_mat4 || inverse_bind->component_type != cgltf_component_type_r_32f ||
+          inverse_bind->count < source.joints.size())
+        return ARX_GLB_BAD_FORMAT;
+    }
+    skins[i].name = json_strings.pointer(source.name);
+    skins[i].skeleton = &nodes[static_cast<std::size_t>(source.skeleton)];
+    skins[i].inverse_bind_matrices = inverse_bind;
+    const std::size_t joint_start = next_joint;
+    for (int joint : source.joints) {
+      if (!validIndex(joint, nodes_.size())) return ARX_GLB_BAD_FORMAT;
+      skin_joints[next_joint++] = &nodes[static_cast<std::size_t>(joint)];
+    }
+    skins[i].joints = skin_joints.data() + joint_start;
+    skins[i].joints_count = source.joints.size();
+  }
+
+  roots.resize(transformed_roots ? 1U : roots_.size());
   if (transformed_roots) {
     cgltf_node& transform = nodes[root_transform_index];
-    transform.name = strPtr(root_transform_name_);
+    transform.name = json_strings.pointer(root_transform_name_);
     transform.has_translation = 1;
     transform.translation[0] = root_translation_.x;
     transform.translation[1] = root_translation_.y;
@@ -407,24 +626,75 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     transform.scale[0] = root_scale_;
     transform.scale[1] = root_scale_;
     transform.scale[2] = root_scale_;
-    children[root_transform_index].reserve(roots_.size());
+    const std::size_t child_start = next_child;
     for (int root : roots_) {
       if (!validIndex(root, nodes_.size())) return ARX_GLB_BAD_FORMAT;
       cgltf_node* child = &nodes[static_cast<std::size_t>(root)];
       child->parent = &transform;
-      children[root_transform_index].push_back(child);
+      children[next_child++] = child;
     }
-    transform.children = children[root_transform_index].data();
-    transform.children_count = children[root_transform_index].size();
-    roots.push_back(&transform);
+    transform.children = roots_.empty() ? nullptr : children.data() + child_start;
+    transform.children_count = roots_.size();
+    roots[0] = &transform;
   } else {
-    roots.reserve(roots_.size());
-    for (int root : roots_) {
+    for (std::size_t index = 0; index < roots_.size(); ++index) {
+      const int root = roots_[index];
       if (!validIndex(root, nodes_.size())) return ARX_GLB_BAD_FORMAT;
-      roots.push_back(&nodes[static_cast<std::size_t>(root)]);
+      roots[index] = &nodes[static_cast<std::size_t>(root)];
     }
   }
-  cgltf_scene scene{};
+
+  std::size_t animation_channel_count = 0;
+  for (const AnimationDesc& animation : animations_)
+    if (!addCount(animation_channel_count, animation.channels.size())) return ARX_GLB_BAD_FORMAT;
+  animations.resize(animations_.size());
+  animation_samplers.resize(animation_channel_count);
+  animation_channels.resize(animation_channel_count);
+  std::size_t next_animation_channel = 0;
+  for (std::size_t index = 0; index < animations_.size(); ++index) {
+    const AnimationDesc& source = animations_[index];
+    if (source.name.empty() || source.channels.empty()) return ARX_GLB_BAD_FORMAT;
+    animations[index].name = json_strings.pointer(source.name);
+    const std::size_t channel_start = next_animation_channel;
+    for (std::size_t channel = 0; channel < source.channels.size(); ++channel) {
+      const AnimationChannel& input = source.channels[channel];
+      if (!validIndex(input.input, accessors.size()) || !validIndex(input.output, accessors.size()) ||
+          !validIndex(input.node, nodes_.size()))
+        return ARX_GLB_BAD_FORMAT;
+      cgltf_accessor& times = accessors[static_cast<std::size_t>(input.input)];
+      cgltf_accessor& values = accessors[static_cast<std::size_t>(input.output)];
+      if (times.type != cgltf_type_scalar || times.component_type != cgltf_component_type_r_32f ||
+          times.count != values.count)
+        return ARX_GLB_BAD_FORMAT;
+      cgltf_animation_sampler& sampler = animation_samplers[next_animation_channel];
+      sampler.input = &times;
+      sampler.output = &values;
+      sampler.interpolation = cgltf_interpolation_type_linear;
+      cgltf_animation_channel& output = animation_channels[next_animation_channel++];
+      output.sampler = &sampler;
+      output.target_node = &nodes[static_cast<std::size_t>(input.node)];
+      switch (input.path) {
+        case AnimationPath::kTranslation:
+          if (values.type != cgltf_type_vec3) return ARX_GLB_BAD_FORMAT;
+          output.target_path = cgltf_animation_path_type_translation;
+          break;
+        case AnimationPath::kRotation:
+          if (values.type != cgltf_type_vec4) return ARX_GLB_BAD_FORMAT;
+          output.target_path = cgltf_animation_path_type_rotation;
+          break;
+        case AnimationPath::kScale:
+          if (values.type != cgltf_type_vec3) return ARX_GLB_BAD_FORMAT;
+          output.target_path = cgltf_animation_path_type_scale;
+          break;
+      }
+    }
+    animations[index].samplers = animation_samplers.data() + channel_start;
+    animations[index].samplers_count = source.channels.size();
+    animations[index].channels = animation_channels.data() + channel_start;
+    animations[index].channels_count = source.channels.size();
+  }
+
+  cgltf_scene& scene = projection.scene;
   scene.nodes = roots.data();
   scene.nodes_count = roots.size();
 
@@ -432,8 +702,8 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   std::string generator = "arx-pistoris";
   cgltf_data data{};
   data.file_type = cgltf_file_type_glb;
-  data.asset.version = strPtr(version);
-  data.asset.generator = strPtr(generator);
+  data.asset.version = json_strings.pointer(version);
+  data.asset.generator = json_strings.pointer(generator);
   data.buffers = buffers.data();
   data.buffers_count = buffers.size();
   data.buffer_views = views.data();
@@ -452,6 +722,10 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   data.lights_count = lights.size();
   data.nodes = nodes.data();
   data.nodes_count = nodes.size();
+  data.skins = skins.data();
+  data.skins_count = skins.size();
+  data.animations = animations.data();
+  data.animations_count = animations.size();
   data.scenes = &scene;
   data.scenes_count = 1;
   data.scene = &scene;

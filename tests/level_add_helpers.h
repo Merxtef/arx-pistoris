@@ -4,13 +4,16 @@
 #pragma once
 
 #include "arx_pistoris/level.hpp"
+#include "arx_pistoris/texture.h"
 
 #include "modules/geometry.h"
 #include "modules/lights.h"
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
+#include "modules/textures.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -51,8 +54,10 @@ inline ArxLevelFace publicFace(const pistoris::Face& value, pistoris::RoomIndex 
 
 inline ArxLevelRoom publicRoom(const pistoris::Room& value) { return {stringView(value.name)}; }
 
-inline ArxLevelTextureView publicTexture(const pistoris::Texture& value) {
-  return {stringView(value.path), {value.encoded_image.data(), value.encoded_image.size()}};
+inline ArxTextureView publicTexture(const pistoris::Texture& value) {
+  return {stringView(value.path),
+          {value.encoded_image.data(), value.encoded_image.size()},
+          stringView(value.external_image_extension)};
 }
 
 inline ArxLevelPortal publicPortal(const pistoris::Portal& value) {
@@ -172,7 +177,7 @@ inline ArxReturnCode replaceMesh(pistoris::Level& level, const MeshSnapshot& val
     faces.push_back(projected);
   }
 
-  std::vector<ArxLevelTextureView> textures;
+  std::vector<ArxTextureView> textures;
   textures.reserve(value.textures.size());
   for (const pistoris::Texture& texture : value.textures) textures.push_back(detail::publicTexture(texture));
   return level.replaceMesh(
@@ -182,7 +187,7 @@ inline ArxReturnCode replaceMesh(pistoris::Level& level, const MeshSnapshot& val
 inline ArxReturnCode copyMesh(const pistoris::Level& level, MeshSnapshot& out) {
   std::vector<ArxLevelVertex> vertices(level.vertexCount());
   std::vector<ArxLevelFace> faces(level.faceCount());
-  std::vector<ArxLevelTextureView> textures(level.textureCount());
+  std::vector<ArxTextureView> textures(level.textureCount());
   ArxReturnCode rc = level.copyVertices(0, vertices.size(), vertices.data());
   if (rc != ARX_OK) return rc;
   rc = level.copyFaces(0, faces.size(), faces.data());
@@ -211,9 +216,10 @@ inline ArxReturnCode copyMesh(const pistoris::Level& level, MeshSnapshot& out) {
     copied.face_rooms.push_back(face.room);
   }
   copied.textures.reserve(textures.size());
-  for (const ArxLevelTextureView& texture : textures) {
+  for (const ArxTextureView& texture : textures) {
     pistoris::Texture internal(detail::string(texture.path));
     internal.encoded_image = detail::bytes(texture.encoded_image);
+    internal.external_image_extension = detail::string(texture.external_image_extension);
     copied.textures.push_back(std::move(internal));
   }
   out = std::move(copied);
@@ -339,10 +345,11 @@ inline pistoris::Face face(const pistoris::Level& level, pistoris::FaceIndex ind
 }
 
 inline pistoris::Texture texture(const pistoris::Level& level, pistoris::TextureIndex index) {
-  ArxLevelTextureView value{};
+  ArxTextureView value{};
   static_cast<void>(level.copyTextureViews(index, 1, &value));
   pistoris::Texture out(detail::string(value.path));
   out.encoded_image = detail::bytes(value.encoded_image);
+  out.external_image_extension = detail::string(value.external_image_extension);
   return out;
 }
 
@@ -501,7 +508,7 @@ inline std::optional<ArxLevelRoomDistance> roomDistance(const pistoris::Level& l
                                                         pistoris::RoomIndex second) {
   std::uint8_t has_distance = 0;
   ArxLevelRoomDistance value{};
-  if (level.getRoomDistance(first, second, has_distance, value) != ARX_OK || has_distance == 0) return std::nullopt;
+  if (level.roomDistance(first, second, has_distance, value) != ARX_OK || has_distance == 0) return std::nullopt;
   return value;
 }
 
@@ -620,6 +627,10 @@ inline pistoris::VertexIndex addVertex(pistoris::Level& level, const pistoris::V
 inline pistoris::FaceIndex addFace(pistoris::Level& level, const pistoris::Face& value, pistoris::RoomIndex room) {
   pistoris::FaceIndex index = pistoris::kInvalidFaceIndex;
   return level.addFace(detail::publicFace(value, room), index) == ARX_OK ? index : pistoris::kInvalidFaceIndex;
+}
+
+inline pistoris::Corner corner(pistoris::VertexIndex vertex, ArxVector3 normal, float u = 0.0f, float v = 0.0f) {
+  return {vertex, normal, u, v};
 }
 
 inline pistoris::RoomIndex addRoom(pistoris::Level& level, const pistoris::Room& value) {

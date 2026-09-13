@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include <cmath>
 #include <limits>

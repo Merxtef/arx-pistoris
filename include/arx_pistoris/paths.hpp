@@ -37,61 +37,87 @@ struct ResourceSearchLocation {
   std::uint32_t max_discovery_depth = 0;
 };
 
-ArxResourceKind resourceShorthandKind(std::string_view shorthand) noexcept;
+// --- Common ---
 
-// Cross-platform policy for converter-owned emitted filename components. Existing resource identities and host paths
-// are not subject to this policy
-bool isPortableFilename(std::string_view filename) noexcept;
-std::string sanitizePortableFilename(std::string_view filename);
+[[nodiscard]] ArxResourceKind resourceSelectorKind(std::string_view selector) noexcept;
 
-std::string textureFromGame(std::string_view path);
-std::string textureToGame(std::string_view path);
+// Cross-platform policy for converter-emitted filename components
+// Resource identities and host paths unchanged
+[[nodiscard]] bool isPortableFilename(std::string_view filename) noexcept;
+[[nodiscard]] std::string sanitizePortableFilename(std::string_view filename);
 
-bool normalizeZoneAmbiance(std::string_view path, std::string& out);
-bool zoneAmbianceFile(std::string_view ambiance, std::string& out);
+// Cross-platform policy for one component of a logical resource path
+[[nodiscard]] bool isPortableResourcePathComponent(std::string_view component) noexcept;
 
-std::string levelDlf(std::uint32_t level);
-std::string levelLlf(std::uint32_t level);
-std::string levelFts(std::uint32_t level);
-bool levelFromDlf(std::string_view path, std::uint32_t& level) noexcept;
-bool levelFromLlf(std::string_view path, std::uint32_t& level) noexcept;
-bool levelFromFts(std::string_view path, std::uint32_t& level) noexcept;
-bool dlfSceneFromLevelName(std::string_view name, std::string& out);
-std::string levelShorthand(std::uint32_t level);
-bool levelFromShorthand(std::string_view shorthand, std::uint32_t& level) noexcept;
+[[nodiscard]] std::string_view textureDirectory() noexcept;
+[[nodiscard]] std::string_view soundDirectory() noexcept;
+[[nodiscard]] std::string_view ambianceSoundDirectory() noexcept;
 
-std::span<const std::string_view> modelTypes() noexcept;
-bool modelFtl(ModelPathView model, std::string& out);
-bool modelFromFtl(std::string_view path, ModelPathView& out) noexcept;
-bool entityClassFromModel(ModelPathView model, std::string& path);
-bool modelFromEntityClass(std::string_view path, ModelPathView& out) noexcept;
-bool modelShorthand(ModelPathView model, std::string& out);
-bool modelFromShorthand(std::string_view shorthand, ModelPathView& out) noexcept;
+[[nodiscard]] bool normalizeZoneAmbiance(std::string_view path, std::string& out);
+[[nodiscard]] bool ambFromZoneAmbiance(std::string_view ambiance, std::string& out);
 
-// The input is an interactive type; non-NPC interactive types map to the fix_inter animation directory
-std::span<const std::string_view> animationTypes() noexcept;
-bool animationDirectory(std::string_view interactive_type, std::string& out);
-bool animationTea(AnimationPathView animation, std::string& out);
-bool animationFromTea(std::string_view path, AnimationPathView& out) noexcept;
-bool animationShorthand(AnimationPathView animation, std::string& out);
-bool animationFromShorthand(std::string_view shorthand, AnimationPathView& out) noexcept;
+// --- Level ---
 
-bool cinematicFile(CinematicPathView cinematic, std::string& out);
-bool cinematicFromFile(std::string_view path, CinematicPathView& out) noexcept;
-bool cinematicShorthand(CinematicPathView cinematic, std::string& out);
-bool cinematicFromShorthand(std::string_view shorthand, CinematicPathView& out) noexcept;
+[[nodiscard]] std::string levelDlf(std::uint32_t level);
+[[nodiscard]] std::string levelLlf(std::uint32_t level);
+[[nodiscard]] std::string levelFts(std::uint32_t level);
+[[nodiscard]] std::uint32_t minimapResourceLevel(std::uint32_t level) noexcept;
+[[nodiscard]] std::string levelMinimap(std::uint32_t level);
+[[nodiscard]] std::string levelLoadingScreen(std::uint32_t level);
+[[nodiscard]] std::string_view minimapOffsetsFile() noexcept;
+[[nodiscard]] bool levelFromDlf(std::string_view path, std::uint32_t& level) noexcept;
+[[nodiscard]] bool levelFromLlf(std::string_view path, std::uint32_t& level) noexcept;
+[[nodiscard]] bool levelFromFts(std::string_view path, std::uint32_t& level) noexcept;
+[[nodiscard]] bool dlfSceneFromLevelName(std::string_view name, std::string& out);
+[[nodiscard]] std::string levelSelector(std::uint32_t level);
+[[nodiscard]] bool levelFromSelector(std::string_view selector, std::uint32_t& level) noexcept;
+[[nodiscard]] bool ftsFromDlfScene(std::string_view scene_path, std::string& out);
 
-bool ambianceFile(AmbiancePathView ambiance, std::string& out);
-bool ambianceFromFile(std::string_view path, AmbiancePathView& out) noexcept;
-bool ambianceShorthand(AmbiancePathView ambiance, std::string& out);
-bool ambianceFromShorthand(std::string_view shorthand, AmbiancePathView& out) noexcept;
+// --- Model ---
 
-bool modelSearchLocation(std::string_view type, ResourceSearchLocation& out) noexcept;
-bool animationSearchLocation(std::string_view type, ResourceSearchLocation& out) noexcept;
-ResourceSearchLocation levelSearchLocation() noexcept;
-ResourceSearchLocation cinematicSearchLocation() noexcept;
-ResourceSearchLocation ambianceSearchLocation() noexcept;
+[[nodiscard]] std::span<const std::string_view> modelSelectorTypes() noexcept;
+[[nodiscard]] bool modelFtl(ModelPathView model, std::string& out);
+[[nodiscard]] bool modelFromFtl(std::string_view path, ModelPathView& out) noexcept;
+[[nodiscard]] bool entityClassFromFtl(std::string_view path, std::string& out);
+[[nodiscard]] bool ftlFromEntityClass(std::string_view path, std::string& out);
+[[nodiscard]] bool entityClassKind(std::string_view path, ArxEntityClassKind& out);
+[[nodiscard]] bool itemIconFromEntityClass(std::string_view path, std::string& out);
+[[nodiscard]] bool entityClassFromModel(ModelPathView model, std::string& path);
+[[nodiscard]] bool baseEntityClassFromModel(ModelPathView model, std::string& path);
+[[nodiscard]] bool modelFromEntityClass(std::string_view path, ModelPathView& out) noexcept;
+[[nodiscard]] bool modelSelector(ModelPathView model, std::string& out);
+[[nodiscard]] bool modelFromSelector(std::string_view selector, ModelPathView& out) noexcept;
 
-bool ftsFromDlfScene(std::string_view scene_path, std::string& out);
+// --- Animation ---
+
+[[nodiscard]] std::span<const std::string_view> animationSelectorTypes() noexcept;
+// Non-NPC interactive types map to the fix_inter animation directory
+[[nodiscard]] bool animationDirectory(std::string_view interactive_type, std::string& out);
+[[nodiscard]] bool animationTea(AnimationPathView animation, std::string& out);
+[[nodiscard]] bool animationFromTea(std::string_view path, AnimationPathView& out) noexcept;
+[[nodiscard]] bool animationSelector(AnimationPathView animation, std::string& out);
+[[nodiscard]] bool animationFromSelector(std::string_view selector, AnimationPathView& out) noexcept;
+
+// --- Cinematic ---
+
+[[nodiscard]] bool cinematicCin(CinematicPathView cinematic, std::string& out);
+[[nodiscard]] bool cinematicFromCin(std::string_view path, CinematicPathView& out) noexcept;
+[[nodiscard]] bool cinematicSelector(CinematicPathView cinematic, std::string& out);
+[[nodiscard]] bool cinematicFromSelector(std::string_view selector, CinematicPathView& out) noexcept;
+
+// --- Ambiance ---
+
+[[nodiscard]] bool ambianceAmb(AmbiancePathView ambiance, std::string& out);
+[[nodiscard]] bool ambianceFromAmb(std::string_view path, AmbiancePathView& out) noexcept;
+[[nodiscard]] bool ambianceSelector(AmbiancePathView ambiance, std::string& out);
+[[nodiscard]] bool ambianceFromSelector(std::string_view selector, AmbiancePathView& out) noexcept;
+
+// --- Discovery ---
+
+[[nodiscard]] bool modelSearchLocation(std::string_view type, ResourceSearchLocation& out) noexcept;
+[[nodiscard]] bool animationSearchLocation(std::string_view type, ResourceSearchLocation& out) noexcept;
+[[nodiscard]] ResourceSearchLocation levelSearchLocation() noexcept;
+[[nodiscard]] ResourceSearchLocation cinematicSearchLocation() noexcept;
+[[nodiscard]] ResourceSearchLocation ambianceSearchLocation() noexcept;
 
 }  // namespace pistoris::paths

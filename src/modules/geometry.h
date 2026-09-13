@@ -3,21 +3,20 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
+
+#include "utils/spatial/arx_level_grid_index.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
-#include <string>
-#include <string_view>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace pistoris {
@@ -38,30 +37,12 @@ struct Face {
   TextureIndex texture = kNoTexture;
   FaceType flags = 0;
   float transval = 0.0f;
+  ArxVector3 normal = {};
 };
-
-struct Texture {
-  std::string path;
-  std::vector<std::uint8_t> encoded_image;
-
-  Texture() = default;
-  Texture(std::string value) : path(std::move(value)) {}
-  Texture(const char* value) : path(value) {}
-  Texture(std::string_view value) : path(value) {}
-
-  operator std::string&() { return path; }
-  operator const std::string&() const { return path; }
-
-  bool operator==(const Texture&) const = default;
-  bool operator==(std::string_view value) const { return path == value; }
-};
-
-inline bool operator==(std::string_view value, const Texture& texture) { return texture == value; }
 
 struct GeometryData {
   std::vector<Vertex> vertices;
   std::vector<Face> faces;
-  std::vector<Texture> textures;
 };
 
 struct GeometryDerived {
@@ -74,16 +55,15 @@ namespace geometry {
 enum class Error : std::uint8_t {
   kNone,
   kInvalidOptions,
+  kBadIndex,
   kNoGeometry,
   kTooManyVertices,
   kTooManyFaces,
-  kTooManyTextures,
   kBadVertex,
-  kBadTexture,
-  kBadTextureImage,
   kOutOfMemory,
   kBadFaceTexture,
   kBadFaceVertex,
+  kBadCornerNormal,
   kBadFaceType,
   kBadFaceTransval,
   kBadFaceNormal,
@@ -92,36 +72,6 @@ enum class Error : std::uint8_t {
   kBadVertexWeldSegment,
   kOverlappingVertexWeldSegments,
 };
-
-enum class ImageFormat : std::uint8_t {
-  kUnknown = 0,
-  kJpeg,
-  kPng,
-  kBmp,
-  kTga,
-};
-
-enum class ImageError : std::uint8_t {
-  kNone,
-  kMalformed,
-  kOutOfMemory,
-};
-
-struct ImageInfo {
-  ImageFormat format = ImageFormat::kUnknown;
-  std::uint32_t width = 0;
-  std::uint32_t height = 0;
-  std::uint8_t components = 0;
-};
-
-ImageFormat detectImageFormat(std::span<const std::uint8_t> encoded) noexcept;
-ImageError inspectImage(std::span<const std::uint8_t> encoded, ImageInfo* out = nullptr) noexcept;
-ImageError transcodeImageToPng(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out,
-                               ImageInfo* out_info = nullptr);
-ImageError normalizeImageToPowerOfTwo(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out,
-                                      ImageInfo* out_info = nullptr, bool* out_rescaled = nullptr);
-bool imageHasAlpha(const ImageInfo& info) noexcept;
-std::string_view imageExtension(ImageFormat format) noexcept;
 
 using FacePredicateFn = bool (*)(FaceIndex face, const void* user_data) noexcept;
 
@@ -175,8 +125,10 @@ class PositionIndex {
  public:
   explicit PositionIndex(float radius, PositionWeldMetric metric = PositionWeldMetric::kAxisAligned);
 
-  void add(std::uint32_t index, const ArxVector3& position);
-  [[nodiscard]] std::vector<std::uint32_t> candidates(const ArxVector3& position) const;
+  [[nodiscard]] bool enabled() const noexcept { return valid(); }
+  void reservePositionCapacity(std::size_t capacity);
+  [[nodiscard]] bool tryAdd(std::uint32_t index, const ArxVector3& position);
+  void findCandidates(std::vector<std::uint32_t>& out, const ArxVector3& position) const;
   [[nodiscard]] std::optional<std::uint32_t> find(const ArxVector3& position) const;
 
  private:
@@ -203,16 +155,27 @@ class TriangleIndex {
  public:
   TriangleIndex() = default;
   explicit TriangleIndex(std::span<const IndexedTriangle> triangles);
+  explicit TriangleIndex(std::vector<IndexedTriangle>&& triangles);
 
+  TriangleIndex(const TriangleIndex&) = delete;
+  TriangleIndex& operator=(const TriangleIndex&) = delete;
+  TriangleIndex(TriangleIndex&&) noexcept = default;  // NOLINT(bugprone-exception-escape): container moves are noexcept
+  TriangleIndex& operator=(TriangleIndex&&) noexcept = default;
+
+  [[nodiscard]] std::size_t size() const noexcept;
   [[nodiscard]] const IndexedTriangle& triangle(std::uint32_t index) const;
-  [[nodiscard]] std::vector<std::uint32_t> candidatesForXz(float x, float z) const;
-  [[nodiscard]] std::vector<std::uint32_t> candidatesForAabb(const ArxAabb& bounds) const;
-  [[nodiscard]] std::vector<std::uint32_t> candidatesForSegment(const ArxVector3& a, const ArxVector3& b) const;
+  void findCandidatesForXz(std::vector<std::uint32_t>& out, float x, float z) const;
+  void findCandidatesForAabb(std::vector<std::uint32_t>& out, const ArxAabb& bounds) const;
+  void findCandidatesForSegment(std::vector<std::uint32_t>& out, const ArxVector3& a, const ArxVector3& b) const;
+
+  using CandidateVisitor = void (*)(std::uint32_t index, void* user_data);
+  void visitCandidatesForXz(float x, float z, CandidateVisitor visitor, void* user_data) const;
 
  private:
+  void buildIndex();
+
   std::vector<IndexedTriangle> triangles_;
-  std::unordered_map<std::uint16_t, std::vector<std::uint32_t>> buckets_;
-  std::vector<std::uint32_t> large_triangle_indices_;
+  spatial::ArxLevelGridIndex grid_index_;
 };
 
 struct SurfaceSupportTriangle {
@@ -226,73 +189,138 @@ struct SurfaceSupportHit {
   ArxVector3 normal = {};
 };
 
+class SurfaceSupportIndexBuilder;
+
 class SurfaceSupportIndex {
  public:
-  explicit SurfaceSupportIndex(const std::vector<SurfaceSupportTriangle>& triangles);
+  using HitVisitor = void (*)(const SurfaceSupportHit& hit, void* user_data);
+
+  SurfaceSupportIndex(const SurfaceSupportIndex&) = delete;
+  SurfaceSupportIndex& operator=(const SurfaceSupportIndex&) = delete;
+  // NOLINTNEXTLINE(bugprone-exception-escape): standard container moves are noexcept
+  SurfaceSupportIndex(SurfaceSupportIndex&&) noexcept = default;
+  SurfaceSupportIndex& operator=(SurfaceSupportIndex&&) noexcept = default;
 
   [[nodiscard]] bool empty() const;
+  [[nodiscard]] std::size_t size() const noexcept;
   [[nodiscard]] bool hasBounds() const;
   [[nodiscard]] const ArxAabb& bounds() const;
-  [[nodiscard]] std::vector<SurfaceSupportTriangle> triangles() const;
-  [[nodiscard]] std::vector<SurfaceSupportHit> hitsAt(float x, float z) const;
-  [[nodiscard]] std::vector<SurfaceSupportHit> downwardHitsAt(float x, float z, float origin_y) const;
+  [[nodiscard]] SurfaceSupportTriangle triangle(std::size_t index) const;
+  [[nodiscard]] SurfaceSupportIndex subset(std::span<const std::uint32_t> triangle_indices) const;
+  [[nodiscard]] bool mayHaveHitsInAabb(const ArxAabb& bounds) const;
+  void visitHitsAt(float x, float z, HitVisitor visitor, void* user_data) const;
+  void findHitsAt(std::vector<SurfaceSupportHit>& out, float x, float z) const;
+  void findDownwardHitsAt(std::vector<SurfaceSupportHit>& out, float x, float z, float origin_y) const;
   [[nodiscard]] std::optional<SurfaceSupportHit> closestDownwardHit(float x, float z, float origin_y) const;
   [[nodiscard]] std::optional<SurfaceSupportHit> closestHit(float x, float z, float reference_y, float max_delta) const;
 
  private:
-  struct SupportFace {
+  friend class SurfaceSupportIndexBuilder;
+
+  struct Record {
     FaceIndex face = kInvalidFaceIndex;
-    std::array<ArxVector3, 3> vertices = {};
     ArxVector3 normal = {};
+    IndexedTriangle triangle = {};
   };
 
-  std::vector<SupportFace> faces_;
-  TriangleIndex index_;
+  struct Storage {
+    std::vector<Record> records;
+  };
+
+  [[nodiscard]] std::optional<SurfaceSupportHit> hitAt(std::uint32_t index, float x, float z) const;
+  void addTriangleToIndex(std::uint32_t index);
+  void visitCandidatesForXz(float x, float z, TriangleIndex::CandidateVisitor visitor, void* user_data) const;
+
+  SurfaceSupportIndex() = default;
+
+  std::shared_ptr<const Storage> storage_;
+  std::vector<std::uint32_t> triangle_indices_;
+  spatial::ArxLevelGridIndex grid_index_;
   ArxAabb bounds_ = {};
   bool has_bounds_ = false;
 };
 
-VertexIndex addVertex(GeometryData& geometry, const ArxVector3& position);
-void addVertices(GeometryData& geometry, std::span<const ArxVector3> positions,
-                 std::vector<VertexIndex>* out_indices = nullptr);
-FaceIndex addFace(GeometryData& geometry, Face face);
-TextureIndex addTexture(GeometryData& geometry, Texture texture);
-std::size_t compactVertices(GeometryData& geometry, VertexIndexRemap* out_vertex_remap = nullptr);
-std::size_t compactTextures(GeometryData& geometry);
+class SurfaceSupportIndexBuilder {
+ public:
+  explicit SurfaceSupportIndexBuilder(std::size_t capacity);
+
+  void addTriangle(FaceIndex face, const std::array<ArxVector3, 3>& vertices);
+  SurfaceSupportIndex build() &&;
+
+ private:
+  std::vector<SurfaceSupportIndex::Record> records_;
+};
+
 struct GeometryRemap {
   VertexIndexRemap vertices;
   FaceIndexRemap faces;
 };
 
-Error weldVertices(GeometryData& geometry, const VertexWeldOptions& options = {}, GeometryRemap* out_remap = nullptr);
-Error weldVerticesSegmented(GeometryData& geometry, const SegmentedVertexWeldInput& input,
-                            const VertexWeldOptions& options = {}, GeometryRemap* out_remap = nullptr);
+// --- Validation ---
 
+Error validateVertex(const Vertex& vertex) noexcept;
+Error validateCounts(std::size_t vertex_count, std::size_t face_count) noexcept;
+Error validateVertexAppend(const GeometryData& geometry, std::size_t count) noexcept;
+Error validateVertices(std::span<const Vertex> vertices, ArxAabb* out_bounds = nullptr) noexcept;
+Error validateFaceReferences(const Face& face, std::size_t vertex_count, std::size_t texture_count) noexcept;
+Error validateFaces(std::span<const Face> faces, std::span<const Vertex> vertices, std::size_t texture_count,
+                    ArxAabb* out_referenced_bounds = nullptr) noexcept;
+Error validate(const GeometryData& geometry, std::size_t texture_count, GeometryDerived* out = nullptr);
+Error validateScale(const GeometryData& geometry, float factor) noexcept;
+Error validateRotation(const GeometryData& geometry, const ArxMat3& rotation) noexcept;
+Error validateTranslation(const GeometryData& geometry, const ArxVector3& offset) noexcept;
+
+// --- Queries ---
+
+std::size_t vertexCapacityForAppend(const GeometryData& geometry, std::size_t count, std::size_t limit) noexcept;
+Error collectTextureUsage(const GeometryData& geometry, std::size_t texture_count, std::vector<std::uint8_t>& out);
 std::array<ArxVector3, 3> facePositions(const GeometryData& geometry, const Face& face);
 ArxVector3 faceNormalOr(const GeometryData& geometry, const Face& face, ArxVector3 fallback);
 ArxAabb triangleBounds(const std::array<ArxVector3, 3>& vertices);
 bool degenerateTriangle(const ArxVector3& a, const ArxVector3& b, const ArxVector3& c);
-
-VertexIndex addOrFindVertex(GeometryData& geometry, PositionIndex& index, const ArxVector3& position);
-
 bool segmentTriangleIntersectionT(const ArxVector3& start, const ArxVector3& end, const ArxVector3& a,
                                   const ArxVector3& b, const ArxVector3& c, double& out_t);
 bool segmentIntersectsTriangle(const ArxVector3& start, const ArxVector3& end, const ArxVector3& a, const ArxVector3& b,
                                const ArxVector3& c);
 
-SurfaceSupportIndex buildSurfaceSupportIndex(const GeometryData& geometry);
-SurfaceSupportIndex buildSurfaceSupportIndex(const GeometryData& geometry, FacePredicate predicate);
-SurfaceSupportIndex buildSurfaceSupportIndex(const GeometryData& geometry, std::span<const FaceIndex> face_indices);
-void mergeSurfaceSupportHits(std::vector<SurfaceSupportHit>& hits, float merge_distance = 1.0f);
+// --- Mutation ---
 
-Error validateVertex(const Vertex& vertex) noexcept;
-Error validateVertices(std::span<const Vertex> vertices, ArxAabb* out_bounds = nullptr) noexcept;
-Error validateTexture(const Texture& texture) noexcept;
-Error validateTextures(std::span<const Texture> textures) noexcept;
-Error validateFaceReferences(const Face& face, std::size_t vertex_count, std::size_t texture_count) noexcept;
-Error validateFaces(std::span<const Face> faces, std::span<const Vertex> vertices, std::size_t texture_count,
-                    ArxAabb* out_referenced_bounds = nullptr) noexcept;
-Error validate(const GeometryData& geometry, GeometryDerived* out = nullptr);
+void reserveVertexCapacity(GeometryData& geometry, std::size_t capacity);
+void reserveFaceCapacity(GeometryData& geometry, std::size_t capacity);
+void setVertex(GeometryData& geometry, VertexIndex index, Vertex vertex) noexcept;
+VertexIndex addVertex(GeometryData& geometry, Vertex vertex);
+VertexIndex appendVertices(GeometryData& geometry, std::span<const Vertex> vertices);
+void truncateVertices(GeometryData& geometry, std::size_t size) noexcept;
+void setFace(GeometryData& geometry, FaceIndex index, Face face) noexcept;
+FaceIndex addFace(GeometryData& geometry, Face face);
+void removeFace(GeometryData& geometry, FaceIndex index) noexcept;
+void replace(GeometryData& geometry, GeometryData&& replacement) noexcept;
+void clear(GeometryData& geometry) noexcept;
+VertexIndex addOrFindVertex(GeometryData& geometry, PositionIndex& index, const ArxVector3& position);
+
+// --- Repair ---
+
+// Nonempty output is an order-preserving compaction map
+std::size_t compactVertices(GeometryData& geometry, VertexIndexRemap* out_vertex_remap = nullptr);
+Error weldVertices(GeometryData& geometry, const VertexWeldOptions& options = {}, GeometryRemap* out_remap = nullptr);
+Error weldVerticesSegmented(GeometryData& geometry, const SegmentedVertexWeldInput& input,
+                            const VertexWeldOptions& options = {}, GeometryRemap* out_remap = nullptr);
+void mergeSurfaceSupportHits(std::vector<SurfaceSupportHit>& hits, float merge_distance = 1.0f);
+void mergeSortedSurfaceSupportHits(std::vector<SurfaceSupportHit>& hits, float merge_distance = 1.0f);
+
+// --- Transformation ---
+
+void applyScale(GeometryData& geometry, float factor) noexcept;
+void applyRotation(GeometryData& geometry, const ArxMat3& rotation) noexcept;
+void applyTranslation(GeometryData& geometry, const ArxVector3& offset) noexcept;
+void remapTextureReferences(GeometryData& geometry, std::span<const TextureIndex> remap) noexcept;
+
+// --- Generation ---
+
+SurfaceSupportIndex buildSurfaceSupportIndex(const GeometryData& geometry);
+SurfaceSupportIndex buildSurfaceSupportIndex(const GeometryData& geometry, FacePredicate predicate,
+                                             std::vector<FaceIndex>& face_scratch);
+SurfaceSupportIndex buildSurfaceSupportIndex(const GeometryData& geometry, std::span<const FaceIndex> face_indices);
 
 }  // namespace geometry
 }  // namespace pistoris

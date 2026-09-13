@@ -1,20 +1,24 @@
 # arx-pistoris
 
 Pistoris is a C++20 library and command-line converter for Arx Fatalis 3D
-resources. It reads and writes the native FTL, TEA, FTS, DLF, and LLF formats
-and exchanges editable data through OBJ, GLB, and arx-convert-compatible JSON.
+resources. It reads and writes the native FTL, TEA, FTS, DLF, LLF, and AMB
+formats. It exchanges editable data through OBJ, GLB, and
+arx-convert-compatible JSON.
 
-Level is the current coherent editing class. It owns geometry, rooms, portals,
-navigation, lighting, and scene objects while maintaining cross-module state.
-Level GLB is a from-scratch authoring surface for ordinary DCC tools. FTL and
-TEA currently use legacy direct conversion APIs; coherent Model and Animations
-editing classes are not part of this release.
+Level, Model, Animation, and Ambiance are the current coherent editing classes.
+Level owns geometry, rooms, portals, navigation, lighting, and scene objects as
+one asset. Model owns FTL geometry, skeleton, action points, and generic named
+selections. Animation owns one TEA-compatible timeline and its dense per-bone
+transforms. Ambiance owns one logical AMB resource and its semantic audio
+tracks. Level, Model, and Ambiance GLB are from-scratch authoring surfaces for
+ordinary DCC tools; Model GLB can carry Animation sidecars.
 
-The library has a C++20 API and a matching C ABI for Level operations. The CLI
-owns filesystem discovery, mounts, sidecars, overwrite policy, and game-resource
-placement. The library itself operates on memory buffers and logical resource
-paths. Third-party source dependencies are vendored, and produced binaries have
-no third-party runtime dependencies.
+The library has a C++20 API and a C ABI for Level, Model, Animation, and Ambiance
+operations and supported native carriers. The CLI owns filesystem discovery,
+mounts, sidecars, overwrite policy, and game-resource placement. The library
+itself operates on memory buffers and logical resource paths. Third-party
+source dependencies are vendored, and produced binaries have no third-party
+runtime dependencies.
 
 ## License
 
@@ -33,19 +37,23 @@ affiliated with or endorsed by Arkane Studios or ZeniMax Media Inc.
 
 | Native data | Native binary | OBJ | GLB | Compatible JSON |
 | --- | :---: | :---: | :---: | :---: |
-| FTL model | read/write | bidirectional, static | bidirectional, legacy | bidirectional |
-| TEA animation | read/write | - | bidirectional with FTL, legacy | bidirectional |
+| FTL model | read/write | bidirectional, static | bidirectional through Model | bidirectional |
+| TEA animation | read/write | - | Model sidecar | bidirectional |
 | FTS geometry and rooms | read/write | - | bidirectional through Level | bidirectional |
 | DLF scene objects | read/write | - | Level companion | bidirectional |
 | LLF lighting | read/write | - | Level companion | bidirectional |
+| AMB ambiance | read/write | - | bidirectional | bidirectional |
 
 FTS, DLF, and LLF combine into one Level. FTS is mandatory; LLF and DLF are
 optional inputs when using the loose-file workflow. Game-layout DLF input
 discovers its mandatory FTS and optional LLF through mounted resources.
+FTL and GLB convert to and from the Model editing class. TEA converts to the
+Animation editing class, and Animation sidecars accompany Model GLB.
+AMB and GLB convert to and from the Ambiance editing class.
 
 FTL, FTS, DLF, and LLF readers accept raw and PKWARE DCL-compressed data.
 Their writers use game-compatible compression by default and can emit raw data
-when requested. TEA remains uncompressed.
+when requested. TEA and AMB remain uncompressed.
 
 The public interfaces are still pre-1.0. Source and ABI compatibility are not
 promised between minor releases.
@@ -72,15 +80,15 @@ See `arx-pistor --help` for the installed option set and defaults.
 
 - **[CLI Guide](docs/CLI.md)** - conversion, mounts, selectors, and output
   layouts.
-- **[Authoring Guide](docs/AUTHORING_GUIDE.md)** - concrete OBJ and GLB
-  authoring workflows.
-- **[Authoring Reference](docs/AUTHORING_REFERENCE.md)** - exact semantic
-  names, structures, flags, and defaults.
+- **[Authoring Guide](docs/AUTHORING_GUIDE.md)** - practical Level, Model,
+  Animation, and Ambiance authoring guides.
+- **[Authoring Reference](docs/AUTHORING_REFERENCE.md)** - exact authoring
+  names, structures, flags, and defaults by resource type.
 - **[API Guide](docs/API.md)** - C++ and C integration.
 - **[Fidelity and Limitations](docs/LIMITATIONS.md)** - deliberate losses and
   format constraints.
 - **[Building](docs/BUILD.md)** - prerequisites, targets, and installation.
-- **[Testing and Fuzzing](https://github.com/Merxtef/arx-pistoris/blob/main/docs/TESTING.md)** -
+- **[Testing and Fuzzing](docs/TESTING.md)** -
   local quality workflows and optional game corpora.
 
 ## Acknowledgments

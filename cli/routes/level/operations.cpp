@@ -3,9 +3,11 @@
 
 #include "routes/level/operations.h"
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/debug/level_diagnostics.hpp"
-#include "arx_pistoris/pistoris.hpp"
+#include "arx_pistoris/debug/level/diagnostics.hpp"
+#include "arx_pistoris/level.hpp"
+#include "arx_pistoris/runtime.hpp"
 
 #include "console/diagnostics.h"
 #include "routes/level/options.h"
@@ -16,7 +18,7 @@ namespace cli::level::operations {
 namespace {
 
 bool operationFailure(const char* what, ArxReturnCode rc) {
-  diagnostic(DiagnosticCode::kLevelOutputFailed,
+  diagnostic(DiagnosticCode::kLevelModuleFailed,
              "%s failed: %s (code %d)",
              what,
              pistoris::errorString(rc),
@@ -26,7 +28,7 @@ bool operationFailure(const char* what, ArxReturnCode rc) {
 
 }  // namespace
 
-bool applyLevelOperations(pistoris::Level& level, const LevelOptions& options, OperationDiagnostics& diagnostics) {
+bool apply(pistoris::Level& level, const LevelOptions& options, OperationDiagnostics& diagnostics) {
   const bool has_navigation_operations = options.generate_nav_surface || options.prune_nav_surface_islands ||
                                          options.generate_anchors || options.connect_anchors ||
                                          options.prune_anchor_islands;
@@ -120,6 +122,14 @@ bool applyLevelOperations(pistoris::Level& level, const LevelOptions& options, O
     ArxReturnCode rc = level.generateStaticLighting(options.static_lighting_generation);
     if (rc != ARX_OK) {
       operationFailure("Level static lighting generation", rc);
+      return false;
+    }
+  }
+
+  if (options.generate_minimap) {
+    ArxReturnCode rc = level.generateMinimap(options.minimap_generation);
+    if (rc != ARX_OK) {
+      operationFailure("Level minimap generation", rc);
       return false;
     }
   }

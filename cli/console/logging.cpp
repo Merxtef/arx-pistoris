@@ -3,7 +3,9 @@
 
 #include "console/logging.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
+
+#include "console/style.h"
 
 #include <cstdarg>
 #include <cstdint>
@@ -43,11 +45,28 @@ const char* domainName(LogDomain domain) {
   return "?";
 }
 
+cli::ConsoleStyle levelStyle(ArxLogLevel level) {
+  switch (level) {
+    case ARX_LOG_DEBUG:
+      return {.color = cli::ConsoleColor::kGray};
+    case ARX_LOG_INFO:
+      return {.color = cli::ConsoleColor::kCyan};
+    case ARX_LOG_WARN:
+      return {.color = cli::ConsoleColor::kYellow};
+    case ARX_LOG_ERROR:
+      return {.color = cli::ConsoleColor::kRed};
+    default:
+      return {};
+  }
+}
+
 bool shouldEmit(ArxLogLevel level) { return static_cast<int>(level) >= static_cast<int>(g_log_level); }
 
 void vlogWithDomain(ArxLogLevel level, LogDomain domain, const char* fmt, va_list ap) {
   if (!shouldEmit(level)) return;
-  std::fprintf(stderr, "[%s/%s] ", levelName(level), domainName(domain));
+  std::fputc('[', stderr);
+  cli::writeStyled(stderr, levelStyle(level), levelName(level));
+  std::fprintf(stderr, "/%s] ", domainName(domain));
   std::vfprintf(stderr, fmt, ap);
   std::fputc('\n', stderr);
 }

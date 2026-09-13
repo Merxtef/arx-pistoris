@@ -18,12 +18,12 @@ namespace {
 class GenerateAnchorsModule final : public RouteModule {
  public:
   std::span<const char* const> keywords() const noexcept override {
-    static constexpr const char* kKeywords[] = {"--generate-anchors"};
+    static constexpr const char* kKeywords[] = {"--gen-anchors"};
     return kKeywords;
   }
 
   ModuleHelp help(const RouteDescriptor*) const noexcept override {
-    return {HelpSection::kOptions, "--generate-anchors", "Generate Level anchors from arx_nav_surface."};
+    return {HelpSection::kOptions, "--gen-anchors", "Generate Level anchors from arx_nav_surface."};
   }
 
   std::span<const ModuleRef> children() const noexcept override {

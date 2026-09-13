@@ -16,7 +16,10 @@ const Module& logLevelModule();
 const Module& overwriteModule();
 const Module& noOverwriteModule();
 const Module& dryRunModule();
+const Module& keepFirstResourceModule();
 const Module& mountModule();
+const Module& autoMountModule();
+const Module& writeMountModule();
 const Module& resourceListingModule();
 std::span<const ModuleRef> rootModules();
 

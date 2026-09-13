@@ -46,14 +46,14 @@ jobs:
 
       - name: Configure
         run: >
-          cmake --preset tidy
+          cmake --preset tidy-check
           -DARX_WARNINGS_AS_ERRORS=ON
           -DCMAKE_CXX_FLAGS=--gcc-toolchain=/usr
           -DCMAKE_EXE_LINKER_FLAGS=--gcc-toolchain=/usr
           -DCMAKE_SHARED_LINKER_FLAGS=--gcc-toolchain=/usr
 
       - name: Build
-        run: cmake --build --preset tidy --parallel
+        run: cmake --build --preset tidy-check --parallel
 
   platform:
     name: Platform (${{ matrix.name }})
@@ -176,6 +176,9 @@ jobs:
 
       - name: Build
         run: cmake --build --preset fuzz --parallel
+
+      - name: Replay fixture seeds
+        run: ctest --test-dir build-fuzz --output-on-failure -L fuzz-smoke
 
   gate:
     name: Gate

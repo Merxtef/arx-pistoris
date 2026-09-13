@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
 #include "arx_pistoris/level.hpp"
 
 #include "console/diagnostics.h"
@@ -33,12 +33,12 @@ bool parseFaceFlags(const char* text, pistoris::FaceType& out) {
 class GenerateNavSurfaceModule final : public RouteModule {
  public:
   std::span<const char* const> keywords() const noexcept override {
-    static constexpr const char* kKeywords[] = {"--generate-nav-surface"};
+    static constexpr const char* kKeywords[] = {"--gen-nav-surface"};
     return kKeywords;
   }
 
   ModuleHelp help(const RouteDescriptor*) const noexcept override {
-    return {HelpSection::kOptions, "--generate-nav-surface", "Generate Level navigation surface from static geometry."};
+    return {HelpSection::kOptions, "--gen-nav-surface", "Generate Level navigation surface from static geometry."};
   }
 
   std::span<const ModuleRef> children() const noexcept override {
@@ -89,7 +89,7 @@ class GenerateNavSurfaceModule final : public RouteModule {
     }
     if (!std::isfinite(generation.support_min_up_cos) || generation.support_min_up_cos < 0.0f ||
         generation.support_min_up_cos > 1.0f) {
-      diagnostic(DiagnosticCode::kInvalidModuleValue, "--nav-max-slope-degrees must be inside [0, 90]");
+      diagnostic(DiagnosticCode::kInvalidModuleValue, "--nav-max-slope must be inside [0, 90]");
       return false;
     }
     if ((generation.support_ignore_flags & ~pistoris::kLevelFaceBitsAll) != 0) {
@@ -199,14 +199,12 @@ class NavMaxStepUpModule final : public RouteModule {
 class NavMaxSlopeDegreesModule final : public RouteModule {
  public:
   std::span<const char* const> keywords() const noexcept override {
-    static constexpr const char* kKeywords[] = {"--nav-max-slope-degrees"};
+    static constexpr const char* kKeywords[] = {"--nav-max-slope"};
     return kKeywords;
   }
 
   ModuleHelp help(const RouteDescriptor*) const noexcept override {
-    return {HelpSection::kOptions,
-            "--nav-max-slope-degrees <DEG=53.9726>",
-            "Set generated navigation support slope limit."};
+    return {HelpSection::kOptions, "--nav-max-slope <DEG=53.9726>", "Set generated navigation support slope limit."};
   }
 
   ModuleParseResult parse(ModuleParseContext& ctx) const override {

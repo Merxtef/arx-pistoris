@@ -1,35 +1,8 @@
 # Test Data Attribution
 
-This file records the upstream source packs used to create committed Pistoris
-test fixtures. Generated derivatives are grouped with their source pack;
-per-file conversion history is not tracked.
-
-## Survival Pack
-
-- Author: [Quaternius](https://quaternius.com)
-- Source: [Survival Pack](https://quaternius.com/packs/survival.html)
-- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
-
-Committed source fixtures:
-
-```text
-data/fixtures/model/obj/Axe.obj
-data/fixtures/model/obj/Axe.mtl
-data/fixtures/model/obj/Backpack.obj
-data/fixtures/model/obj/Backpack.mtl
-data/fixtures/model/glb/Adventurer.glb
-```
-
-Committed derivatives:
-
-```text
-data/fixtures/model/native/Axe.ftl
-data/fixtures/model/native/Backpack.ftl
-data/fixtures/model/native/Adventurer.ftl
-data/fixtures/model/json/Adventurer.json
-data/fixtures/animation/native/Adventurer_*.tea
-data/fixtures/animation/json/Adventurer_*.json
-```
+This file records the sources used to create committed Pistoris test fixtures.
+Generated native files, converted sidecars, and other derivatives are grouped
+with their source assets.
 
 ## KayKit Dungeon Pack
 
@@ -38,13 +11,159 @@ data/fixtures/animation/json/Adventurer_*.json
   [KayKit Dungeon Pack](https://kaylousberg.itch.io/kaykit-dungeon-pack)
 - License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
 
-The committed files are derivative fixtures assembled from the external
-KayKit pack. No original source asset is committed.
+The level scenes are assembled derivatives. Their native files are generated
+from the committed GLBs.
 
 ```text
-data/fixtures/level/glb/level40..level42.glb
-data/fixtures/level/fts/native/level40..level42.fts
-data/fixtures/level/llf/native/level40..level42.llf
-data/fixtures/level/dlf/native/level40..level42.dlf
-data/fixtures/level/textures/dungeon_texture*.png
+data/fixtures/level/glb/level29/
+data/fixtures/level/glb/level30/
+data/fixtures/level/glb/level31/
+data/fixtures/mount/game/graph/levels/level29..level31/
+data/fixtures/mount/graph/levels/level29..level31/
+data/fixtures/mount/graph/obj3d/textures/dungeon_texture*.png
+```
+
+## Modular RPG Characters
+
+- Author: [System G6](https://opengameart.org/users/system-g6)
+- Source:
+  [Modular RPG Characters](https://opengameart.org/content/modular-rpg-characters)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The human model, head and armor variants, animation set, and Ambiance reference
+previews are derivatives of this pack.
+
+```text
+data/fixtures/model/glb/head_*/
+data/fixtures/model/glb/human_male/
+data/fixtures/model/glb/*_armor/
+data/fixtures/ambiance/glb/*/*.glb
+data/fixtures/mount/game/graph/obj3d/interactive/npc/human_male/
+data/fixtures/mount/graph/obj3d/anims/npc/human_male_*.tea
+data/fixtures/mount/graph/obj3d/textures/tex_human_*.png
+```
+
+## Bloody Organ Texture
+
+- Source: [Bloody Organ, Intestine or Flesh Texture](https://www.texturecan.com/details/137/)
+- License: [CC0](https://www.texturecan.com/terms/)
+
+The texture is used by the human model's gore material.
+
+```text
+data/fixtures/model/glb/human_male/human_male.glb
+data/fixtures/mount/graph/obj3d/textures/gore.png
+```
+
+## Low Poly Fantasy Swords
+
+- Author: [KevDev](https://opengameart.org/users/kevdev)
+- Source:
+  [Low Poly Fantasy Swords](https://opengameart.org/content/low-poly-fantasy-swords)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+```text
+data/fixtures/model/glb/sword_00..sword_02/
+data/fixtures/mount/game/graph/obj3d/interactive/items/weapons/sword_00..sword_02/
+data/fixtures/mount/graph/obj3d/interactive/items/weapons/sword_00..sword_02/
+data/fixtures/mount/graph/obj3d/textures/sword*.png
+```
+
+## W001 Composite Sword
+
+- Author: [Price](https://opengameart.org/users/price)
+- Source:
+  [W001 Hand-Painted Composite Sword](https://opengameart.org/content/w001-hand-painted-composite-sword)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The source is used as the custom dagger OBJ fixture.
+
+```text
+data/fixtures/model/obj/custom_dagger/
+data/fixtures/mount/game/graph/obj3d/interactive/items/weapons/custom_dagger/
+data/fixtures/mount/graph/obj3d/interactive/items/weapons/custom_dagger/
+data/fixtures/mount/graph/obj3d/textures/custom_dagger_texture.png
+```
+
+## Old Parchment Paper
+
+- Author: [cron](https://opengameart.org/users/cron)
+- Source: [Old Parchment Paper](https://opengameart.org/content/old-parchment-paper)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The image is used as the loading-screen background for the committed levels.
+
+```text
+data/fixtures/level/glb/level*/level*[loading].png
+data/fixtures/mount/graph/levels/level*/loading.png
+```
+
+## Dark Shrine Loop
+
+- Author: [qubodup](https://opengameart.org/users/qubodup)
+- Source: [Dark Shrine Loop](https://opengameart.org/content/dark-shrine-loop)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The source is a remix of work by yd. The MP3 is referenced by the authored
+Ambiance fixture and converted to WAV in the native fixture mount.
+
+```text
+data/fixtures/ambiance/glb/dark/dark_shrine/
+data/fixtures/mount/sfx/ambiance/dark.amb
+data/fixtures/mount/sfx/ambiance/qubodup-yd-darkshrineloop-opengameart.wav
+```
+
+## Medieval Exploration
+
+- Author: [RandomMind](https://opengameart.org/users/randommind)
+- Source: [Medieval Exploration](https://opengameart.org/content/medieval-exploration)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The authored Ambiance uses a shortened excerpt of the source MP3. Native
+regeneration converts it to WAV.
+
+```text
+data/fixtures/ambiance/glb/explore/medieval_exploration/
+data/fixtures/mount/sfx/ambiance/explore.amb
+data/fixtures/mount/sfx/ambiance/exploration_0.wav
+```
+
+## 100 CC0 Metal and Wood SFX
+
+- Author: [rubberduck](https://opengameart.org/users/rubberduck)
+- Source:
+  [100 CC0 Metal and Wood SFX](https://opengameart.org/content/100-cc0-metal-and-wood-sfx)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The OGG files are referenced by both Ambiance fixtures and by the human
+gathering animation. Native regeneration converts them to WAV.
+
+```text
+data/fixtures/ambiance/glb/*/sfx/
+data/fixtures/model/glb/human_male/sfx/
+data/fixtures/mount/sfx/ambiance/*.wav
+data/fixtures/mount/sfx/misc_04.wav
+data/fixtures/mount/sfx/misc_08.wav
+```
+
+## Pistoris Project Fixtures
+
+- Author: Merxtef
+- License: [Pistoris repository license](../LICENSE)
+
+The level 9 and JSON Model source scenes, their textures, and the black helper
+texture were created for Pistoris. Native files are generated from the source
+scenes.
+
+```text
+data/fixtures/json/
+data/fixtures/level/glb/level9/level9.glb
+data/fixtures/model/glb/json_dummy/json_dummy.glb
+data/fixtures/mount/game/graph/levels/level9/fast.fts
+data/fixtures/mount/game/graph/obj3d/interactive/fix_inter/json_dummy/json_dummy.ftl
+data/fixtures/mount/graph/levels/level9/
+data/fixtures/mount/graph/obj3d/anims/fix_inter/json_dice.tea
+data/fixtures/mount/graph/obj3d/textures/json_model.png
+data/fixtures/mount/graph/obj3d/textures/json_prison.png
+data/fixtures/mount/graph/obj3d/textures/black.png
 ```

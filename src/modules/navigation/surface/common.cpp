@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
 #include "modules/navigation/internal.h"
 #include "modules/navigation/surface/internal.h"
 #include "modules/navigation/traversal.h"
-#include "utils/math/geometry.h"
+#include "utils/math/geometry_algorithms.h"
 
 #include <cmath>
 #include <cstdint>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace pistoris::navigation::surface {
 
@@ -26,8 +27,8 @@ ArxVector3 navigationSupportPosition(const ArxVector3& navigation_vertex, float 
 }
 
 bool usableSurfaceSupport(const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                          const SurfaceSupportFilter& final_support_filter, const StaticAnchorTraversal& traversal,
-                          const ArxVector3& support, const NavSurfaceGenOptions& options) {
+                          const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                          const ArxVector3& support, const NavSurfaceGenerationOptions& options) {
   ArxVector3 placed{};
   if (traversal.placeEndpointAt(support, options.radius, options.height, placed) != CylinderPlacementStatus::kPlaced)
     return false;
@@ -36,10 +37,11 @@ bool usableSurfaceSupport(const geometry::SurfaceSupportIndex& geometry_support,
 
 bool validateSupportPoint(const geometry::SurfaceSupportIndex& index,
                           const geometry::SurfaceSupportIndex& geometry_support, const GeometryData& geometry,
-                          const SurfaceSupportFilter& final_support_filter, const StaticAnchorTraversal& traversal,
-                          const NavSurfaceGenOptions& options, float x, float z, float reference_y) {
+                          const SurfaceSupportFilter& final_support_filter, StaticAnchorTraversal& traversal,
+                          const NavSurfaceGenerationOptions& options, float x, float z, float reference_y,
+                          std::vector<geometry::SurfaceSupportHit>& scratch) {
   std::optional<geometry::SurfaceSupportHit> hit =
-      closestMergedSupportHit(index, x, z, reference_y, options.max_step_up * 0.5f);
+      closestMergedSupportHit(index, x, z, reference_y, options.max_step_up * 0.5f, scratch);
   return hit.has_value() &&
          usableSurfaceSupport(geometry_support, geometry, final_support_filter, traversal, hit->position, options);
 }
@@ -56,7 +58,7 @@ std::optional<NavSurfaceTriangle> makeNavigationTriangle(const NavSurface& surfa
   return NavSurfaceTriangle{{a, b, c}};
 }
 
-bool appendNavigationTriangle(NavSurface& surface, std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+bool tryAppendNavigationTriangle(NavSurface& surface, std::uint32_t a, std::uint32_t b, std::uint32_t c) {
   std::optional<NavSurfaceTriangle> triangle = makeNavigationTriangle(surface, a, b, c);
   if (!triangle.has_value()) return false;
   surface.triangles.push_back(*triangle);

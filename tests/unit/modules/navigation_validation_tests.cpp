@@ -3,6 +3,8 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/indices.h"
+
 #include "modules/geometry.h"
 #include "modules/navigation.h"
 
@@ -74,7 +76,7 @@ TEST_SUITE("navigation::validation") {
     navigation.anchors[0].name = "marker";
     navigation.anchors[1].name = "marker";
     CHECK(navigation::validateAnchorDefinitions(navigation.anchors) == navigation::Error::kDuplicateAnchorName);
-    CHECK(navigation::makeAnchorNamesUnique(navigation.anchors) == 1);
+    CHECK(navigation::repairAnchorNames(navigation.anchors) == 1);
     CHECK(navigation.anchors[0].name == "marker");
     CHECK(navigation.anchors[1].name == "marker_1");
     CHECK(navigation::validateAnchorDefinitions(navigation.anchors) == navigation::Error::kNone);
@@ -94,7 +96,38 @@ TEST_SUITE("navigation::validation") {
 
     navigation.connections = {{0, 1}, {0, 1}};
     CHECK(navigation::validateConnections(navigation.anchors, navigation.connections) ==
-          navigation::Error::kBadConnectionOrder);
+          navigation::Error::kDuplicateConnection);
+  }
+
+  TEST_CASE("Inserts connections in canonical order") {
+    NavigationData navigation = makeNavigation();
+    navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, {}});
+    navigation.connections = {{1, 2}};
+
+    AnchorConnectionIndex index = kInvalidAnchorConnectionIndex;
+    REQUIRE(navigation::validateConnectionInsertion(navigation, {0, 2}, index) == navigation::Error::kNone);
+    navigation::insertConnection(navigation, index, {0, 2});
+    CHECK(index == 0);
+    REQUIRE(navigation.connections.size() == 2);
+    CHECK(navigation.connections[0].first == 0);
+    CHECK(navigation.connections[0].second == 2);
+    CHECK(navigation.connections[1].first == 1);
+    CHECK(navigation.connections[1].second == 2);
+
+    CHECK(navigation::validateConnectionInsertion(navigation, {0, 2}, index) ==
+          navigation::Error::kDuplicateConnection);
+    CHECK(index == kInvalidAnchorConnectionIndex);
+  }
+
+  TEST_CASE("Set connection distinguishes duplicates from ordering errors") {
+    NavigationData navigation = makeNavigation();
+    navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, {}});
+    navigation.connections = {{0, 1}, {1, 2}};
+
+    CHECK(navigation::validateConnectionPlacement(navigation, 1, {0, 1}) == navigation::Error::kDuplicateConnection);
+    REQUIRE(navigation::validateConnectionPlacement(navigation, 1, {0, 2}) == navigation::Error::kNone);
+    navigation::setConnection(navigation, 1, {0, 2});
+    CHECK(navigation::validateConnectionPlacement(navigation, 0, {1, 2}) == navigation::Error::kBadConnectionOrder);
   }
 
   TEST_CASE("Rejects invalid surfaces") {

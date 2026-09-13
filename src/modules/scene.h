@@ -3,9 +3,8 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/indices.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -68,7 +67,6 @@ struct Zone {
 enum class PathNodeType : std::uint8_t {
   kStandard,
   kBezier,
-  kControlPoint,
 };
 
 struct PathNode {
@@ -84,8 +82,7 @@ struct Path {
 };
 
 struct SceneData {
-  PlayerSpawn player_spawn;
-  bool player_spawn_is_fallback = true;
+  std::optional<PlayerSpawn> player_spawn;
   std::vector<Entity> entities;
   std::vector<Fog> fogs;
   std::vector<Zone> zones;
@@ -127,28 +124,54 @@ enum class Error : std::uint8_t {
   kBadPathNodePosition,
   kBadPathNodeType,
   kBadPathFirstNode,
+  kBadIndex,
 };
 
-bool normalizeRotation(ArxQuat& rotation) noexcept;
+// --- Validation ---
+
 Error validatePlayerSpawn(const PlayerSpawn& player_spawn);
 Error validatePlayerSpawn(const SceneData& scene);
-Error setPlayerSpawn(SceneData& scene, PlayerSpawn player_spawn) noexcept;
-void clearPlayerSpawn(SceneData& scene) noexcept;
+Error validateEntityCount(std::size_t count) noexcept;
 Error validateEntity(const Entity& entity);
 Error validateEntities(std::span<const Entity> entities);
-void makeEntityNameUnique(Entity& entity, std::span<const Entity> entities);
-void makeEntityNameUnique(Entity& entity, std::span<const Entity> entities, std::size_t ignored_index);
-void makeEntityNamesUnique(std::span<Entity> entities);
+Error validateFogCount(std::size_t count) noexcept;
 Error validateFog(const Fog& fog);
 Error validateFogs(std::span<const Fog> fogs);
-std::size_t makeFogNamesUnique(std::span<Fog> fogs);
+Error validateZoneCount(std::size_t count) noexcept;
 Error validateZone(const Zone& zone);
 Error validateZones(std::span<const Zone> zones);
-std::size_t makeZoneNamesUnique(std::span<Zone> zones);
+Error validatePathCount(std::size_t count) noexcept;
 Error validatePath(const Path& path);
 Error validatePaths(std::span<const Path> paths);
-std::size_t makePathNamesUnique(std::span<Path> paths);
 Error validate(const SceneData& scene);
+
+// --- Mutation ---
+
+void setPlayerSpawn(SceneData& scene, PlayerSpawn player_spawn) noexcept;
+void clearPlayerSpawn(SceneData& scene) noexcept;
+void setEntity(SceneData& scene, EntityIndex index, Entity entity) noexcept;
+EntityIndex addEntity(SceneData& scene, Entity entity);
+void removeEntity(SceneData& scene, EntityIndex index) noexcept;
+void setFog(SceneData& scene, FogIndex index, Fog fog) noexcept;
+FogIndex addFog(SceneData& scene, Fog fog);
+void removeFog(SceneData& scene, FogIndex index) noexcept;
+void setZone(SceneData& scene, ZoneIndex index, Zone zone) noexcept;
+ZoneIndex addZone(SceneData& scene, Zone zone);
+void removeZone(SceneData& scene, ZoneIndex index) noexcept;
+void setPath(SceneData& scene, PathIndex index, Path path) noexcept;
+PathIndex addPath(SceneData& scene, Path path);
+void removePath(SceneData& scene, PathIndex index) noexcept;
+
+// --- Repair ---
+
+void repairEntityName(const SceneData& scene, Entity& entity, EntityIndex ignored = kInvalidEntityIndex);
+std::size_t repairEntityNames(std::span<Entity> entities);
+void repairFogName(const SceneData& scene, Fog& fog, FogIndex ignored = kInvalidFogIndex);
+std::size_t repairFogNames(std::span<Fog> fogs);
+void repairZoneName(const SceneData& scene, Zone& zone, ZoneIndex ignored = kInvalidZoneIndex);
+std::size_t repairZoneNames(std::span<Zone> zones);
+void repairPathName(const SceneData& scene, Path& path, PathIndex ignored = kInvalidPathIndex);
+std::size_t repairPathNames(std::span<Path> paths);
 
 }  // namespace scene
 }  // namespace pistoris

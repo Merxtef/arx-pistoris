@@ -4,11 +4,27 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest/doctest.h"
 
+#include "utils/container_allocation.h"
 #include "utils/cursor.h"
 #include "utils/text_cursor.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <vector>
+
+namespace {
+
+struct ThrowingResizable {
+  void resize(std::size_t) { throw 42; }
+};
+
+struct LengthFailingReservable {
+  void reserve(std::size_t) { throw std::length_error("capacity"); }
+};
+
+}  // namespace
 
 TEST_SUITE("cursor") {
   TEST_CASE("ReadBasic") {
@@ -136,6 +152,26 @@ TEST_SUITE("cursor") {
     CHECK(c);
     CHECK(c.size() == 0);
     CHECK(c.take().empty());
+  }
+
+  TEST_CASE("WriteCursorRejectsByteCountOverflow") {
+    pistoris::WriteCursor c;
+    const std::uint16_t value = 0;
+
+    c.writeN(&value, std::numeric_limits<std::size_t>::max());
+
+    CHECK_FALSE(c);
+    CHECK(c.error().kind == pistoris::CursorErrorKind::kBadAlloc);
+    CHECK(c.error().needed == std::numeric_limits<std::size_t>::max());
+    CHECK(c.size() == 0);
+  }
+
+  TEST_CASE("Container allocation wrappers contain unexpected failures") {
+    ThrowingResizable resizable;
+    LengthFailingReservable reservable;
+
+    CHECK_FALSE(pistoris::tryResize(resizable, 1));
+    CHECK_FALSE(pistoris::tryReserve(reservable, 1));
   }
 
   TEST_CASE("TextCursorNewlineAdvancesTokenPosition") {

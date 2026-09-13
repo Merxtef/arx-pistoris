@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +31,11 @@ inline constexpr float kDegreesPerRadian = 180.0f / std::numbers::pi_v<float>;
 
 inline ArxQuat conjugate(const ArxQuat& q) { return {q.w, -q.x, -q.y, -q.z}; }
 
+inline ArxQuat canonicalizeQuaternionSign(ArxQuat q) {
+  if (q.w < 0.0f) return {-q.w, -q.x, -q.y, -q.z};
+  return q;
+}
+
 inline float norm(const ArxQuat& q) { return std::sqrt(q.w * q.w + q.x * q.x + q.y * q.y + q.z * q.z); }
 
 // zero-norm -> identity
@@ -39,6 +44,31 @@ inline ArxQuat normalize(const ArxQuat& q) {
   if (n2 == 0.0f) return kIdentityQuat;
   float inv = 1.0f / std::sqrt(n2);
   return {q.w * inv, q.x * inv, q.y * inv, q.z * inv};
+}
+
+inline ArxQuat slerp(ArxQuat first, ArxQuat second, float amount) {
+  first = normalize(first);
+  second = normalize(second);
+  float dot = first.w * second.w + first.x * second.x + first.y * second.y + first.z * second.z;
+  if (dot < 0.0f) {
+    second = {-second.w, -second.x, -second.y, -second.z};
+    dot = -dot;
+  }
+  dot = std::clamp(dot, -1.0f, 1.0f);
+  if (dot > 0.9995f)
+    return normalize({first.w + (second.w - first.w) * amount,
+                      first.x + (second.x - first.x) * amount,
+                      first.y + (second.y - first.y) * amount,
+                      first.z + (second.z - first.z) * amount});
+
+  const float angle = std::acos(dot);
+  const float inverse_sine = 1.0f / std::sin(angle);
+  const float first_weight = std::sin((1.0f - amount) * angle) * inverse_sine;
+  const float second_weight = std::sin(amount * angle) * inverse_sine;
+  return normalize({first.w * first_weight + second.w * second_weight,
+                    first.x * first_weight + second.x * second_weight,
+                    first.y * first_weight + second.y * second_weight,
+                    first.z * first_weight + second.z * second_weight});
 }
 
 inline ArxQuat axisAngle(float x, float y, float z, float radians) {

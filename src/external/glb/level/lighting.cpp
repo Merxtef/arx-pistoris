@@ -3,14 +3,14 @@
 
 #include "lighting.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "coordinates.h"
-#include "external/glb/utils/level/tokens.h"
 #include "external/glb/utils/node.h"
+#include "external/glb/utils/tokens.h"
 #include "modules/lights.h"
 #include "utils/name_tokens.h"
 
@@ -25,6 +25,8 @@
 #include <vector>
 
 namespace pistoris::glb_level {
+
+using glb::parseFloatToken;
 namespace {
 
 struct LightFlagName {

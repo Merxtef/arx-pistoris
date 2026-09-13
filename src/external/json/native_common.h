@@ -3,12 +3,12 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
 
 #include "nlohmann/json.hpp"
 #include "utils/log.h"
-#include "utils/parse_utils.h"
+#include "utils/return_code.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,6 +27,10 @@ namespace pistoris::json_detail {
 using Json = nlohmann::json;
 
 inline Json vector(const ArxVector3& value) { return {{"x", value.x}, {"y", value.y}, {"z", value.z}}; }
+
+inline Json quaternion(const ArxQuat& value) {
+  return {{"x", value.x}, {"y", value.y}, {"z", value.z}, {"w", value.w}};
+}
 
 inline ArxVector3 add(const ArxVector3& left, const ArxVector3& right) {
   return {left.x + right.x, left.y + right.y, left.z + right.z};
@@ -58,33 +62,30 @@ inline bool getFloat(const Json& value, float& out) {
 }
 
 template <class Int>
-bool getSigned(const Json& value, Int& out) {
-  static_assert(std::numeric_limits<Int>::is_signed);
+bool getInteger(const Json& value, Int& out) {
   if (!value.is_number_integer()) return false;
-  const std::int64_t parsed = value.get<std::int64_t>();
-  if (parsed < static_cast<std::int64_t>(std::numeric_limits<Int>::min()) ||
-      parsed > static_cast<std::int64_t>(std::numeric_limits<Int>::max())) {
-    return false;
+  if (value.is_number_unsigned()) {
+    const std::uint64_t parsed = value.get<std::uint64_t>();
+    if (!std::in_range<Int>(parsed)) return false;
+    out = static_cast<Int>(parsed);
+    return true;
   }
+  const std::int64_t parsed = value.get<std::int64_t>();
+  if (!std::in_range<Int>(parsed)) return false;
   out = static_cast<Int>(parsed);
   return true;
 }
 
 template <class Int>
+bool getSigned(const Json& value, Int& out) {
+  static_assert(std::numeric_limits<Int>::is_signed);
+  return getInteger(value, out);
+}
+
+template <class Int>
 bool getUnsigned(const Json& value, Int& out) {
   static_assert(!std::numeric_limits<Int>::is_signed);
-  if (!value.is_number_integer()) return false;
-  std::uint64_t parsed = 0;
-  if (value.is_number_unsigned()) {
-    parsed = value.get<std::uint64_t>();
-  } else {
-    const std::int64_t signed_value = value.get<std::int64_t>();
-    if (signed_value < 0) return false;
-    parsed = static_cast<std::uint64_t>(signed_value);
-  }
-  if (parsed > static_cast<std::uint64_t>(std::numeric_limits<Int>::max())) return false;
-  out = static_cast<Int>(parsed);
-  return true;
+  return getInteger(value, out);
 }
 
 inline bool getString(const Json& value, std::string& out) {
@@ -104,6 +105,14 @@ inline bool getVector(const Json& value, ArxVector3& out) {
   const Json* y = member(value, "y");
   const Json* z = member(value, "z");
   return x && y && z && getFloat(*x, out.x) && getFloat(*y, out.y) && getFloat(*z, out.z);
+}
+
+inline bool getQuaternion(const Json& value, ArxQuat& out) {
+  const Json* x = member(value, "x");
+  const Json* y = member(value, "y");
+  const Json* z = member(value, "z");
+  const Json* w = member(value, "w");
+  return x && y && z && w && getFloat(*x, out.x) && getFloat(*y, out.y) && getFloat(*z, out.z) && getFloat(*w, out.w);
 }
 
 inline bool getAngle(const Json& value, ArxAngle& out) {
@@ -151,9 +160,17 @@ std::string fixedString(const char (&value)[N]) {
 template <std::size_t N>
 bool copyFixed(std::string_view source, char (&out)[N]) {
   if (source.size() >= N || source.find('\0') != std::string_view::npos) return false;
-  std::memcpy(out, source.data(), source.size());
+  source.copy(out, source.size());
   std::memset(out + source.size(), 0, N - source.size());
   return true;
+}
+
+template <std::size_t N>
+void copyTruncated(std::string_view source, char (&out)[N]) {
+  static_assert(N != 0);
+  const std::size_t size = std::min(source.size(), N - 1);
+  source.copy(out, size);
+  std::memset(out + size, 0, N - size);
 }
 
 inline std::string lowerSlashes(std::string_view source) {
@@ -174,10 +191,10 @@ ArxReturnCode guarded(const char* label, Fn&& fn) {
   } catch (const std::bad_alloc&) {
     return ARX_BAD_ALLOC;
   } catch (const nlohmann::json::exception& error) {
-    log(ARX_LOG_WARN, std::format("{} JSON: {}", label, error.what()));
+    log(ARX_LOG_WARN, "{} JSON: {}", label, error.what());
     return ARX_JSON_BAD_SCHEMA;
   } catch (const std::exception& error) {
-    log(ARX_LOG_WARN, std::format("{} JSON: {}", label, error.what()));
+    log(ARX_LOG_WARN, "{} JSON: {}", label, error.what());
     return ARX_JSON_BAD_SCHEMA;
   }
 }
@@ -187,6 +204,16 @@ inline ArxReturnCode parse(std::string_view text, Json& out) {
   return out.is_discarded() ? ARX_JSON_BAD_FORMAT : ARX_OK;
 }
 
-inline void dump(const Json& json, bool pretty, std::string& out) { out = pretty ? json.dump(2) : json.dump(); }
+inline bool hasOnlyFiniteNumbers(const Json& json) {
+  if (json.is_number_float()) return std::isfinite(json.get_ref<const Json::number_float_t&>());
+  if (!json.is_structured()) return true;
+  return std::ranges::all_of(json, hasOnlyFiniteNumbers);
+}
+
+inline ArxReturnCode dump(const Json& json, bool pretty, std::string& out) {
+  if (!hasOnlyFiniteNumbers(json)) return ARX_JSON_UNREPRESENTABLE_VALUE;
+  out = pretty ? json.dump(2) : json.dump();
+  return ARX_OK;
+}
 
 }  // namespace pistoris::json_detail

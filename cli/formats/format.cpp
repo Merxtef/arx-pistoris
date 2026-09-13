@@ -3,11 +3,12 @@
 
 #include "formats/format.h"
 
-#include "io/paths.h"
+#include "base/ascii.h"
+#include "base/resource_path.h"
 
-#include <cctype>
 #include <cstddef>
-#include <cstring>
+#include <string>
+#include <string_view>
 
 namespace cli {
 
@@ -25,6 +26,8 @@ const char* formatName(Format format) {
       return "LLF";
     case Format::kTea:
       return "TEA";
+    case Format::kAmb:
+      return "AMB";
     case Format::kObj:
       return "OBJ";
     case Format::kJson:
@@ -36,24 +39,31 @@ const char* formatName(Format format) {
   }
 }
 
-Format formatFromPath(const char* path) {
-  const char* ext = fileExtension(path);
-  char lower[6] = {};
-  std::size_t i = 0;
-  for (; ext[i] != '\0' && i + 1 < sizeof(lower); ++i) {
-    lower[i] = static_cast<char>(std::tolower(static_cast<unsigned char>(ext[i])));
-  }
-  if (ext[i] != '\0') return Format::kUnknown;
-
-  if (std::strcmp(lower, ".ftl") == 0) return Format::kFtl;
-  if (std::strcmp(lower, ".fts") == 0) return Format::kFts;
-  if (std::strcmp(lower, ".dlf") == 0) return Format::kDlf;
-  if (std::strcmp(lower, ".llf") == 0) return Format::kLlf;
-  if (std::strcmp(lower, ".tea") == 0) return Format::kTea;
-  if (std::strcmp(lower, ".obj") == 0) return Format::kObj;
-  if (std::strcmp(lower, ".json") == 0) return Format::kJson;
-  if (std::strcmp(lower, ".glb") == 0) return Format::kGlb;
+Format formatFromExtension(std::string_view extension) noexcept {
+  if (equalAsciiInsensitive(extension, ".ftl")) return Format::kFtl;
+  if (equalAsciiInsensitive(extension, ".fts")) return Format::kFts;
+  if (equalAsciiInsensitive(extension, ".dlf")) return Format::kDlf;
+  if (equalAsciiInsensitive(extension, ".llf")) return Format::kLlf;
+  if (equalAsciiInsensitive(extension, ".tea")) return Format::kTea;
+  if (equalAsciiInsensitive(extension, ".amb")) return Format::kAmb;
+  if (equalAsciiInsensitive(extension, ".obj")) return Format::kObj;
+  if (equalAsciiInsensitive(extension, ".json")) return Format::kJson;
+  if (equalAsciiInsensitive(extension, ".glb")) return Format::kGlb;
   return Format::kUnknown;
+}
+
+Format formatFromPath(std::string_view path) noexcept {
+  path = resourceFilename(path);
+  const std::size_t dot = path.find_last_of('.');
+  return formatFromExtension(dot == std::string_view::npos ? std::string_view{} : path.substr(dot));
+}
+
+std::string resourceFormatStem(std::string_view path) {
+  path = resourceFilename(path);
+  const std::size_t dot = path.find_last_of('.');
+  if (dot != std::string_view::npos && formatFromExtension(path.substr(dot)) != Format::kUnknown)
+    path = path.substr(0, dot);
+  return std::string(path);
 }
 
 }  // namespace cli

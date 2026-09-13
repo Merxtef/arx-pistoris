@@ -25,36 +25,36 @@ TEST_SUITE("tea") {
     std::vector<uint8_t> buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
-    ArxTeaHandle h = nullptr;
-    arx_pistoris_tea_parse(buf.data(), buf.size(), &h);
+    ArxTea* h = nullptr;
+    arx_pistoris_tea_read(buf.data(), buf.size(), &h);
 
     size_t sz = 0;
     ArxReturnCode rc = arx_pistoris_tea_write(h, nullptr, &sz);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
-    arx_pistoris_tea_free(h);
+    arx_pistoris_tea_destroy(h);
   }
 
   TEST_CASE("WriteNullSize") {
     std::vector<uint8_t> buf = makeMinimalTea();
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
-    ArxTeaHandle h = nullptr;
-    arx_pistoris_tea_parse(buf.data(), buf.size(), &h);
+    ArxTea* h = nullptr;
+    arx_pistoris_tea_read(buf.data(), buf.size(), &h);
 
     uint8_t* out = nullptr;
     ArxReturnCode rc = arx_pistoris_tea_write(h, &out, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
-    arx_pistoris_tea_free(h);
+    arx_pistoris_tea_destroy(h);
   }
 
   TEST_CASE("WriteSmoke") {
     std::vector<uint8_t> fixture = makeMinimalTea();
     setNumKeyframes(fixture, 1);
     appendKeyframe2014(fixture);
-    ArxTeaHandle h = nullptr;
-    REQUIRE(arx_pistoris_tea_parse(fixture.data(), fixture.size(), &h) == ARX_OK);
+    ArxTea* h = nullptr;
+    REQUIRE(arx_pistoris_tea_read(fixture.data(), fixture.size(), &h) == ARX_OK);
 
     uint8_t* out = nullptr;
     size_t sz = 0;
@@ -64,18 +64,7 @@ TEST_SUITE("tea") {
     CHECK(sz > 0);
 
     arx_pistoris_free_bytes(out);
-    arx_pistoris_tea_free(h);
-  }
-
-  TEST_CASE("ApplyXformIdentity") {
-    std::vector<uint8_t> fixture = makeKeyframeTea();
-    ArxTeaHandle h = nullptr;
-    REQUIRE(arx_pistoris_tea_parse(fixture.data(), fixture.size(), &h) == ARX_OK);
-
-    CHECK(arx_pistoris_tea_apply_xform(h, 0, 0, 0, 1, 1, 1, 0, 0, 0) == ARX_OK);
-    CHECK(arx_pistoris_tea_apply_xform(nullptr, 0, 0, 0, 1, 1, 1, 0, 0, 0) == ARX_INVALID_HANDLE);
-
-    arx_pistoris_tea_free(h);
+    arx_pistoris_tea_destroy(h);
   }
 
 }  // TEST_SUITE("tea")

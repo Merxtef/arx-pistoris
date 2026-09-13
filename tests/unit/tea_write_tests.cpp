@@ -3,17 +3,42 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/tea.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
-#include "arx/tea.h"
 #include "helpers.h"
+#include "native/tea.h"
+#include "support/native_equivalence.h"
 #include "utils/cursor.h"
+#include "utils/log.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
+
+namespace {
+
+struct LogCapture {
+  std::vector<std::string> messages;
+
+  LogCapture() {
+    pistoris::log_fn = [](ArxLogLevel level, const char* message, void* userdata) {
+      if (level == ARX_LOG_INFO && message) static_cast<LogCapture*>(userdata)->messages.emplace_back(message);
+    };
+    pistoris::log_ud = this;
+  }
+
+  ~LogCapture() {
+    pistoris::log_fn = nullptr;
+    pistoris::log_ud = nullptr;
+  }
+};
+
+}  // namespace
 
 static pistoris::tea::Data parse(const std::vector<uint8_t>& buf) {
   pistoris::ReadCursor rc(buf.data(), buf.size());
@@ -29,6 +54,27 @@ static std::vector<uint8_t> save(const pistoris::tea::Data& d) {
 }
 
 TEST_SUITE("tea") {
+  TEST_CASE("Tea validation requires bounded native strings") {
+    pistoris::tea::Data data = parse(makeKeyframeTea());
+    std::fill(std::begin(data.name), std::end(data.name), 'a');
+    CHECK(pistoris::validateTea(&data) == ARX_TEA_BAD_NAME);
+
+    data = parse(makeKeyframeTea());
+    data.keyframes.front().sample.emplace();
+    std::fill(std::begin(data.keyframes.front().sample->name), std::end(data.keyframes.front().sample->name), 'a');
+    CHECK(pistoris::validateTea(&data) == ARX_TEA_BAD_SAMPLE_PATH);
+  }
+
+  TEST_CASE("TeaValidationRequiresFiniteTransforms") {
+    pistoris::tea::Data data = parse(makeKeyframeTea());
+    data.keyframes.front().translate->x = std::numeric_limits<float>::infinity();
+    CHECK(pistoris::validateTea(&data) == ARX_TEA_BAD_ROOT_TRANSFORM);
+
+    data = parse(makeKeyframeTea());
+    data.keyframes.front().groups.front().quat.w = std::numeric_limits<float>::quiet_NaN();
+    CHECK(pistoris::validateTea(&data) == ARX_TEA_BAD_GROUP_TRANSFORM);
+  }
+
   TEST_CASE("TeaWriteExactMinimal") {
     auto fixture = makeMinimalTea();
     setNumKeyframes(fixture, 1);
@@ -48,7 +94,26 @@ TEST_SUITE("tea") {
   TEST_CASE("TeaWriteRoundtrip") {
     auto d1 = parse(makeKeyframeTea());
     auto d2 = parse(save(d1));
-    checkEq(d1, d2);
+    test_support::checkEquivalent(d1, d2);
+  }
+
+  TEST_CASE("Tea logs keyframes, active groups, and timeline duration") {
+    pistoris::tea::Data data;
+    data.num_frames = 27;
+    data.num_groups = 2;
+    data.keyframes.resize(2);
+    data.keyframes[0].num_frame = 0;
+    data.keyframes[1].num_frame = 27;
+    for (pistoris::tea::Keyframe& keyframe : data.keyframes) keyframe.groups.resize(2);
+    data.keyframes[1].groups[1].translate.x = 1.0f;
+
+    LogCapture logs;
+    const std::vector<uint8_t> bytes = save(data);
+    parse(bytes);
+
+    REQUIRE(logs.messages.size() == 2);
+    CHECK(logs.messages[0] == "TEA saving: 2 keyframes, 2 groups (1 active), timeline 27 frames at 24 fps (1.125 s)");
+    CHECK(logs.messages[1] == "TEA loaded: 2 keyframes, 2 groups (1 active), timeline 27 frames at 24 fps (1.125 s)");
   }
 
   TEST_CASE("TeaWriteSampleRoundtrip") {
@@ -81,7 +146,7 @@ TEST_SUITE("tea") {
 
     auto bytes = save(d1);
     auto d2 = parse(bytes);
-    checkEq(d1, d2);
+    test_support::checkEquivalent(d1, d2);
   }
 
   // v2015 -> v2014 on save: output drops info_frame[256] per keyframe
@@ -112,7 +177,7 @@ TEST_SUITE("tea") {
     CHECK(bytes.size() == buf.size() - 256);  // 1 keyframe loses info_frame[256]
 
     auto d2 = parse(bytes);
-    checkEq(d1, d2);
+    test_support::checkEquivalent(d1, d2);
   }
 
   // 3-keyframe v2015 input mixing key_move=0/1: each loses info_frame[256] on downgrade
@@ -153,7 +218,7 @@ TEST_SUITE("tea") {
     CHECK(bytes.size() == buf.size() - 3 * 256);
 
     auto d2 = parse(bytes);
-    checkEq(d1, d2);
+    test_support::checkEquivalent(d1, d2);
   }
 
 }  // TEST_SUITE("tea")

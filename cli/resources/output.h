@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "resources/selector.h"
+#include "io/path_location.h"
 
 #include <cstddef>
 
@@ -11,6 +11,6 @@ namespace cli {
 
 class IoService;
 
-bool writeOutput(IoService& io, const OutputTarget& target, const void* data, std::size_t size);
+bool writeOutput(IoService& io, const PathLocation& target, const void* data, std::size_t size);
 
 }  // namespace cli

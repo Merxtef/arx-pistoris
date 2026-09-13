@@ -32,7 +32,6 @@ enum class ModuleCategory : std::uint8_t {
 enum class HelpSection : std::uint8_t {
   kOptions,
   kDebug,
-  kConventions,
 };
 
 enum class SingletonCategory : std::uint8_t {
@@ -58,8 +57,10 @@ constexpr RouteMask routeBit(RouteKind kind) {
       return 1u << 0;
     case RouteKind::kAnimation:
       return 1u << 1;
-    case RouteKind::kLevel:
+    case RouteKind::kAmbiance:
       return 1u << 2;
+    case RouteKind::kLevel:
+      return 1u << 3;
     default:
       return 0;
   }

@@ -1,29 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "level.h"
-
-#include "arx_pistoris/api.h"
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/image.h"
-#include "arx_pistoris/indices.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
 
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/image.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/level/types.h"
+#include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/runtime/types.h"
+#include "arx_pistoris/texture.h"
+
+#include "api/status_boundary.h"
 #include "level/data.h"
 #include "level/validation.h"
 #include "modules/geometry.h"
 #include "modules/lights.h"
+#include "modules/loading_screen.h"
+#include "modules/minimap.h"
 #include "modules/navigation.h"
+#include "modules/resource.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
+#include "modules/textures.h"
+#include "utils/log.h"
 #include "utils/math/bounds.h"
 #include "utils/math/finite.h"
+#include "utils/math/rotation.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <format>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -56,7 +68,20 @@ ArxReturnCode validateCopyRange(std::size_t size, std::size_t offset, std::size_
 ArxStringView borrowedString(const std::string& value) noexcept { return {value.data(), value.size()}; }
 
 ArxEncodedImageView borrowedImage(const std::vector<std::uint8_t>& value) noexcept {
+  if (value.empty()) return {};
   return {value.data(), value.size()};
+}
+
+ArxReturnCode levelResourceError(resource::Error error) noexcept {
+  switch (error) {
+    case resource::Error::kNone:
+      return ARX_OK;
+    case resource::Error::kBadPath:
+      return ARX_LEVEL_BAD_RESOURCE_PATH;
+    case resource::Error::kBadKind:
+      return ARX_INTERNAL_ERROR;
+  }
+  return ARX_INTERNAL_ERROR;
 }
 
 bool copyString(ArxStringView value, std::string& out) {
@@ -86,8 +111,7 @@ bool validZoneHeightMode(ArxZoneHeightMode mode) noexcept {
 bool validPathNodeTypes(const ArxLevelPathInput& path) noexcept {
   for (std::size_t i = 0; i < path.node_count; ++i) {
     const ArxPathNodeType type = path.nodes[i].type;
-    if (type != ARX_PATH_NODE_STANDARD && type != ARX_PATH_NODE_BEZIER && type != ARX_PATH_NODE_CONTROL_POINT)
-      return false;
+    if (type != ARX_PATH_NODE_STANDARD && type != ARX_PATH_NODE_BEZIER) return false;
   }
   return true;
 }
@@ -105,7 +129,7 @@ Face internalFace(const ArxLevelFace& face) noexcept {
     };
   }
   result.texture = face.texture;
-  result.flags = face.flags;
+  result.flags = face.flags & ~kFaceBitQuad;
   result.transval = face.transval;
   return result;
 }
@@ -114,8 +138,9 @@ AnchorConnection internalConnection(ArxLevelAnchorConnection connection) noexcep
   return {connection.first, connection.second};
 }
 
-bool internalTexture(const ArxLevelTextureView& texture, Texture& out) {
-  return copyString(texture.path, out.path) && copyImage(texture.encoded_image, out.encoded_image);
+bool internalTexture(const ArxTextureView& texture, Texture& out) {
+  return copyString(texture.path, out.path) && copyImage(texture.encoded_image, out.encoded_image) &&
+         copyString(texture.external_image_extension, out.external_image_extension);
 }
 
 bool internalRoom(const ArxLevelRoom& room, Room& out) { return copyString(room.name, out.name); }
@@ -215,20 +240,20 @@ bool internalPath(const ArxLevelPathInput& path, Path& out) {
   return true;
 }
 
-ArxReturnCode validateMeshCoherence(const GeometryData& geometry, std::span<const RoomIndex> face_rooms,
-                                    std::span<const ArxColor3> corner_colors, std::size_t room_count,
-                                    LevelValidationState& state) noexcept {
+ArxReturnCode validateMeshCoherence(const GeometryData& geometry, const TexturesData& textures,
+                                    std::span<const RoomIndex> face_rooms, std::span<const ArxColor3> corner_colors,
+                                    std::size_t room_count, LevelValidationState& state) noexcept {
   ArxAabb bounds;
   ArxReturnCode rc = level_validation::geometryError(geometry::validateVertices(geometry.vertices, &bounds));
   if (rc != ARX_OK) return rc;
   if (bounds.min.x < kLevelMinXZ || bounds.max.x > kLevelMaxXZ || bounds.min.z < kLevelMinXZ ||
       bounds.max.z > kLevelMaxXZ)
     return ARX_LEVEL_VERTEX_OUT_OF_BOUNDS;
-  rc = level_validation::geometryError(geometry::validateTextures(geometry.textures));
+  rc = level_validation::textureError(pistoris::textures::validate(textures.textures));
   if (rc != ARX_OK) return rc;
   ArxAabb referenced_bounds;
   rc = level_validation::geometryError(
-      geometry::validateFaces(geometry.faces, geometry.vertices, geometry.textures.size(), &referenced_bounds));
+      geometry::validateFaces(geometry.faces, geometry.vertices, textures.textures.size(), &referenced_bounds));
   if (rc != ARX_OK) return rc;
   rc = level_validation::faceTypes(geometry.faces);
   if (rc != ARX_OK) return rc;
@@ -284,36 +309,6 @@ bool geometryWeldOptions(const Level::VertexWeldOptions& options, geometry::Vert
   return true;
 }
 
-bool faceReferencesRoom(const RoomsData& rooms, RoomIndex room) noexcept {
-  return std::any_of(
-      rooms.face_rooms.begin(), rooms.face_rooms.end(), [room](RoomIndex face_room) { return face_room == room; });
-}
-
-bool asciiInsensitiveEqual(std::string_view lhs, std::string_view rhs) noexcept {
-  if (lhs.size() != rhs.size()) return false;
-  for (std::size_t i = 0; i < lhs.size(); ++i) {
-    const char left = lhs[i] >= 'A' && lhs[i] <= 'Z' ? static_cast<char>(lhs[i] - 'A' + 'a') : lhs[i];
-    const char right = rhs[i] >= 'A' && rhs[i] <= 'Z' ? static_cast<char>(rhs[i] - 'A' + 'a') : rhs[i];
-    if (left != right) return false;
-  }
-  return true;
-}
-
-template <class Value>
-bool nameAvailable(std::span<const Value> values, std::string_view name, std::size_t ignored,
-                   bool ascii_insensitive = false) noexcept {
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    if (i == ignored) continue;
-    const std::string_view current = values[i].name;
-    if (ascii_insensitive ? asciiInsensitiveEqual(current, name) : current == name) return false;
-  }
-  return true;
-}
-
-bool roomNameAvailable(const RoomsData& rooms, std::string_view name, RoomIndex ignored = kInvalidRoomIndex) noexcept {
-  return nameAvailable<Room>(rooms.definitions, name, static_cast<std::size_t>(ignored));
-}
-
 bool portalReferencesRoom(const RoomsData& rooms, PortalIndex portal, RoomIndex room) noexcept {
   if (!validIndex(portal, rooms.portals.size())) return false;
   const Portal& value = rooms.portals[portal];
@@ -352,73 +347,6 @@ ArxReturnCode internalRoomDistance(const ArxLevelRoomDistance& value, const Room
   return ARX_OK;
 }
 
-bool pathNameAvailable(const SceneData& scene, std::string_view name, PathIndex ignored = kInvalidPathIndex) noexcept {
-  return nameAvailable<Path>(scene.paths, name, static_cast<std::size_t>(ignored), true);
-}
-
-bool anchorNameAvailable(const NavigationData& navigation, std::string_view name,
-                         AnchorIndex ignored = kInvalidAnchorIndex) noexcept {
-  return name.empty() || nameAvailable<Anchor>(navigation.anchors, name, static_cast<std::size_t>(ignored));
-}
-
-bool fogNameAvailable(const SceneData& scene, std::string_view name, FogIndex ignored = kInvalidFogIndex) noexcept {
-  return name.empty() || nameAvailable<Fog>(scene.fogs, name, static_cast<std::size_t>(ignored));
-}
-
-void remapRoomsAfterRemoval(RoomsData& rooms, RoomIndex removed) {
-  rooms.portals.erase(
-      std::remove_if(rooms.portals.begin(),
-                     rooms.portals.end(),
-                     [removed](const Portal& portal) { return portal.room_1 == removed || portal.room_2 == removed; }),
-      rooms.portals.end());
-  for (Portal& portal : rooms.portals) {
-    if (portal.room_1 > removed) --portal.room_1;
-    if (portal.room_2 > removed) --portal.room_2;
-  }
-  for (RoomIndex& room : rooms.face_rooms) {
-    if (room > removed) --room;
-  }
-  rooms.distances.clear();
-}
-
-bool anchorConnectionLess(const AnchorConnection& lhs, const AnchorConnection& rhs) noexcept {
-  if (lhs.first != rhs.first) return lhs.first < rhs.first;
-  return lhs.second < rhs.second;
-}
-
-bool samePortalTopology(const Portal& lhs, const Portal& rhs) noexcept {
-  if (lhs.room_1 != rhs.room_1 || lhs.room_2 != rhs.room_2 || lhs.shape != rhs.shape) return false;
-  const std::size_t count = rooms::portalVertexCount(lhs.shape);
-  for (std::size_t i = 0; i < count; ++i) {
-    if (lhs.vertices[i].x != rhs.vertices[i].x || lhs.vertices[i].y != rhs.vertices[i].y ||
-        lhs.vertices[i].z != rhs.vertices[i].z)
-      return false;
-  }
-  return true;
-}
-
-bool sameAnchorConnection(const AnchorConnection& lhs, const AnchorConnection& rhs) noexcept {
-  return lhs.first == rhs.first && lhs.second == rhs.second;
-}
-
-std::size_t sortedAnchorConnectionIndex(const std::vector<AnchorConnection>& connections,
-                                        const AnchorConnection& connection) {
-  return static_cast<std::size_t>(
-      std::lower_bound(connections.begin(), connections.end(), connection, anchorConnectionLess) - connections.begin());
-}
-
-void remapAnchorsAfterRemoval(NavigationData& navigation, AnchorIndex removed) {
-  navigation.connections.erase(
-      std::remove_if(navigation.connections.begin(),
-                     navigation.connections.end(),
-                     [removed](const AnchorConnection& c) { return c.first == removed || c.second == removed; }),
-      navigation.connections.end());
-  for (AnchorConnection& connection : navigation.connections) {
-    if (connection.first > removed) --connection.first;
-    if (connection.second > removed) --connection.second;
-  }
-}
-
 }  // namespace
 
 Level::Level() : data_(std::make_unique<Data>()) {}
@@ -442,47 +370,125 @@ void Level::reset() {
   swap(empty);
 }
 
-ArxReturnCode Level::validateMesh() const { return level_validation::mesh(*data_, data_->validation); }
-
-ArxReturnCode Level::validate() const { return level_validation::all(*data_, data_->validation); }
-
-ArxReturnCode Level::validateVertices() const { return level_validation::vertices(*data_, data_->validation); }
-
-ArxReturnCode Level::validateTextures() const { return level_validation::textures(*data_, data_->validation); }
-
-ArxReturnCode Level::validateFaces() const { return level_validation::faces(*data_, data_->validation); }
-
-ArxReturnCode Level::validateFaceRooms() const { return level_validation::faceRooms(*data_, data_->validation); }
-
-ArxReturnCode Level::validateCornerColors() const { return level_validation::cornerColors(*data_, data_->validation); }
-
-ArxReturnCode Level::validateRooms() const { return level_validation::rooms(*data_, data_->validation); }
-
-ArxReturnCode Level::validatePortals() const { return level_validation::portals(*data_, data_->validation); }
-
-ArxReturnCode Level::validateRoomDistances() const {
-  return level_validation::roomDistances(*data_, data_->validation);
+ArxReturnCode Level::validateMesh() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::mesh(*data_, data_->validation); });
 }
 
-ArxReturnCode Level::validateNavSurface() const { return level_validation::navSurface(*data_, data_->validation); }
-
-ArxReturnCode Level::validateAnchors() const { return level_validation::anchors(*data_, data_->validation); }
-
-ArxReturnCode Level::validateAnchorConnections() const {
-  return level_validation::anchorConnections(*data_, data_->validation);
+ArxReturnCode Level::validate() const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    const ArxReturnCode rc = levelResourceError(resource::validate(data_->resource, ARX_RESOURCE_KIND_LEVEL));
+    if (rc != ARX_OK) return rc;
+    return level_validation::all(*data_, data_->validation);
+  });
 }
 
-ArxReturnCode Level::validateLights() const { return level_validation::lightSources(*data_, data_->validation); }
+ArxReturnCode Level::validateVertices() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::vertices(*data_, data_->validation); });
+}
 
-ArxReturnCode Level::validatePlayerSpawn() const { return level_validation::playerSpawn(*data_, data_->validation); }
+ArxReturnCode Level::validateTextures() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::textures(*data_, data_->validation); });
+}
 
-ArxReturnCode Level::validateEntities() const { return level_validation::entities(*data_, data_->validation); }
+ArxReturnCode Level::validateFaces() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::faces(*data_, data_->validation); });
+}
 
-ArxReturnCode Level::validateFogs() const { return level_validation::fogs(*data_, data_->validation); }
+ArxReturnCode Level::validateFaceRooms() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::faceRooms(*data_, data_->validation); });
+}
 
-ArxReturnCode Level::validateZones() const { return level_validation::zones(*data_, data_->validation); }
+ArxReturnCode Level::validateCornerColors() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::cornerColors(*data_, data_->validation); });
+}
 
-ArxReturnCode Level::validatePaths() const { return level_validation::paths(*data_, data_->validation); }
+ArxReturnCode Level::validateRooms() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::rooms(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validatePortals() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::portals(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateRoomDistances() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::roomDistances(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateNavSurface() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::navSurface(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateAnchors() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::anchors(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateAnchorConnections() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::anchorConnections(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateLights() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::lightSources(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validatePlayerSpawn() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::playerSpawn(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateEntities() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::entities(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateFogs() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::fogs(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateZones() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::zones(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validatePaths() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::paths(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateMinimap() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::minimap(*data_, data_->validation); });
+}
+
+ArxReturnCode Level::validateLoadingScreen() const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return level_validation::loadingScreen(*data_, data_->validation); });
+}
+
+std::string_view Level::resourcePath() const noexcept { return data_->resource.path; }
+
+ArxReturnCode Level::setResourcePath(std::string_view resource_path) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    std::string path;
+    const ArxReturnCode rc = levelResourceError(resource::repairPath(ARX_RESOURCE_KIND_LEVEL, resource_path, path));
+    if (rc != ARX_OK) return rc;
+    resource::setPath(data_->resource, std::move(path));
+    return ARX_OK;
+  });
+}
 
 std::optional<ArxAabb> Level::bounds() const {
   if (validateVertices() != ARX_OK) return std::nullopt;
@@ -494,11 +500,170 @@ std::optional<ArxAabb> Level::referencedBounds() const {
   return data_->validation.derived.referenced_bounds;
 }
 
+Level::MinimapView Level::minimap() const noexcept {
+  return {
+      .encoded_image = borrowedImage(data_->minimap.encoded_image),
+      .world_xz_bounds = data_->minimap.world_xz_bounds,
+  };
+}
+
+ArxEncodedImageView Level::loadingScreen() const noexcept { return borrowedImage(data_->loading_screen.encoded_image); }
+
+ArxReturnCode Level::setMinimap(ArxEncodedImageView encoded_image, ArxRect world_xz_bounds) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (encoded_image.size == 0) return ARX_LEVEL_BAD_MINIMAP_IMAGE;
+    std::vector<std::uint8_t> copy;
+    if (!copyImage(encoded_image, copy)) return ARX_INVALID_DATA_POINTER;
+    MinimapData value{.encoded_image = std::move(copy), .world_xz_bounds = world_xz_bounds};
+    const ArxReturnCode rc = level_validation::minimapError(minimap::validate(value));
+    if (rc != ARX_OK) return rc;
+    minimap::setImage(data_->minimap, std::move(value.encoded_image), value.world_xz_bounds);
+    level_validation::markValid(data_->validation, LevelValidation::kMinimap);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::setMinimapFromProjection(ArxEncodedImageView encoded_image,
+                                              ArxVector2 projection_offset) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (encoded_image.size == 0) return ARX_LEVEL_BAD_MINIMAP_IMAGE;
+    ArxReturnCode rc = validateFaces();
+    if (rc != ARX_OK) return rc;
+    if (!data_->validation.derived.referenced_bounds) return ARX_LEVEL_NO_GEOMETRY;
+    std::vector<std::uint8_t> copy;
+    if (!copyImage(encoded_image, copy)) return ARX_INVALID_DATA_POINTER;
+    ArxRect bounds;
+    rc = level_validation::minimapError(
+        minimap::projectedBounds(copy, *data_->validation.derived.referenced_bounds, projection_offset, bounds));
+    if (rc != ARX_OK) return rc;
+    minimap::setImage(data_->minimap, std::move(copy), bounds);
+    level_validation::markValid(data_->validation, LevelValidation::kMinimap);
+    return ARX_OK;
+  });
+}
+
+void Level::clearMinimap() noexcept {
+  minimap::clear(data_->minimap);
+  level_validation::markValid(data_->validation, LevelValidation::kMinimap);
+}
+
+ArxReturnCode Level::renderMinimapPng(const MinimapRenderOptions& options,
+                                      std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary(
+      [&]() -> ArxReturnCode { return renderMinimapProjectionPng(options, std::nullopt, out); });
+}
+
+ArxReturnCode Level::renderGameMinimapPng(const GameMinimapRenderOptions& options,
+                                          std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    return renderMinimapProjectionPng(
+        {.projection_offset = options.projection_offset, .fill_color = options.fill_color}, options.border_color, out);
+  });
+}
+
+ArxReturnCode Level::renderMinimapProjectionPng(const MinimapRenderOptions& options,
+                                                std::optional<ArxColor3> border_color,
+                                                std::vector<std::uint8_t>& out) const {
+  const minimap::RenderOptions render_options{
+      .projection_offset = options.projection_offset,
+      .fill_color = options.fill_color,
+      .border_color = border_color,
+  };
+  ArxReturnCode rc = level_validation::minimapError(minimap::validateRenderOptions(render_options));
+  if (rc != ARX_OK) return rc;
+  if (data_->minimap.encoded_image.empty()) {
+    out.clear();
+    return ARX_OK;
+  }
+  rc = validateMinimap();
+  if (rc != ARX_OK) return rc;
+  rc = validateFaces();
+  if (rc != ARX_OK) return rc;
+  if (!data_->validation.derived.referenced_bounds) return ARX_LEVEL_NO_GEOMETRY;
+  minimap::RenderInfo info;
+  rc = level_validation::minimapError(
+      minimap::renderPng(data_->minimap, *data_->validation.derived.referenced_bounds, render_options, out, &info));
+  if (rc != ARX_OK) return rc;
+  if (info.invisible) {
+    log(ARX_LOG_WARN, "Level minimap is outside the requested projection; output omitted");
+  } else if (info.cropped) {
+    log(ARX_LOG_WARN, "Level minimap was cropped by the requested projection");
+  } else if (info.padded) {
+    log(ARX_LOG_DEBUG, "Level minimap was padded for the requested projection");
+  }
+  return ARX_OK;
+}
+
+ArxReturnCode Level::renderCompactMinimapPng(ArxVector2& out_projection_offset,
+                                             std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (data_->minimap.encoded_image.empty()) {
+      out_projection_offset = {};
+      out.clear();
+      return ARX_OK;
+    }
+    ArxReturnCode rc = validateMinimap();
+    if (rc != ARX_OK) return rc;
+    rc = validateFaces();
+    if (rc != ARX_OK) return rc;
+    if (!data_->validation.derived.referenced_bounds) return ARX_LEVEL_NO_GEOMETRY;
+    ArxVector2 projection_offset{};
+    rc = level_validation::minimapError(minimap::compactProjectionOffset(
+        data_->minimap, *data_->validation.derived.referenced_bounds, projection_offset));
+    if (rc != ARX_OK) return rc;
+    rc = renderMinimapPng({.projection_offset = projection_offset}, out);
+    if (rc == ARX_OK) out_projection_offset = projection_offset;
+    return rc;
+  });
+}
+
+ArxReturnCode Level::setLoadingScreen(ArxEncodedImageView encoded_image) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (encoded_image.size == 0) return ARX_LEVEL_BAD_LOADING_SCREEN_IMAGE;
+    std::vector<std::uint8_t> copy;
+    if (!copyImage(encoded_image, copy)) return ARX_INVALID_DATA_POINTER;
+    const ArxReturnCode rc = level_validation::loadingScreenError(loading_screen::validateImage(copy));
+    if (rc != ARX_OK) return rc;
+    loading_screen::setImage(data_->loading_screen, std::move(copy));
+    level_validation::markValid(data_->validation, LevelValidation::kLoadingScreen);
+    return ARX_OK;
+  });
+}
+
+void Level::clearLoadingScreen() noexcept {
+  loading_screen::clear(data_->loading_screen);
+  level_validation::markValid(data_->validation, LevelValidation::kLoadingScreen);
+}
+
+ArxReturnCode Level::renderLoadingScreenPng(std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    const ArxReturnCode rc = validateLoadingScreen();
+    if (rc != ARX_OK) return rc;
+    return level_validation::loadingScreenError(loading_screen::renderPng(data_->loading_screen, false, out));
+  });
+}
+
+ArxReturnCode Level::renderFullscreenLoadingScreenPng(std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    const ArxReturnCode rc = validateLoadingScreen();
+    if (rc != ARX_OK) return rc;
+    return level_validation::loadingScreenError(loading_screen::renderPng(data_->loading_screen, true, out));
+  });
+}
+
+ArxReturnCode Level::transcodeLoadingScreenPng(std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    const ArxReturnCode rc = validateLoadingScreen();
+    if (rc != ARX_OK) return rc;
+    return level_validation::loadingScreenError(loading_screen::transcodePng(data_->loading_screen, out));
+  });
+}
+
 std::size_t Level::vertexCount() const noexcept { return data_->geometry.vertices.size(); }
 
 std::size_t Level::faceCount() const noexcept { return data_->geometry.faces.size(); }
 
-std::size_t Level::textureCount() const noexcept { return data_->geometry.textures.size(); }
+std::size_t Level::textureCount() const noexcept { return data_->textures.textures.size(); }
 
 std::size_t Level::roomCount() const noexcept { return data_->rooms.definitions.size(); }
 
@@ -559,14 +724,14 @@ ArxReturnCode Level::copyFaces(std::size_t offset, std::size_t count, ArxLevelFa
   return ARX_OK;
 }
 
-ArxReturnCode Level::copyTextureViews(std::size_t offset, std::size_t count,
-                                      ArxLevelTextureView* out_views) const noexcept {
-  ArxReturnCode rc = validateCopyRange(data_->geometry.textures.size(), offset, count, out_views);
+ArxReturnCode Level::copyTextureViews(std::size_t offset, std::size_t count, ArxTextureView* out_views) const noexcept {
+  ArxReturnCode rc = validateCopyRange(data_->textures.textures.size(), offset, count, out_views);
   if (rc != ARX_OK) return rc;
   for (std::size_t i = 0; i < count; ++i) {
-    const Texture& texture = data_->geometry.textures[offset + i];
+    const Texture& texture = data_->textures.textures[offset + i];
     out_views[i].path = borrowedString(texture.path);
     out_views[i].encoded_image = borrowedImage(texture.encoded_image);
+    out_views[i].external_image_extension = borrowedString(texture.external_image_extension);
   }
   return ARX_OK;
 }
@@ -700,10 +865,11 @@ ArxReturnCode Level::copyLights(std::size_t offset, std::size_t count, ArxLevelL
 }
 
 ArxLevelPlayerSpawn Level::playerSpawn() const noexcept {
+  const PlayerSpawn spawn = data_->scene.player_spawn.value_or(PlayerSpawn{});
   return {
-      .position = data_->scene.player_spawn.position,
-      .rotation = data_->scene.player_spawn.rotation,
-      .is_usable = static_cast<std::uint8_t>(data_->scene.player_spawn_is_fallback ? 0U : 1U),
+      .position = spawn.position,
+      .rotation = spawn.rotation,
+      .is_usable = static_cast<std::uint8_t>(data_->scene.player_spawn.has_value() ? 1U : 0U),
   };
 }
 
@@ -811,8 +977,8 @@ ArxReturnCode Level::copyPathNodes(PathIndex path, std::size_t offset, std::size
   return ARX_OK;
 }
 
-ArxReturnCode Level::getRoomDistance(RoomIndex room_a, RoomIndex room_b, std::uint8_t& out_has_distance,
-                                     ArxLevelRoomDistance& out_distance) const noexcept {
+ArxReturnCode Level::roomDistance(RoomIndex room_a, RoomIndex room_b, std::uint8_t& out_has_distance,
+                                  ArxLevelRoomDistance& out_distance) const noexcept {
   if (!validIndex(room_a, data_->rooms.definitions.size()) || !validIndex(room_b, data_->rooms.definitions.size()))
     return ARX_INDEX_OUT_OF_RANGE;
   out_has_distance = 0;
@@ -835,7 +1001,9 @@ ArxReturnCode Level::getRoomDistance(RoomIndex room_a, RoomIndex room_b, std::ui
 ArxReturnCode Level::setVertex(VertexIndex index, ArxLevelVertex value) noexcept {
   const Vertex vertex = internalVertex(value);
   if (!validIndex(index, data_->geometry.vertices.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Vertex& current = data_->geometry.vertices[static_cast<std::size_t>(index)];
+  ArxReturnCode rc = level_validation::geometryError(geometry::validateVertex(vertex));
+  if (rc != ARX_OK) return rc;
+  const Vertex current = data_->geometry.vertices[static_cast<std::size_t>(index)];
   if (current.position == vertex.position) return ARX_OK;
 
   const bool preserve_vertex_validity = level_validation::has(data_->validation, LevelValidation::kVertices) &&
@@ -847,349 +1015,442 @@ ArxReturnCode Level::setVertex(VertexIndex index, ArxLevelVertex value) noexcept
   std::optional<ArxAabb> bounds = preserve_bounds ? cached_bounds : std::nullopt;
   if (bounds) math::expand(*bounds, vertex.position);
 
-  current = vertex;
+  geometry::setVertex(data_->geometry, index, vertex);
   level_validation::invalidate(data_->validation, LevelValidation::kVertices);
   if (preserve_vertex_validity) level_validation::markValid(data_->validation, LevelValidation::kVertices);
   if (bounds) data_->validation.derived.bounds = *bounds;
   return ARX_OK;
 }
 
-ArxReturnCode Level::addVertex(ArxLevelVertex vertex, VertexIndex& out_index) {
-  return addVertices(&vertex, 1, out_index);
-}
+ArxReturnCode Level::addVertex(ArxLevelVertex vertex, VertexIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidVertexIndex;
+    if (data_->geometry.vertices.size() >= static_cast<std::size_t>(kInvalidVertexIndex))
+      return ARX_LEVEL_TOO_MANY_VERTICES;
 
-ArxReturnCode Level::addVertices(const ArxLevelVertex* vertices, std::size_t count, VertexIndex& out_first_index) {
-  out_first_index = kInvalidVertexIndex;
-  if (count == 0) return ARX_INVALID_OPTIONS;
-  if (vertices == nullptr) return ARX_INVALID_DATA_POINTER;
-  if (count > static_cast<std::size_t>(kInvalidVertexIndex) - data_->geometry.vertices.size())
-    return ARX_LEVEL_TOO_MANY_VERTICES;
-
-  std::vector<Vertex> next;
-  next.reserve(count);
-  for (std::size_t i = 0; i < count; ++i) next.push_back(internalVertex(vertices[i]));
-  for (const Vertex& vertex : next) {
-    ArxReturnCode rc = level_validation::geometryError(geometry::validateVertex(vertex));
+    const Vertex internal = internalVertex(vertex);
+    ArxReturnCode rc = level_validation::geometryError(geometry::validateVertex(internal));
     if (rc != ARX_OK) return rc;
-    if (!validLevelPosition(vertex.position)) return ARX_LEVEL_VERTEX_OUT_OF_BOUNDS;
-  }
+    if (!validLevelPosition(internal.position)) return ARX_LEVEL_VERTEX_OUT_OF_BOUNDS;
 
-  const VertexIndex first = static_cast<VertexIndex>(data_->geometry.vertices.size());
-  const bool had_vertices = !data_->geometry.vertices.empty();
-  const bool vertices_stay_valid =
-      !had_vertices || (level_validation::has(data_->validation, LevelValidation::kVertices) &&
-                        data_->validation.derived.bounds.has_value());
-  std::optional<ArxAabb> bounds = vertices_stay_valid && had_vertices ? data_->validation.derived.bounds : std::nullopt;
-  for (const Vertex& vertex : next) {
+    const bool had_vertices = !data_->geometry.vertices.empty();
+    const bool vertices_stay_valid =
+        !had_vertices || (level_validation::has(data_->validation, LevelValidation::kVertices) &&
+                          data_->validation.derived.bounds.has_value());
+    std::optional<ArxAabb> bounds =
+        vertices_stay_valid && had_vertices ? data_->validation.derived.bounds : std::nullopt;
     if (!bounds)
-      bounds = ArxAabb{vertex.position, vertex.position};
+      bounds = ArxAabb{internal.position, internal.position};
     else
-      math::expand(*bounds, vertex.position);
-  }
+      math::expand(*bounds, internal.position);
 
-  data_->geometry.vertices.insert(data_->geometry.vertices.end(), next.begin(), next.end());
-  if (vertices_stay_valid) {
-    level_validation::markValid(data_->validation, LevelValidation::kVertices);
-    data_->validation.derived.bounds = bounds;
-  }
-  out_first_index = first;
-  return ARX_OK;
+    out_index = geometry::addVertex(data_->geometry, internal);
+    if (vertices_stay_valid) {
+      level_validation::markValid(data_->validation, LevelValidation::kVertices);
+      data_->validation.derived.bounds = bounds;
+    }
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setFace(FaceIndex index, const ArxLevelFace& value) {
-  if (!validIndex(index, data_->geometry.faces.size())) return ARX_INDEX_OUT_OF_RANGE;
-  if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
-  if (!validIndex(value.room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
-  const std::size_t expected_colors = lights::expectedCornerColorCount(data_->geometry);
-  if (!data_->lighting.corner_colors.empty() && data_->lighting.corner_colors.size() != expected_colors)
-    return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
+ArxReturnCode Level::addVertices(const ArxLevelVertex* vertices, std::size_t count,
+                                 VertexIndex& out_first_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_first_index = kInvalidVertexIndex;
+    if (count == 0) return ARX_INVALID_OPTIONS;
+    if (vertices == nullptr) return ARX_INVALID_DATA_POINTER;
+    if (count > static_cast<std::size_t>(kInvalidVertexIndex) - data_->geometry.vertices.size())
+      return ARX_LEVEL_TOO_MANY_VERTICES;
 
-  const Face face = internalFace(value);
-  ArxReturnCode rc = level_validation::geometryError(
-      geometry::validateFaceReferences(face, data_->geometry.vertices.size(), data_->geometry.textures.size()));
-  if (rc != ARX_OK) return rc;
-  rc = level_validation::faceTypes(std::span<const Face>(&face, 1));
-  if (rc != ARX_OK) return rc;
-  if (value.has_corner_colors != 0) {
-    for (const ArxLevelCorner& corner : value.corners) {
-      rc = level_validation::lightingError(lights::validateCornerColor(corner.color));
+    const bool had_vertices = !data_->geometry.vertices.empty();
+    const bool vertices_stay_valid =
+        !had_vertices || (level_validation::has(data_->validation, LevelValidation::kVertices) &&
+                          data_->validation.derived.bounds.has_value());
+    std::optional<ArxAabb> bounds =
+        vertices_stay_valid && had_vertices ? data_->validation.derived.bounds : std::nullopt;
+
+    std::vector<Vertex> internal_vertices;
+    internal_vertices.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      const Vertex vertex = internalVertex(vertices[i]);
+      ArxReturnCode rc = level_validation::geometryError(geometry::validateVertex(vertex));
       if (rc != ARX_OK) return rc;
+      if (!validLevelPosition(vertex.position)) return ARX_LEVEL_VERTEX_OUT_OF_BOUNDS;
+      if (!bounds)
+        bounds = ArxAabb{vertex.position, vertex.position};
+      else
+        math::expand(*bounds, vertex.position);
+      internal_vertices.push_back(vertex);
     }
-    if (data_->lighting.corner_colors.empty())
-      data_->lighting.corner_colors.assign(expected_colors, lights::kDefaultCornerColor);
-  }
 
-  data_->geometry.faces[static_cast<std::size_t>(index)] = face;
-  data_->rooms.face_rooms[static_cast<std::size_t>(index)] = value.room;
-  if (!data_->lighting.corner_colors.empty()) {
-    for (std::size_t corner = 0; corner < 3; ++corner) {
-      data_->lighting.corner_colors[lights::cornerColorIndex(index, corner)] =
-          value.has_corner_colors != 0 ? value.corners[corner].color : lights::kDefaultCornerColor;
+    geometry::reserveVertexCapacity(
+        data_->geometry,
+        geometry::vertexCapacityForAppend(data_->geometry, count, static_cast<std::size_t>(kInvalidVertexIndex)));
+    const VertexIndex appended_first = geometry::appendVertices(data_->geometry, internal_vertices);
+    if (vertices_stay_valid) {
+      level_validation::markValid(data_->validation, LevelValidation::kVertices);
+      data_->validation.derived.bounds = bounds;
     }
-  }
-  level_validation::invalidate(data_->validation, LevelValidation::kFaces);
-  return ARX_OK;
+    out_first_index = appended_first;
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addFace(const ArxLevelFace& value, FaceIndex& out_index) {
-  out_index = kInvalidFaceIndex;
-  if (!validIndex(value.room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
-  if (data_->geometry.faces.size() >= static_cast<std::size_t>(kInvalidFaceIndex)) return ARX_LEVEL_TOO_MANY_FACES;
-  if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
-  if (!data_->lighting.corner_colors.empty() &&
-      data_->lighting.corner_colors.size() != lights::expectedCornerColorCount(data_->geometry))
-    return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
+ArxReturnCode Level::setFace(FaceIndex index, const ArxLevelFace& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->geometry.faces.size())) return ARX_INDEX_OUT_OF_RANGE;
+    if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
+    if (!validIndex(value.room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
+    const std::size_t expected_colors = lights::expectedCornerColorCount(data_->geometry);
+    if (!data_->lighting.corner_colors.empty() && data_->lighting.corner_colors.size() != expected_colors)
+      return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
 
-  const Face face = internalFace(value);
-  ArxAabb face_bounds;
-  const geometry::Error error = geometry::validateFaces(
-      std::span<const Face>(&face, 1), data_->geometry.vertices, data_->geometry.textures.size(), &face_bounds);
-  ArxReturnCode rc = level_validation::geometryError(error);
-  if (rc != ARX_OK) return rc;
-  rc = level_validation::faceTypes(std::span<const Face>(&face, 1));
-  if (rc != ARX_OK) return rc;
-  if (value.has_corner_colors != 0) {
-    for (const ArxLevelCorner& corner : value.corners) {
-      rc = level_validation::lightingError(lights::validateCornerColor(corner.color));
-      if (rc != ARX_OK) return rc;
+    Face face = internalFace(value);
+    ArxReturnCode rc = level_validation::geometryError(geometry::validateFaces(
+        std::span<const Face>(&face, 1), data_->geometry.vertices, data_->textures.textures.size()));
+    if (rc != ARX_OK) return rc;
+    face.normal = geometry::faceNormalOr(data_->geometry, face, {});
+    rc = level_validation::faceTypes(std::span<const Face>(&face, 1));
+    if (rc != ARX_OK) return rc;
+    if (value.has_corner_colors != 0) {
+      for (const ArxLevelCorner& corner : value.corners) {
+        rc = level_validation::lightingError(lights::validateCornerColor(corner.color));
+        if (rc != ARX_OK) return rc;
+      }
     }
-  }
 
-  const bool materialize_colors = value.has_corner_colors != 0 && data_->lighting.corner_colors.empty();
-  std::vector<ArxColor3> materialized_colors;
-  if (materialize_colors) {
-    materialized_colors.assign(lights::expectedCornerColorCount(data_->geometry), lights::kDefaultCornerColor);
-    materialized_colors.reserve(materialized_colors.size() + 3U);
-  }
-  data_->geometry.faces.reserve(data_->geometry.faces.size() + 1U);
-  data_->rooms.face_rooms.reserve(data_->rooms.face_rooms.size() + 1U);
-  if (!data_->lighting.corner_colors.empty())
-    data_->lighting.corner_colors.reserve(data_->lighting.corner_colors.size() + 3U);
-  else if (materialize_colors)
-    data_->lighting.corner_colors = std::move(materialized_colors);
+    std::optional<std::array<ArxColor3, 3>> colors;
+    if (value.has_corner_colors != 0) colors = {value.corners[0].color, value.corners[1].color, value.corners[2].color};
+    lights::setFaceCornerColors(data_->lighting, index, colors, data_->geometry.faces.size());
+    geometry::setFace(data_->geometry, index, face);
+    rooms::setFaceRoom(data_->rooms, index, value.room);
+    if ((value.flags & kFaceBitQuad) != 0)
+      log(ARX_LOG_WARN, "Level face edit: stripped QUAD flag from triangular face input");
+    level_validation::invalidate(data_->validation, LevelValidation::kFaces);
+    return ARX_OK;
+  });
+}
 
-  const FaceIndex index = static_cast<FaceIndex>(data_->geometry.faces.size());
-  std::optional<ArxAabb> referenced_bounds = level_validation::has(data_->validation, LevelValidation::kFaces)
-                                                 ? data_->validation.derived.referenced_bounds
-                                                 : std::nullopt;
-  const bool faces_stay_valid = referenced_bounds.has_value();
-  const bool face_rooms_stay_valid = level_validation::has(data_->validation, LevelValidation::kFaceRooms);
-  const bool colors_stay_valid = level_validation::has(data_->validation, LevelValidation::kCornerColors);
+ArxReturnCode Level::addFace(const ArxLevelFace& value, FaceIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidFaceIndex;
+    if (!validIndex(value.room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
+    if (data_->geometry.faces.size() >= static_cast<std::size_t>(kInvalidFaceIndex)) return ARX_LEVEL_TOO_MANY_FACES;
+    if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
+    if (!data_->lighting.corner_colors.empty() &&
+        data_->lighting.corner_colors.size() != lights::expectedCornerColorCount(data_->geometry))
+      return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
 
-  data_->geometry.faces.push_back(face);
-  data_->rooms.face_rooms.push_back(value.room);
-  if (!data_->lighting.corner_colors.empty()) {
-    for (std::size_t corner = 0; corner < 3; ++corner) {
-      data_->lighting.corner_colors.push_back(value.has_corner_colors != 0 ? value.corners[corner].color
-                                                                           : lights::kDefaultCornerColor);
+    Face face = internalFace(value);
+    ArxAabb face_bounds;
+    const geometry::Error error = geometry::validateFaces(
+        std::span<const Face>(&face, 1), data_->geometry.vertices, data_->textures.textures.size(), &face_bounds);
+    ArxReturnCode rc = level_validation::geometryError(error);
+    if (rc != ARX_OK) return rc;
+    face.normal = geometry::faceNormalOr(data_->geometry, face, {});
+    rc = level_validation::faceTypes(std::span<const Face>(&face, 1));
+    if (rc != ARX_OK) return rc;
+    if (value.has_corner_colors != 0) {
+      for (const ArxLevelCorner& corner : value.corners) {
+        rc = level_validation::lightingError(lights::validateCornerColor(corner.color));
+        if (rc != ARX_OK) return rc;
+      }
     }
-  }
-  level_validation::invalidate(data_->validation, LevelValidation::kFaces);
-  if (faces_stay_valid) {
-    level_validation::markValid(data_->validation, LevelValidation::kFaces);
-    ArxAabb bounds = *referenced_bounds;
-    math::expand(bounds, face_bounds.min);
-    math::expand(bounds, face_bounds.max);
-    data_->validation.derived.referenced_bounds = bounds;
-  }
-  if (faces_stay_valid && face_rooms_stay_valid)
-    level_validation::markValid(data_->validation, LevelValidation::kFaceRooms);
-  if (faces_stay_valid && colors_stay_valid)
-    level_validation::markValid(data_->validation, LevelValidation::kCornerColors);
-  out_index = index;
-  return ARX_OK;
+
+    const std::size_t face_count = data_->geometry.faces.size();
+    const FaceIndex index = static_cast<FaceIndex>(face_count);
+    std::optional<ArxAabb> referenced_bounds = level_validation::has(data_->validation, LevelValidation::kFaces)
+                                                   ? data_->validation.derived.referenced_bounds
+                                                   : std::nullopt;
+    const bool faces_stay_valid = referenced_bounds.has_value();
+    const bool face_rooms_stay_valid = level_validation::has(data_->validation, LevelValidation::kFaceRooms);
+    const bool colors_stay_valid = level_validation::has(data_->validation, LevelValidation::kCornerColors);
+    std::optional<std::array<ArxColor3, 3>> colors;
+    if (value.has_corner_colors != 0) colors = {value.corners[0].color, value.corners[1].color, value.corners[2].color};
+
+    try {
+      out_index = geometry::addFace(data_->geometry, face);
+      rooms::appendFaceRooms(data_->rooms, std::span<const RoomIndex>(&value.room, 1));
+      lights::appendFaceCornerColors(data_->lighting, colors, face_count);
+    } catch (...) {
+      rooms::truncateFaceRooms(data_->rooms, face_count);
+      if (data_->geometry.faces.size() > face_count) geometry::removeFace(data_->geometry, index);
+      out_index = kInvalidFaceIndex;
+      throw;
+    }
+    if ((value.flags & kFaceBitQuad) != 0)
+      log(ARX_LOG_WARN, "Level face edit: stripped QUAD flag from triangular face input");
+    level_validation::invalidate(data_->validation, LevelValidation::kFaces);
+    if (faces_stay_valid) {
+      level_validation::markValid(data_->validation, LevelValidation::kFaces);
+      ArxAabb bounds = *referenced_bounds;
+      math::expand(bounds, face_bounds.min);
+      math::expand(bounds, face_bounds.max);
+      data_->validation.derived.referenced_bounds = bounds;
+    }
+    if (faces_stay_valid && face_rooms_stay_valid)
+      level_validation::markValid(data_->validation, LevelValidation::kFaceRooms);
+    if (faces_stay_valid && colors_stay_valid)
+      level_validation::markValid(data_->validation, LevelValidation::kCornerColors);
+    out_index = index;
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removeFace(FaceIndex index) {
-  if (!validIndex(index, data_->geometry.faces.size())) return ARX_INDEX_OUT_OF_RANGE;
-  if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
-  if (!data_->lighting.corner_colors.empty() &&
-      data_->lighting.corner_colors.size() != lights::expectedCornerColorCount(data_->geometry))
-    return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
+ArxReturnCode Level::removeFace(FaceIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->geometry.faces.size())) return ARX_INDEX_OUT_OF_RANGE;
+    if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
+    if (!data_->lighting.corner_colors.empty() &&
+        data_->lighting.corner_colors.size() != lights::expectedCornerColorCount(data_->geometry))
+      return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
 
-  const std::ptrdiff_t offset = static_cast<std::ptrdiff_t>(index);
-  data_->geometry.faces.erase(data_->geometry.faces.begin() + offset);
-  data_->rooms.face_rooms.erase(data_->rooms.face_rooms.begin() + offset);
-  if (!data_->lighting.corner_colors.empty()) {
-    const std::ptrdiff_t color = static_cast<std::ptrdiff_t>(lights::cornerColorIndex(index, 0));
-    data_->lighting.corner_colors.erase(data_->lighting.corner_colors.begin() + color,
-                                        data_->lighting.corner_colors.begin() + color + 3);
-  }
-  level_validation::invalidate(data_->validation, LevelValidation::kFaces);
-  return ARX_OK;
+    lights::removeFaceCornerColors(data_->lighting, index, data_->geometry.faces.size());
+    rooms::removeFaceRoom(data_->rooms, index);
+    geometry::removeFace(data_->geometry, index);
+    level_validation::invalidate(data_->validation, LevelValidation::kFaces);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::compactVertices(std::size_t* removed) {
-  ArxReturnCode rc = validateFaces();
-  if (rc != ARX_OK) return rc;
-  const std::size_t count = geometry::compactVertices(data_->geometry);
-  data_->validation.derived.bounds = data_->validation.derived.referenced_bounds;
-  if (removed) *removed = count;
-  return ARX_OK;
+ArxReturnCode Level::compactVertices(std::size_t* removed) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    ArxReturnCode rc = validateFaces();
+    if (rc != ARX_OK) return rc;
+    const std::size_t count = geometry::compactVertices(data_->geometry);
+    data_->validation.derived.bounds = data_->validation.derived.referenced_bounds;
+    if (removed) *removed = count;
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::compactTextures(std::size_t* removed) {
-  const ArxReturnCode rc = validateFaces();
-  if (rc != ARX_OK) return rc;
-  const std::size_t count = geometry::compactTextures(data_->geometry);
-  if (removed) *removed = count;
-  return ARX_OK;
+ArxReturnCode Level::compactTextures(std::size_t* removed) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    ArxReturnCode rc = validateFaces();
+    if (rc != ARX_OK) return rc;
+    std::vector<std::uint8_t> used;
+    rc = level_validation::geometryError(
+        geometry::collectTextureUsage(data_->geometry, data_->textures.textures.size(), used));
+    if (rc != ARX_OK) return rc;
+    std::vector<TextureIndex> remap;
+    std::size_t count = 0;
+    rc = level_validation::textureError(textures::compact(data_->textures, used, remap, count));
+    if (rc != ARX_OK) return rc;
+    geometry::remapTextureReferences(data_->geometry, remap);
+    if (removed) *removed = count;
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::weldVertices() { return weldVertices(VertexWeldOptions{}); }
+ArxReturnCode Level::weldVertices() noexcept { return weldVertices(VertexWeldOptions{}); }
 
-ArxReturnCode Level::weldVertices(const VertexWeldOptions& options) {
-  ArxReturnCode rc = validateMesh();
-  if (rc != ARX_OK) return rc;
+ArxReturnCode Level::weldVertices(const VertexWeldOptions& options) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    ArxReturnCode rc = validateMesh();
+    if (rc != ARX_OK) return rc;
 
-  geometry::VertexWeldOptions module_options;
-  if (!geometryWeldOptions(options, module_options)) return ARX_INVALID_OPTIONS;
+    geometry::VertexWeldOptions module_options;
+    if (!geometryWeldOptions(options, module_options)) return ARX_INVALID_OPTIONS;
 
-  std::vector<std::vector<VertexIndex>> segment_vertices;
-  std::vector<VertexIndex> protected_vertices;
-  rc = level_validation::roomsError(rooms::collectVertexWeldSegments(
-      data_->geometry, data_->rooms, module_options.radius, segment_vertices, protected_vertices));
-  if (rc != ARX_OK) return rc;
+    rooms::VertexWeldSegments collected;
+    rc = level_validation::roomsError(
+        rooms::collectVertexWeldSegments(data_->geometry, data_->rooms, module_options.radius, collected));
+    if (rc != ARX_OK) return rc;
 
-  std::vector<geometry::VertexWeldSegment> segments;
-  segments.reserve(segment_vertices.size());
-  for (const std::vector<VertexIndex>& vertices : segment_vertices) segments.push_back({vertices});
+    std::vector<geometry::VertexWeldSegment> segments;
+    segments.reserve(data_->rooms.definitions.size());
+    for (std::size_t room = 0; room < data_->rooms.definitions.size(); ++room) {
+      segments.push_back(
+          {std::span<const VertexIndex>(collected.vertices)
+               .subspan(collected.offsets[room], collected.offsets[room + 1U] - collected.offsets[room])});
+    }
 
-  geometry::GeometryRemap remap;
-  const geometry::Error error = geometry::weldVerticesSegmented(
-      data_->geometry, {.segments = segments, .protected_vertices = protected_vertices}, module_options, &remap);
-  if (error != geometry::Error::kNone) return level_validation::geometryError(error);
+    geometry::GeometryRemap remap;
+    const geometry::Error error =
+        geometry::weldVerticesSegmented(data_->geometry,
+                                        {.segments = segments, .protected_vertices = collected.protected_vertices},
+                                        module_options,
+                                        &remap);
+    if (error != geometry::Error::kNone) return level_validation::geometryError(error);
 
-  rooms::remapFaceRooms(data_->rooms, remap.faces);
-  lights::remapCornerColors(data_->lighting, remap.faces);
-  level_validation::invalidate(data_->validation, LevelValidation::kVertices);
-  return ARX_OK;
+    rooms::remapFaceRooms(data_->rooms, remap.faces);
+    lights::remapCornerColors(data_->lighting, remap.faces);
+    level_validation::invalidate(data_->validation, LevelValidation::kVertices);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setTexture(TextureIndex index, const ArxLevelTextureView& value) {
-  if (!validIndex(index, data_->geometry.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Texture texture;
-  if (!internalTexture(value, texture)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::geometryError(geometry::validateTexture(texture));
-  if (rc != ARX_OK) return rc;
-  data_->geometry.textures[static_cast<std::size_t>(index)] = std::move(texture);
-  return ARX_OK;
+ArxReturnCode Level::setTexture(TextureIndex index, const ArxTextureView& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->textures.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Texture texture;
+    if (!internalTexture(value, texture)) return ARX_INVALID_DATA_POINTER;
+    textures::PathRepairInfo repair;
+    ArxReturnCode rc = level_validation::textureError(textures::repairPath(data_->textures, texture, index, &repair));
+    if (rc != ARX_OK) return rc;
+    rc = level_validation::textureError(textures::validateTexture(texture));
+    if (rc != ARX_OK) return rc;
+    textures::setTexture(data_->textures, index, std::move(texture));
+    for (const textures::PathRepairInfo::Repair& item : repair.repairs)
+      log(ARX_LOG_WARN, "Level texture: '{}' normalized to '{}'", item.original, item.repaired);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addTexture(const ArxLevelTextureView& value, TextureIndex& out_index) {
-  out_index = kNoTexture;
-  if (!canAppendIndex<TextureIndex>(data_->geometry.textures.size())) return ARX_LEVEL_TOO_MANY_TEXTURES;
-
-  Texture texture;
-  if (!internalTexture(value, texture)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::geometryError(geometry::validateTexture(texture));
-  if (rc != ARX_OK) return rc;
-
-  const bool textures_stay_valid =
-      data_->geometry.textures.empty() || level_validation::has(data_->validation, LevelValidation::kTextures);
-  const TextureIndex index = geometry::addTexture(data_->geometry, std::move(texture));
-  if (textures_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kTextures);
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addTexture(const ArxTextureView& value, TextureIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kNoTexture;
+    Texture texture;
+    if (!internalTexture(value, texture)) return ARX_INVALID_DATA_POINTER;
+    ArxReturnCode rc =
+        level_validation::textureError(textures::validateTextureCount(data_->textures.textures.size() + 1U));
+    if (rc != ARX_OK) return rc;
+    textures::PathRepairInfo repair;
+    rc = level_validation::textureError(textures::repairPath(data_->textures, texture, kNoTexture, &repair));
+    if (rc != ARX_OK) return rc;
+    rc = level_validation::textureError(textures::validateTexture(texture));
+    if (rc != ARX_OK) return rc;
+    const bool textures_stay_valid =
+        data_->textures.textures.empty() || level_validation::has(data_->validation, LevelValidation::kTextures);
+    const TextureIndex index = textures::addTexture(data_->textures, std::move(texture));
+    if (textures_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kTextures);
+    out_index = index;
+    for (const textures::PathRepairInfo::Repair& item : repair.repairs)
+      log(ARX_LOG_WARN, "Level texture: '{}' normalized to '{}'", item.original, item.repaired);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setTextureImage(TextureIndex index, ArxEncodedImageView encoded_image) {
-  if (!validIndex(index, data_->geometry.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
-  if (encoded_image.size == 0) return ARX_LEVEL_BAD_TEXTURE_IMAGE;
-  std::vector<std::uint8_t> next_image;
-  if (!copyImage(encoded_image, next_image)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::imageError(geometry::inspectImage(next_image));
-  if (rc != ARX_OK) return rc;
-  data_->geometry.textures[static_cast<std::size_t>(index)].encoded_image = std::move(next_image);
-  return ARX_OK;
+ArxReturnCode Level::rebaseTexturePaths(std::string_view directory) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    textures::PathRebaseInfo info;
+    const ArxReturnCode rc = level_validation::textureError(textures::rebasePaths(data_->textures, directory, &info));
+    if (rc != ARX_OK) return rc;
+    for (const textures::PathRebaseInfo::Repair& repair : info.repairs)
+      log(ARX_LOG_WARN, "Level texture rebase: '{}' normalized to '{}'", repair.original, repair.repaired);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::setTextureImage(TextureIndex index, ArxEncodedImageView encoded_image) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->textures.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
+    if (encoded_image.size == 0) return ARX_LEVEL_BAD_TEXTURE_IMAGE;
+    std::vector<std::uint8_t> next_image;
+    if (!copyImage(encoded_image, next_image)) return ARX_INVALID_DATA_POINTER;
+    const ArxReturnCode rc = level_validation::textureError(textures::validateEncodedImage(next_image));
+    if (rc != ARX_OK) return rc;
+    textures::setEncodedImage(data_->textures, index, std::move(next_image));
+    return ARX_OK;
+  });
 }
 
 ArxReturnCode Level::clearTextureImage(TextureIndex index) noexcept {
-  if (!validIndex(index, data_->geometry.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->geometry.textures[static_cast<std::size_t>(index)].encoded_image.clear();
-  return ARX_OK;
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->textures.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
+    textures::clearEncodedImage(data_->textures, index);
+    return ARX_OK;
+  });
 }
 
 ArxReturnCode Level::setFaceRoom(FaceIndex face, RoomIndex room) noexcept {
   if (!validIndex(face, data_->rooms.face_rooms.size())) return ARX_INDEX_OUT_OF_RANGE;
   if (!validIndex(room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
-  data_->rooms.face_rooms[static_cast<std::size_t>(face)] = room;
+  rooms::setFaceRoom(data_->rooms, face, room);
   return ARX_OK;
 }
 
-ArxReturnCode Level::setCornerColor(FaceIndex face, std::uint8_t corner, ArxColor3 color) {
-  if (!validIndex(face, data_->geometry.faces.size()) || corner >= 3) return ARX_INDEX_OUT_OF_RANGE;
-  ArxReturnCode rc = level_validation::lightingError(lights::validateCornerColor(color));
-  if (rc != ARX_OK) return rc;
-  const std::size_t expected = lights::expectedCornerColorCount(data_->geometry);
-  const std::size_t index = lights::cornerColorIndex(face, corner);
-  if (data_->lighting.corner_colors.empty()) {
-    data_->lighting.corner_colors.assign(expected, lights::kDefaultCornerColor);
-  } else if (data_->lighting.corner_colors.size() != expected) {
-    return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
-  }
-  data_->lighting.corner_colors[index] = color;
-  return ARX_OK;
+ArxReturnCode Level::setCornerColor(FaceIndex face, std::uint8_t corner, ArxColor3 color) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(face, data_->geometry.faces.size()) || corner >= 3) return ARX_INDEX_OUT_OF_RANGE;
+    ArxReturnCode rc = level_validation::lightingError(lights::validateCornerColors(data_->lighting, data_->geometry));
+    if (rc != ARX_OK) return rc;
+    rc = level_validation::lightingError(lights::validateCornerColor(color));
+    if (rc != ARX_OK) return rc;
+    lights::setCornerColor(data_->lighting, face, corner, color, data_->geometry.faces.size());
+    return ARX_OK;
+  });
 }
 
-void Level::clearCornerColors() noexcept { data_->lighting.corner_colors.clear(); }
+void Level::clearCornerColors() noexcept { lights::clearCornerColors(data_->lighting); }
 
-ArxReturnCode Level::replaceMesh(const ArxLevelMeshInput& mesh) {
-  if ((mesh.vertex_count != 0 && mesh.vertices == nullptr) || (mesh.face_count != 0 && mesh.faces == nullptr) ||
-      (mesh.texture_count != 0 && mesh.textures == nullptr))
-    return ARX_INVALID_DATA_POINTER;
+ArxReturnCode Level::replaceMesh(const ArxLevelMeshInput& mesh) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (mesh.vertex_count > static_cast<std::size_t>(kInvalidVertexIndex)) return ARX_LEVEL_TOO_MANY_VERTICES;
+    if (mesh.face_count > static_cast<std::size_t>(kInvalidFaceIndex)) return ARX_LEVEL_TOO_MANY_FACES;
+    if (mesh.texture_count > static_cast<std::size_t>(kNoTexture)) return ARX_LEVEL_TOO_MANY_TEXTURES;
+    if ((mesh.vertex_count != 0 && mesh.vertices == nullptr) || (mesh.face_count != 0 && mesh.faces == nullptr) ||
+        (mesh.texture_count != 0 && mesh.textures == nullptr))
+      return ARX_INVALID_DATA_POINTER;
 
-  GeometryData geometry;
-  geometry.vertices.reserve(mesh.vertex_count);
-  for (std::size_t i = 0; i < mesh.vertex_count; ++i) geometry.vertices.push_back(internalVertex(mesh.vertices[i]));
-  geometry.faces.reserve(mesh.face_count);
-  for (std::size_t i = 0; i < mesh.face_count; ++i) geometry.faces.push_back(internalFace(mesh.faces[i]));
-  geometry.textures.resize(mesh.texture_count);
-  for (std::size_t i = 0; i < mesh.texture_count; ++i) {
-    if (!internalTexture(mesh.textures[i], geometry.textures[i])) return ARX_INVALID_DATA_POINTER;
-  }
-
-  std::vector<RoomIndex> face_rooms;
-  face_rooms.reserve(mesh.face_count);
-  bool has_corner_colors = false;
-  for (std::size_t i = 0; i < mesh.face_count; ++i) {
-    face_rooms.push_back(mesh.faces[i].room);
-    has_corner_colors = has_corner_colors || mesh.faces[i].has_corner_colors != 0;
-  }
-  std::vector<ArxColor3> corner_colors;
-  if (has_corner_colors) {
-    corner_colors.assign(mesh.face_count * 3U, lights::kDefaultCornerColor);
-    for (std::size_t face = 0; face < mesh.face_count; ++face) {
-      if (mesh.faces[face].has_corner_colors == 0) continue;
-      for (std::size_t corner = 0; corner < 3; ++corner)
-        corner_colors[lights::cornerColorIndex(static_cast<FaceIndex>(face), corner)] =
-            mesh.faces[face].corners[corner].color;
+    GeometryData geometry;
+    TexturesData texture_data;
+    geometry.vertices.reserve(mesh.vertex_count);
+    for (std::size_t i = 0; i < mesh.vertex_count; ++i) geometry.vertices.push_back(internalVertex(mesh.vertices[i]));
+    geometry.faces.reserve(mesh.face_count);
+    std::size_t stripped_quad_flags = 0;
+    for (std::size_t i = 0; i < mesh.face_count; ++i) {
+      stripped_quad_flags += static_cast<std::size_t>((mesh.faces[i].flags & kFaceBitQuad) != 0);
+      geometry.faces.push_back(internalFace(mesh.faces[i]));
     }
-  }
+    texture_data.textures.resize(mesh.texture_count);
+    for (std::size_t i = 0; i < mesh.texture_count; ++i) {
+      if (!internalTexture(mesh.textures[i], texture_data.textures[i])) return ARX_INVALID_DATA_POINTER;
+    }
+    textures::PathRepairInfo texture_repairs;
+    ArxReturnCode rc = level_validation::textureError(textures::repairPaths(texture_data.textures, &texture_repairs));
+    if (rc != ARX_OK) return rc;
 
-  LevelValidationState next_validation;
-  ArxReturnCode rc =
-      validateMeshCoherence(geometry, face_rooms, corner_colors, data_->rooms.definitions.size(), next_validation);
-  if (rc != ARX_OK) return rc;
+    std::vector<RoomIndex> face_rooms;
+    face_rooms.reserve(mesh.face_count);
+    bool has_corner_colors = false;
+    for (std::size_t i = 0; i < mesh.face_count; ++i) {
+      face_rooms.push_back(mesh.faces[i].room);
+      has_corner_colors = has_corner_colors || mesh.faces[i].has_corner_colors != 0;
+    }
+    std::vector<ArxColor3> corner_colors;
+    if (has_corner_colors) {
+      corner_colors.assign(mesh.face_count * 3U, lights::kDefaultCornerColor);
+      for (std::size_t face = 0; face < mesh.face_count; ++face) {
+        if (mesh.faces[face].has_corner_colors == 0) continue;
+        for (std::size_t corner = 0; corner < 3; ++corner)
+          corner_colors[lights::cornerColorIndex(static_cast<FaceIndex>(face), corner)] =
+              mesh.faces[face].corners[corner].color;
+      }
+    }
 
-  LevelValidationState final_validation = data_->validation;
-  level_validation::invalidate(final_validation,
-                               LevelValidation::kVertices | LevelValidation::kTextures | LevelValidation::kFaces |
-                                   LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
-                                   LevelValidation::kNavSurface | LevelValidation::kAnchors);
-  final_validation.derived = next_validation.derived;
-  level_validation::markValid(final_validation,
-                              next_validation.valid | LevelValidation::kNavSurface | LevelValidation::kAnchors |
-                                  LevelValidation::kAnchorConnections);
+    LevelValidationState next_validation;
+    rc = validateMeshCoherence(
+        geometry, texture_data, face_rooms, corner_colors, data_->rooms.definitions.size(), next_validation);
+    if (rc != ARX_OK) return rc;
+    for (Face& face : geometry.faces) face.normal = geometry::faceNormalOr(geometry, face, {});
 
-  data_->geometry = std::move(geometry);
-  data_->rooms.face_rooms = std::move(face_rooms);
-  data_->lighting.corner_colors = std::move(corner_colors);
-  data_->navigation.surface.reset();
-  data_->navigation.anchors.clear();
-  data_->navigation.connections.clear();
-  data_->validation = final_validation;
-  return ARX_OK;
+    LevelValidationState final_validation = data_->validation;
+    level_validation::invalidate(final_validation,
+                                 LevelValidation::kVertices | LevelValidation::kTextures | LevelValidation::kFaces |
+                                     LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
+                                     LevelValidation::kNavSurface | LevelValidation::kAnchors);
+    final_validation.derived = next_validation.derived;
+    level_validation::markValid(final_validation,
+                                next_validation.valid | LevelValidation::kNavSurface | LevelValidation::kAnchors |
+                                    LevelValidation::kAnchorConnections);
+
+    geometry::replace(data_->geometry, std::move(geometry));
+    textures::replaceTextures(data_->textures, std::move(texture_data.textures));
+    rooms::replaceFaceRooms(data_->rooms, std::move(face_rooms));
+    lights::replaceCornerColors(data_->lighting, std::move(corner_colors));
+    navigation::clearSurface(data_->navigation);
+    navigation::clearAnchors(data_->navigation);
+    data_->validation = final_validation;
+    for (const textures::PathRepairInfo::Repair& repair : texture_repairs.repairs)
+      log(ARX_LOG_WARN,
+          "Level mesh replacement: texture path '{}' normalized to '{}'",
+          repair.original,
+          repair.repaired);
+    if (stripped_quad_flags != 0)
+      log(ARX_LOG_WARN, "Level mesh replacement: stripped QUAD flag from {} triangular face(s)", stripped_quad_flags);
+    return ARX_OK;
+  });
 }
 
 void Level::clearMesh() noexcept {
@@ -1197,312 +1458,323 @@ void Level::clearMesh() noexcept {
                                LevelValidation::kVertices | LevelValidation::kTextures | LevelValidation::kFaces |
                                    LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
                                    LevelValidation::kNavSurface | LevelValidation::kAnchors);
-  data_->geometry.vertices.clear();
-  data_->geometry.faces.clear();
-  data_->geometry.textures.clear();
-  data_->rooms.face_rooms.clear();
-  data_->lighting.corner_colors.clear();
-  data_->navigation.surface.reset();
-  data_->navigation.anchors.clear();
-  data_->navigation.connections.clear();
+  geometry::clear(data_->geometry);
+  textures::clear(data_->textures);
+  rooms::clearFaceRooms(data_->rooms);
+  lights::clearCornerColors(data_->lighting);
+  navigation::clearSurface(data_->navigation);
+  navigation::clearAnchors(data_->navigation);
 }
 
-ArxReturnCode Level::setRoom(RoomIndex index, const ArxLevelRoom& value) {
-  if (!validIndex(index, data_->rooms.definitions.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Room room;
-  if (!internalRoom(value, room)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::roomsError(rooms::validateRoom(room));
-  if (rc != ARX_OK) return rc;
-  if (!roomNameAvailable(data_->rooms, room.name, index)) return ARX_LEVEL_DUPLICATE_ROOM_NAME;
-  if (data_->rooms.definitions[static_cast<std::size_t>(index)].name == room.name) return ARX_OK;
-  data_->rooms.definitions[static_cast<std::size_t>(index)] = std::move(room);
-  return ARX_OK;
+ArxReturnCode Level::setRoom(RoomIndex index, const ArxLevelRoom& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->rooms.definitions.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Room room;
+    if (!internalRoom(value, room)) return ARX_INVALID_DATA_POINTER;
+    if (data_->rooms.definitions[static_cast<std::size_t>(index)].name == room.name) return ARX_OK;
+    rooms::repairRoomName(data_->rooms, room, index);
+    ArxReturnCode rc = level_validation::roomsError(rooms::validateRoom(room));
+    if (rc != ARX_OK) return rc;
+    rooms::setRoom(data_->rooms, index, std::move(room));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addRoom(const ArxLevelRoom& value, RoomIndex& out_index) {
-  out_index = kInvalidRoomIndex;
-  Room room;
-  if (!internalRoom(value, room)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::roomsError(rooms::validateRoom(room));
-  if (rc != ARX_OK) return rc;
-  if (!roomNameAvailable(data_->rooms, room.name)) return ARX_LEVEL_DUPLICATE_ROOM_NAME;
-  if (data_->rooms.definitions.size() >= level_validation::kMaxRooms) return ARX_LEVEL_TOO_MANY_ROOMS;
-  if (!canAppendIndex<RoomIndex>(data_->rooms.definitions.size())) return ARX_LEVEL_TOO_MANY_ROOMS;
-  const RoomIndex index = static_cast<RoomIndex>(data_->rooms.definitions.size());
-  data_->rooms.definitions.push_back(std::move(room));
-  data_->rooms.distances.clear();
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addRoom(const ArxLevelRoom& value, RoomIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidRoomIndex;
+    Room room;
+    if (!internalRoom(value, room)) return ARX_INVALID_DATA_POINTER;
+    if (data_->rooms.definitions.size() >= level_validation::kMaxRooms) return ARX_LEVEL_TOO_MANY_ROOMS;
+    rooms::repairRoomName(data_->rooms, room);
+    ArxReturnCode rc = level_validation::roomsError(rooms::validateRoom(room));
+    if (rc != ARX_OK) return rc;
+    out_index = rooms::addRoom(data_->rooms, std::move(room));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removeRoom(RoomIndex index) {
-  if (!validIndex(index, data_->rooms.definitions.size())) return ARX_INDEX_OUT_OF_RANGE;
-  if (faceReferencesRoom(data_->rooms, index)) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
-  const bool rooms_stay_valid =
-      level_validation::has(data_->validation, LevelValidation::kRooms) && data_->rooms.definitions.size() > 1;
-  data_->rooms.definitions.erase(data_->rooms.definitions.begin() + static_cast<std::ptrdiff_t>(index));
-  remapRoomsAfterRemoval(data_->rooms, index);
-  level_validation::invalidate(data_->validation, LevelValidation::kRooms);
-  if (rooms_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kRooms);
-  return ARX_OK;
+ArxReturnCode Level::removeRoom(RoomIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->rooms.definitions.size())) return ARX_INDEX_OUT_OF_RANGE;
+    const bool rooms_stay_valid =
+        level_validation::has(data_->validation, LevelValidation::kRooms) && data_->rooms.definitions.size() > 1;
+    ArxReturnCode rc = level_validation::roomsError(rooms::validateRoomRemoval(data_->rooms, index));
+    if (rc != ARX_OK) return rc;
+    rooms::removeRoom(data_->rooms, index);
+    level_validation::invalidate(data_->validation, LevelValidation::kRooms);
+    if (rooms_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kRooms);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setPortal(PortalIndex index, const ArxLevelPortal& value) {
-  if (!validIndex(index, data_->rooms.portals.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Portal portal;
-  if (!internalPortal(value, portal)) return ARX_INVALID_DATA_POINTER;
-  if (!validPortalShape(value.shape)) return ARX_LEVEL_BAD_PORTAL_SHAPE;
-  ArxReturnCode rc = level_validation::roomsError(rooms::validatePortal(portal, data_->rooms.definitions.size()));
-  if (rc != ARX_OK) return rc;
-  if (!level_validation::validPortalBounds(portal)) return ARX_LEVEL_PORTAL_OUT_OF_BOUNDS;
-  if (!nameAvailable<Portal>(data_->rooms.portals, portal.name, static_cast<std::size_t>(index)))
-    return ARX_LEVEL_DUPLICATE_PORTAL_NAME;
-  const bool topology_changed = !samePortalTopology(data_->rooms.portals[static_cast<std::size_t>(index)], portal);
-  data_->rooms.portals[static_cast<std::size_t>(index)] = std::move(portal);
-  if (topology_changed) data_->rooms.distances.clear();
-  return ARX_OK;
+ArxReturnCode Level::setPortal(PortalIndex index, const ArxLevelPortal& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->rooms.portals.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Portal portal;
+    if (!internalPortal(value, portal)) return ARX_INVALID_DATA_POINTER;
+    if (!validPortalShape(value.shape)) return ARX_LEVEL_BAD_PORTAL_SHAPE;
+    rooms::repairPortalName(data_->rooms, portal, index);
+    ArxReturnCode rc = level_validation::roomsError(rooms::validatePortal(portal, data_->rooms.definitions.size()));
+    if (rc != ARX_OK) return rc;
+    if (!level_validation::validPortalBounds(portal)) return ARX_LEVEL_PORTAL_OUT_OF_BOUNDS;
+    rooms::setPortal(data_->rooms, index, std::move(portal));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addPortal(const ArxLevelPortal& value, PortalIndex& out_index) {
-  out_index = kInvalidPortalIndex;
-  Portal portal;
-  if (!internalPortal(value, portal)) return ARX_INVALID_DATA_POINTER;
-  if (!validPortalShape(value.shape)) return ARX_LEVEL_BAD_PORTAL_SHAPE;
-  ArxReturnCode rc = level_validation::roomsError(rooms::validatePortal(portal, data_->rooms.definitions.size()));
-  if (rc != ARX_OK) return rc;
-  if (!level_validation::validPortalBounds(portal)) return ARX_LEVEL_PORTAL_OUT_OF_BOUNDS;
-  if (!nameAvailable<Portal>(data_->rooms.portals, portal.name, data_->rooms.portals.size()))
-    return ARX_LEVEL_DUPLICATE_PORTAL_NAME;
-  if (!canAppendIndex<PortalIndex>(data_->rooms.portals.size())) return ARX_LEVEL_TOO_MANY_PORTALS;
-  const PortalIndex index = static_cast<PortalIndex>(data_->rooms.portals.size());
-  data_->rooms.portals.push_back(std::move(portal));
-  data_->rooms.distances.clear();
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addPortal(const ArxLevelPortal& value, PortalIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidPortalIndex;
+    Portal portal;
+    if (!internalPortal(value, portal)) return ARX_INVALID_DATA_POINTER;
+    if (!validPortalShape(value.shape)) return ARX_LEVEL_BAD_PORTAL_SHAPE;
+    ArxReturnCode rc = level_validation::roomsError(rooms::validatePortalCount(data_->rooms.portals.size() + 1));
+    if (rc != ARX_OK) return rc;
+    rooms::repairPortalName(data_->rooms, portal);
+    rc = level_validation::roomsError(rooms::validatePortal(portal, data_->rooms.definitions.size()));
+    if (rc != ARX_OK) return rc;
+    if (!level_validation::validPortalBounds(portal)) return ARX_LEVEL_PORTAL_OUT_OF_BOUNDS;
+    out_index = rooms::addPortal(data_->rooms, std::move(portal));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removePortal(PortalIndex index) {
-  if (!validIndex(index, data_->rooms.portals.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->rooms.portals.erase(data_->rooms.portals.begin() + static_cast<std::ptrdiff_t>(index));
-  data_->rooms.distances.clear();
-  return ARX_OK;
+ArxReturnCode Level::removePortal(PortalIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->rooms.portals.size())) return ARX_INDEX_OUT_OF_RANGE;
+    rooms::removePortal(data_->rooms, index);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setRoomDistance(const ArxLevelRoomDistance& value) {
-  RoomIndex low_room = 0;
-  RoomIndex high_room = 0;
-  RoomDistance distance;
-  ArxReturnCode rc = internalRoomDistance(value, data_->rooms, low_room, high_room, distance);
-  if (rc != ARX_OK) return rc;
+ArxReturnCode Level::setRoomDistance(const ArxLevelRoomDistance& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    RoomIndex low_room = 0;
+    RoomIndex high_room = 0;
+    RoomDistance distance;
+    ArxReturnCode rc = internalRoomDistance(value, data_->rooms, low_room, high_room, distance);
+    if (rc != ARX_OK) return rc;
 
-  const std::size_t expected = rooms::roomDistancePairCount(data_->rooms.definitions.size());
-  if (!data_->rooms.distances.empty() && data_->rooms.distances.size() != expected)
-    return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
-  if (data_->rooms.distances.empty())
-    rooms::initializeRoomDistances(data_->rooms.distances, data_->rooms.definitions.size());
-  data_->rooms.distances[rooms::roomDistancePairIndex(low_room, high_room)] = distance;
-  level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
-  return ARX_OK;
+    rc = level_validation::roomsError(rooms::validateRoomDistances(data_->rooms));
+    if (rc != ARX_OK) return rc;
+    rc = level_validation::roomsError(rooms::validateRoomDistance(distance, data_->rooms, low_room, high_room));
+    if (rc != ARX_OK) return rc;
+    rooms::setRoomDistance(data_->rooms, low_room, high_room, distance);
+    if (rc != ARX_OK) return rc;
+    level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::replaceRoomDistances(const ArxLevelRoomDistance* distances, std::size_t count) {
-  const std::size_t expected = rooms::roomDistancePairCount(data_->rooms.definitions.size());
-  if (count != 0 && distances == nullptr) return ARX_INVALID_DATA_POINTER;
-  if (count != 0 && count != expected) return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
-  std::vector<RoomDistance> next;
-  if (count != 0) {
-    next.resize(expected);
-    std::vector<std::uint8_t> seen(expected, 0);
-    for (std::size_t i = 0; i < count; ++i) {
-      RoomIndex low_room = 0;
-      RoomIndex high_room = 0;
-      RoomDistance distance;
-      ArxReturnCode rc = internalRoomDistance(distances[i], data_->rooms, low_room, high_room, distance);
-      if (rc != ARX_OK) return rc;
-      const std::size_t index = rooms::roomDistancePairIndex(low_room, high_room);
-      if (seen[index] != 0) return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
-      seen[index] = 1;
-      next[index] = distance;
+ArxReturnCode Level::replaceRoomDistances(const ArxLevelRoomDistance* distances, std::size_t count) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    const std::size_t expected = rooms::roomDistancePairCount(data_->rooms.definitions.size());
+    if (count != 0 && distances == nullptr) return ARX_INVALID_DATA_POINTER;
+    if (count != 0 && count != expected) return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
+    std::vector<RoomDistance> next;
+    if (count != 0) {
+      next.resize(expected);
+      std::vector<std::uint8_t> seen(expected, 0);
+      for (std::size_t i = 0; i < count; ++i) {
+        RoomIndex low_room = 0;
+        RoomIndex high_room = 0;
+        RoomDistance distance;
+        ArxReturnCode rc = internalRoomDistance(distances[i], data_->rooms, low_room, high_room, distance);
+        if (rc != ARX_OK) return rc;
+        const std::size_t index = rooms::roomDistancePairIndex(low_room, high_room);
+        if (seen[index] != 0) return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
+        seen[index] = 1;
+        next[index] = distance;
+      }
     }
-  }
-  ArxReturnCode rc = level_validation::roomsError(rooms::validateRoomDistances(next, data_->rooms));
-  if (rc != ARX_OK) return rc;
-  data_->rooms.distances = std::move(next);
-  level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
-  return ARX_OK;
-}
-
-void Level::clearRoomDistances() noexcept { data_->rooms.distances.clear(); }
-
-ArxReturnCode Level::setAnchor(AnchorIndex index, const ArxLevelAnchor& value) {
-  if (!validIndex(index, data_->navigation.anchors.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Anchor anchor;
-  if (!internalAnchor(value, anchor)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::navigationError(navigation::validateAnchor(anchor));
-  if (rc != ARX_OK) return rc;
-  if (!anchorNameAvailable(data_->navigation, anchor.name, index)) return ARX_LEVEL_DUPLICATE_ANCHOR_NAME;
-  data_->navigation.anchors[static_cast<std::size_t>(index)] = std::move(anchor);
-  level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
-  return ARX_OK;
-}
-
-ArxReturnCode Level::addAnchor(const ArxLevelAnchor& value, AnchorIndex& out_index) {
-  out_index = kInvalidAnchorIndex;
-  Anchor anchor;
-  if (!internalAnchor(value, anchor)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::navigationError(navigation::validateAnchor(anchor));
-  if (rc != ARX_OK) return rc;
-  if (!anchorNameAvailable(data_->navigation, anchor.name)) return ARX_LEVEL_DUPLICATE_ANCHOR_NAME;
-  if (!canAppendIndex<AnchorIndex>(data_->navigation.anchors.size())) return ARX_LEVEL_TOO_MANY_ANCHORS;
-  const AnchorIndex index = static_cast<AnchorIndex>(data_->navigation.anchors.size());
-  data_->navigation.anchors.push_back(std::move(anchor));
-  level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
-  out_index = index;
-  return ARX_OK;
-}
-
-ArxReturnCode Level::removeAnchor(AnchorIndex index) {
-  if (!validIndex(index, data_->navigation.anchors.size())) return ARX_INDEX_OUT_OF_RANGE;
-  const bool anchors_stay_valid = level_validation::has(data_->validation, LevelValidation::kAnchors);
-  data_->navigation.anchors.erase(data_->navigation.anchors.begin() + static_cast<std::ptrdiff_t>(index));
-  remapAnchorsAfterRemoval(data_->navigation, index);
-  level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
-  if (anchors_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kAnchors);
-  return ARX_OK;
-}
-
-ArxReturnCode Level::setAnchorConnection(AnchorConnectionIndex index, ArxLevelAnchorConnection value) {
-  if (!validIndex(index, data_->navigation.connections.size())) return ARX_INDEX_OUT_OF_RANGE;
-  const AnchorConnection connection = internalConnection(value);
-  std::vector<AnchorConnection> next = data_->navigation.connections;
-  next[static_cast<std::size_t>(index)] = connection;
-  ArxReturnCode rc =
-      level_validation::navigationError(navigation::validateConnections(data_->navigation.anchors, next));
-  if (rc != ARX_OK) return rc;
-  data_->navigation.connections = std::move(next);
-  level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
-  return ARX_OK;
-}
-
-ArxReturnCode Level::addAnchorConnection(ArxLevelAnchorConnection value, AnchorConnectionIndex& out_index) {
-  out_index = kInvalidAnchorConnectionIndex;
-  const AnchorConnection connection = internalConnection(value);
-  ArxReturnCode rc =
-      level_validation::navigationError(navigation::validateConnection(connection, data_->navigation.anchors.size()));
-  if (rc != ARX_OK) return rc;
-  if (!canAppendIndex<AnchorConnectionIndex>(data_->navigation.connections.size()))
-    return ARX_LEVEL_TOO_MANY_ANCHOR_CONNECTIONS;
-  const std::size_t index = sortedAnchorConnectionIndex(data_->navigation.connections, connection);
-  if (index != data_->navigation.connections.size() &&
-      sameAnchorConnection(data_->navigation.connections[index], connection)) {
-    out_index = static_cast<AnchorConnectionIndex>(index);
+    ArxReturnCode rc = level_validation::roomsError(rooms::validateRoomDistances(next, data_->rooms));
+    if (rc != ARX_OK) return rc;
+    rooms::replaceRoomDistances(data_->rooms, std::move(next));
+    level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
     return ARX_OK;
-  }
-  data_->navigation.connections.insert(data_->navigation.connections.begin() + static_cast<std::ptrdiff_t>(index),
-                                       connection);
-  out_index = static_cast<AnchorConnectionIndex>(index);
-  return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removeAnchorConnection(AnchorConnectionIndex index) {
-  if (!validIndex(index, data_->navigation.connections.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->navigation.connections.erase(data_->navigation.connections.begin() + static_cast<std::ptrdiff_t>(index));
-  return ARX_OK;
-}
+void Level::clearRoomDistances() noexcept { rooms::clearRoomDistances(data_->rooms); }
 
-ArxReturnCode Level::replaceAnchors(const ArxLevelAnchorsInput& input) {
-  if ((input.anchor_count != 0 && input.anchors == nullptr) ||
-      (input.connection_count != 0 && input.connections == nullptr))
-    return ARX_INVALID_DATA_POINTER;
-  if (input.anchor_count > static_cast<std::size_t>(kInvalidAnchorIndex)) return ARX_LEVEL_TOO_MANY_ANCHORS;
-  std::vector<Anchor> anchors(input.anchor_count);
-  for (std::size_t i = 0; i < input.anchor_count; ++i) {
-    if (!internalAnchor(input.anchors[i], anchors[i])) return ARX_INVALID_DATA_POINTER;
-  }
-  std::vector<AnchorConnection> connections;
-  connections.reserve(input.connection_count);
-  for (std::size_t i = 0; i < input.connection_count; ++i)
-    connections.push_back(internalConnection(input.connections[i]));
-  ArxReturnCode rc = level_validation::navigationError(navigation::validateAnchorDefinitions(anchors));
-  if (rc != ARX_OK) return rc;
-  rc = level_validation::navigationError(navigation::validateConnections(anchors, connections));
-  if (rc != ARX_OK) return rc;
-  data_->navigation.anchors = std::move(anchors);
-  data_->navigation.connections = std::move(connections);
-  level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
-  level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
-  return ARX_OK;
-}
-
-void Level::clearAnchors() noexcept {
-  data_->navigation.anchors.clear();
-  data_->navigation.connections.clear();
-}
-
-ArxReturnCode Level::setNavSurface(const ArxLevelNavSurfaceInput& input) {
-  if ((input.vertex_count != 0 && input.vertices == nullptr) ||
-      (input.triangle_count != 0 && input.triangles == nullptr))
-    return ARX_INVALID_DATA_POINTER;
-  NavSurface surface;
-  surface.vertices.reserve(input.vertex_count);
-  for (std::size_t i = 0; i < input.vertex_count; ++i) surface.vertices.push_back(internalVertex(input.vertices[i]));
-  surface.triangles.resize(input.triangle_count);
-  for (std::size_t i = 0; i < input.triangle_count; ++i) {
-    std::copy(std::begin(input.triangles[i].vertices),
-              std::end(input.triangles[i].vertices),
-              surface.triangles[i].vertices.begin());
-  }
-  ArxReturnCode rc = level_validation::navigationError(navigation::validateSurface(surface));
-  if (rc != ARX_OK) return rc;
-  data_->navigation.surface = std::move(surface);
-  level_validation::markValid(data_->validation, LevelValidation::kNavSurface);
-  return ARX_OK;
-}
-
-void Level::clearNavSurface() noexcept { data_->navigation.surface.reset(); }
-
-ArxReturnCode Level::setLight(LightIndex index, const ArxLevelLight& value) {
-  if (!validIndex(index, data_->lighting.lights.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Light light;
-  if (!internalLight(value, light)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::lightingError(lights::validateLightSource(light));
-  if (rc != ARX_OK) return rc;
-  if (!nameAvailable<Light>(data_->lighting.lights, light.name, static_cast<std::size_t>(index)))
-    return ARX_LEVEL_DUPLICATE_LIGHT_NAME;
-  data_->lighting.lights[static_cast<std::size_t>(index)] = std::move(light);
-  return ARX_OK;
-}
-
-ArxReturnCode Level::addLight(const ArxLevelLight& value, LightIndex& out_index) {
-  out_index = kInvalidLightIndex;
-  Light light;
-  if (!internalLight(value, light)) return ARX_INVALID_DATA_POINTER;
-  ArxReturnCode rc = level_validation::lightingError(lights::validateLightSource(light));
-  if (rc != ARX_OK) return rc;
-  if (!nameAvailable<Light>(data_->lighting.lights, light.name, data_->lighting.lights.size()))
-    return ARX_LEVEL_DUPLICATE_LIGHT_NAME;
-  if (!canAppendIndex<LightIndex>(data_->lighting.lights.size())) return ARX_LEVEL_TOO_MANY_LIGHTS;
-  const LightIndex index = static_cast<LightIndex>(data_->lighting.lights.size());
-  data_->lighting.lights.push_back(std::move(light));
-  out_index = index;
-  return ARX_OK;
-}
-
-ArxReturnCode Level::removeLight(LightIndex index) {
-  if (!validIndex(index, data_->lighting.lights.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->lighting.lights.erase(data_->lighting.lights.begin() + static_cast<std::ptrdiff_t>(index));
-  return ARX_OK;
-}
-
-ArxReturnCode Level::setPlayerSpawn(const ArxLevelPlayerSpawn& value) {
-  if (value.is_usable == 0) {
-    clearPlayerSpawn();
+ArxReturnCode Level::setAnchor(AnchorIndex index, const ArxLevelAnchor& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->navigation.anchors.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Anchor anchor;
+    if (!internalAnchor(value, anchor)) return ARX_INVALID_DATA_POINTER;
+    navigation::repairAnchorName(data_->navigation, anchor, index);
+    ArxReturnCode rc = level_validation::navigationError(navigation::validateAnchor(anchor));
+    if (rc != ARX_OK) return rc;
+    navigation::setAnchor(data_->navigation, index, std::move(anchor));
+    level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
     return ARX_OK;
-  }
-  const PlayerSpawn spawn = {.position = value.position, .rotation = value.rotation};
-  ArxReturnCode rc = level_validation::sceneError(scene::setPlayerSpawn(data_->scene, spawn));
-  if (rc == ARX_OK) level_validation::markValid(data_->validation, LevelValidation::kPlayerSpawn);
-  return rc;
+  });
+}
+
+ArxReturnCode Level::addAnchor(const ArxLevelAnchor& value, AnchorIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidAnchorIndex;
+    Anchor anchor;
+    if (!internalAnchor(value, anchor)) return ARX_INVALID_DATA_POINTER;
+    ArxReturnCode rc =
+        level_validation::navigationError(navigation::validateAnchorCount(data_->navigation.anchors.size() + 1));
+    if (rc != ARX_OK) return rc;
+    navigation::repairAnchorName(data_->navigation, anchor);
+    rc = level_validation::navigationError(navigation::validateAnchor(anchor));
+    if (rc != ARX_OK) return rc;
+    out_index = navigation::addAnchor(data_->navigation, std::move(anchor));
+    level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::removeAnchor(AnchorIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->navigation.anchors.size())) return ARX_INDEX_OUT_OF_RANGE;
+    const bool anchors_stay_valid = level_validation::has(data_->validation, LevelValidation::kAnchors);
+    navigation::removeAnchor(data_->navigation, index);
+    level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
+    if (anchors_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kAnchors);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::setAnchorConnection(AnchorConnectionIndex index, ArxLevelAnchorConnection value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->navigation.connections.size())) return ARX_INDEX_OUT_OF_RANGE;
+    const AnchorConnection connection = internalConnection(value);
+    ArxReturnCode rc = level_validation::navigationError(
+        navigation::validateConnectionPlacement(data_->navigation, index, connection));
+    if (rc != ARX_OK) return rc;
+    navigation::setConnection(data_->navigation, index, connection);
+    level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::addAnchorConnection(ArxLevelAnchorConnection value, AnchorConnectionIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidAnchorConnectionIndex;
+    const AnchorConnection connection = internalConnection(value);
+    ArxReturnCode rc = level_validation::navigationError(
+        navigation::validateConnectionInsertion(data_->navigation, connection, out_index));
+    if (rc != ARX_OK) return rc;
+    navigation::insertConnection(data_->navigation, out_index, connection);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::removeAnchorConnection(AnchorConnectionIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->navigation.connections.size())) return ARX_INDEX_OUT_OF_RANGE;
+    navigation::removeConnection(data_->navigation, index);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::replaceAnchors(const ArxLevelAnchorsInput& input) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if ((input.anchor_count != 0 && input.anchors == nullptr) ||
+        (input.connection_count != 0 && input.connections == nullptr))
+      return ARX_INVALID_DATA_POINTER;
+    if (input.anchor_count > static_cast<std::size_t>(kInvalidAnchorIndex)) return ARX_LEVEL_TOO_MANY_ANCHORS;
+    std::vector<Anchor> anchors(input.anchor_count);
+    for (std::size_t i = 0; i < input.anchor_count; ++i) {
+      if (!internalAnchor(input.anchors[i], anchors[i])) return ARX_INVALID_DATA_POINTER;
+    }
+    std::vector<AnchorConnection> connections;
+    connections.reserve(input.connection_count);
+    for (std::size_t i = 0; i < input.connection_count; ++i)
+      connections.push_back(internalConnection(input.connections[i]));
+    navigation::repairAnchorNames(anchors);
+    ArxReturnCode rc = level_validation::navigationError(navigation::validateAnchorDefinitions(anchors));
+    if (rc != ARX_OK) return rc;
+    rc = level_validation::navigationError(navigation::validateConnections(anchors, connections));
+    if (rc != ARX_OK) return rc;
+    navigation::replaceAnchors(data_->navigation, std::move(anchors), std::move(connections));
+    level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
+    level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
+    return ARX_OK;
+  });
+}
+
+void Level::clearAnchors() noexcept { navigation::clearAnchors(data_->navigation); }
+
+ArxReturnCode Level::setNavSurface(const ArxLevelNavSurfaceInput& input) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if ((input.vertex_count != 0 && input.vertices == nullptr) ||
+        (input.triangle_count != 0 && input.triangles == nullptr))
+      return ARX_INVALID_DATA_POINTER;
+    NavSurface surface;
+    surface.vertices.reserve(input.vertex_count);
+    for (std::size_t i = 0; i < input.vertex_count; ++i) surface.vertices.push_back(internalVertex(input.vertices[i]));
+    surface.triangles.resize(input.triangle_count);
+    for (std::size_t i = 0; i < input.triangle_count; ++i) {
+      std::copy(std::begin(input.triangles[i].vertices),
+                std::end(input.triangles[i].vertices),
+                surface.triangles[i].vertices.begin());
+    }
+    ArxReturnCode rc = level_validation::navigationError(navigation::validateSurface(surface));
+    if (rc != ARX_OK) return rc;
+    navigation::setSurface(data_->navigation, std::move(surface));
+    level_validation::markValid(data_->validation, LevelValidation::kNavSurface);
+    return ARX_OK;
+  });
+}
+
+void Level::clearNavSurface() noexcept { navigation::clearSurface(data_->navigation); }
+
+ArxReturnCode Level::setLight(LightIndex index, const ArxLevelLight& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->lighting.lights.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Light light;
+    if (!internalLight(value, light)) return ARX_INVALID_DATA_POINTER;
+    lights::repairLightName(data_->lighting, light, index);
+    ArxReturnCode rc = level_validation::lightingError(lights::validateLight(light));
+    if (rc != ARX_OK) return rc;
+    lights::setLight(data_->lighting, index, std::move(light));
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::addLight(const ArxLevelLight& value, LightIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidLightIndex;
+    Light light;
+    if (!internalLight(value, light)) return ARX_INVALID_DATA_POINTER;
+    ArxReturnCode rc = level_validation::lightingError(lights::validateLightCount(data_->lighting.lights.size() + 1));
+    if (rc != ARX_OK) return rc;
+    lights::repairLightName(data_->lighting, light);
+    rc = level_validation::lightingError(lights::validateLight(light));
+    if (rc != ARX_OK) return rc;
+    out_index = lights::addLight(data_->lighting, std::move(light));
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::removeLight(LightIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->lighting.lights.size())) return ARX_INDEX_OUT_OF_RANGE;
+    lights::removeLight(data_->lighting, index);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::setPlayerSpawn(const ArxLevelPlayerSpawn& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (value.is_usable == 0) {
+      clearPlayerSpawn();
+      return ARX_OK;
+    }
+    PlayerSpawn spawn = {.position = value.position, .rotation = value.rotation};
+    if (!math::normalizeRotation(spawn.rotation)) return ARX_LEVEL_BAD_PLAYER_SPAWN;
+    ArxReturnCode rc = level_validation::sceneError(scene::validatePlayerSpawn(spawn));
+    if (rc != ARX_OK) return rc;
+    scene::setPlayerSpawn(data_->scene, spawn);
+    level_validation::markValid(data_->validation, LevelValidation::kPlayerSpawn);
+    return ARX_OK;
+  });
 }
 
 void Level::clearPlayerSpawn() noexcept {
@@ -1510,162 +1782,156 @@ void Level::clearPlayerSpawn() noexcept {
   level_validation::markValid(data_->validation, LevelValidation::kPlayerSpawn);
 }
 
-ArxReturnCode Level::setEntity(EntityIndex index, const ArxLevelEntity& value) {
-  if (!validIndex(index, data_->scene.entities.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Entity entity;
-  if (!internalEntity(value, entity)) return ARX_INVALID_DATA_POINTER;
-  if (!scene::normalizeRotation(entity.rotation)) return ARX_LEVEL_BAD_ENTITY_ROTATION;
-  ArxReturnCode rc = level_validation::sceneError(scene::validateEntity(entity));
-  if (rc != ARX_OK) return rc;
-  scene::makeEntityNameUnique(entity, data_->scene.entities, static_cast<std::size_t>(index));
-  data_->scene.entities[static_cast<std::size_t>(index)] = std::move(entity);
-  return ARX_OK;
+ArxReturnCode Level::setEntity(EntityIndex index, const ArxLevelEntity& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.entities.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Entity entity;
+    if (!internalEntity(value, entity)) return ARX_INVALID_DATA_POINTER;
+    if (!math::normalizeRotation(entity.rotation)) return ARX_LEVEL_BAD_ENTITY_ROTATION;
+    scene::repairEntityName(data_->scene, entity, index);
+    ArxReturnCode rc = level_validation::sceneError(scene::validateEntity(entity));
+    if (rc != ARX_OK) return rc;
+    scene::setEntity(data_->scene, index, std::move(entity));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addEntity(const ArxLevelEntity& value, EntityIndex& out_index) {
-  out_index = kInvalidEntityIndex;
-  Entity entity;
-  if (!internalEntity(value, entity)) return ARX_INVALID_DATA_POINTER;
-  if (!scene::normalizeRotation(entity.rotation)) return ARX_LEVEL_BAD_ENTITY_ROTATION;
-  ArxReturnCode rc = level_validation::sceneError(scene::validateEntity(entity));
-  if (rc != ARX_OK) return rc;
-  if (!canAppendIndex<EntityIndex>(data_->scene.entities.size())) return ARX_LEVEL_TOO_MANY_ENTITIES;
-  scene::makeEntityNameUnique(entity, data_->scene.entities);
-  const EntityIndex index = static_cast<EntityIndex>(data_->scene.entities.size());
-  data_->scene.entities.push_back(std::move(entity));
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addEntity(const ArxLevelEntity& value, EntityIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidEntityIndex;
+    Entity entity;
+    if (!internalEntity(value, entity)) return ARX_INVALID_DATA_POINTER;
+    if (!math::normalizeRotation(entity.rotation)) return ARX_LEVEL_BAD_ENTITY_ROTATION;
+    ArxReturnCode rc = level_validation::sceneError(scene::validateEntityCount(data_->scene.entities.size() + 1));
+    if (rc != ARX_OK) return rc;
+    scene::repairEntityName(data_->scene, entity);
+    rc = level_validation::sceneError(scene::validateEntity(entity));
+    if (rc != ARX_OK) return rc;
+    out_index = scene::addEntity(data_->scene, std::move(entity));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removeEntity(EntityIndex index) {
-  if (!validIndex(index, data_->scene.entities.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->scene.entities.erase(data_->scene.entities.begin() + static_cast<std::ptrdiff_t>(index));
-  return ARX_OK;
+ArxReturnCode Level::removeEntity(EntityIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.entities.size())) return ARX_INDEX_OUT_OF_RANGE;
+    scene::removeEntity(data_->scene, index);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setFog(FogIndex index, const ArxLevelFog& value) {
-  if (!validIndex(index, data_->scene.fogs.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Fog fog;
-  if (!internalFog(value, fog)) return ARX_INVALID_DATA_POINTER;
-  if (!scene::normalizeRotation(fog.rotation)) return ARX_LEVEL_BAD_FOG_ROTATION;
-  ArxReturnCode rc = level_validation::sceneError(scene::validateFog(fog));
-  if (rc != ARX_OK) return rc;
-  if (!fogNameAvailable(data_->scene, fog.name, index)) return ARX_LEVEL_DUPLICATE_FOG_NAME;
-  data_->scene.fogs[static_cast<std::size_t>(index)] = std::move(fog);
-  return ARX_OK;
+ArxReturnCode Level::setFog(FogIndex index, const ArxLevelFog& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.fogs.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Fog fog;
+    if (!internalFog(value, fog)) return ARX_INVALID_DATA_POINTER;
+    if (!math::normalizeRotation(fog.rotation)) return ARX_LEVEL_BAD_FOG_ROTATION;
+    scene::repairFogName(data_->scene, fog, index);
+    ArxReturnCode rc = level_validation::sceneError(scene::validateFog(fog));
+    if (rc != ARX_OK) return rc;
+    scene::setFog(data_->scene, index, std::move(fog));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addFog(const ArxLevelFog& value, FogIndex& out_index) {
-  out_index = kInvalidFogIndex;
-  Fog fog;
-  if (!internalFog(value, fog)) return ARX_INVALID_DATA_POINTER;
-  if (!scene::normalizeRotation(fog.rotation)) return ARX_LEVEL_BAD_FOG_ROTATION;
-  ArxReturnCode rc = level_validation::sceneError(scene::validateFog(fog));
-  if (rc != ARX_OK) return rc;
-  if (!fogNameAvailable(data_->scene, fog.name)) return ARX_LEVEL_DUPLICATE_FOG_NAME;
-  if (!canAppendIndex<FogIndex>(data_->scene.fogs.size())) return ARX_LEVEL_TOO_MANY_FOGS;
-  const FogIndex index = static_cast<FogIndex>(data_->scene.fogs.size());
-  data_->scene.fogs.push_back(std::move(fog));
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addFog(const ArxLevelFog& value, FogIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidFogIndex;
+    Fog fog;
+    if (!internalFog(value, fog)) return ARX_INVALID_DATA_POINTER;
+    if (!math::normalizeRotation(fog.rotation)) return ARX_LEVEL_BAD_FOG_ROTATION;
+    ArxReturnCode rc = level_validation::sceneError(scene::validateFogCount(data_->scene.fogs.size() + 1));
+    if (rc != ARX_OK) return rc;
+    scene::repairFogName(data_->scene, fog);
+    rc = level_validation::sceneError(scene::validateFog(fog));
+    if (rc != ARX_OK) return rc;
+    out_index = scene::addFog(data_->scene, std::move(fog));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removeFog(FogIndex index) {
-  if (!validIndex(index, data_->scene.fogs.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->scene.fogs.erase(data_->scene.fogs.begin() + static_cast<std::ptrdiff_t>(index));
-  return ARX_OK;
+ArxReturnCode Level::removeFog(FogIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.fogs.size())) return ARX_INDEX_OUT_OF_RANGE;
+    scene::removeFog(data_->scene, index);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setZone(ZoneIndex index, const ArxLevelZoneInput& value) {
-  if (!validIndex(index, data_->scene.zones.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Zone zone;
-  if (!internalZone(value, zone)) return ARX_INVALID_DATA_POINTER;
-  if (!validZoneHeightMode(value.value.height_mode)) return ARX_LEVEL_BAD_ZONE_HEIGHT_MODE;
-  ArxReturnCode rc = level_validation::sceneError(scene::validateZone(zone));
-  if (rc != ARX_OK) return rc;
-  if (!nameAvailable<Zone>(data_->scene.zones, zone.name, static_cast<std::size_t>(index), true))
-    return ARX_LEVEL_DUPLICATE_ZONE_NAME;
-  data_->scene.zones[static_cast<std::size_t>(index)] = std::move(zone);
-  return ARX_OK;
+ArxReturnCode Level::setZone(ZoneIndex index, const ArxLevelZoneInput& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.zones.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Zone zone;
+    if (!internalZone(value, zone)) return ARX_INVALID_DATA_POINTER;
+    if (!validZoneHeightMode(value.value.height_mode)) return ARX_LEVEL_BAD_ZONE_HEIGHT_MODE;
+    scene::repairZoneName(data_->scene, zone, index);
+    ArxReturnCode rc = level_validation::sceneError(scene::validateZone(zone));
+    if (rc != ARX_OK) return rc;
+    scene::setZone(data_->scene, index, std::move(zone));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addZone(const ArxLevelZoneInput& value, ZoneIndex& out_index) {
-  out_index = kInvalidZoneIndex;
-  Zone zone;
-  if (!internalZone(value, zone)) return ARX_INVALID_DATA_POINTER;
-  if (!validZoneHeightMode(value.value.height_mode)) return ARX_LEVEL_BAD_ZONE_HEIGHT_MODE;
-  ArxReturnCode rc = level_validation::sceneError(scene::validateZone(zone));
-  if (rc != ARX_OK) return rc;
-  if (!nameAvailable<Zone>(data_->scene.zones, zone.name, data_->scene.zones.size(), true))
-    return ARX_LEVEL_DUPLICATE_ZONE_NAME;
-  if (!canAppendIndex<ZoneIndex>(data_->scene.zones.size())) return ARX_LEVEL_TOO_MANY_ZONES;
-  const ZoneIndex index = static_cast<ZoneIndex>(data_->scene.zones.size());
-  data_->scene.zones.push_back(std::move(zone));
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addZone(const ArxLevelZoneInput& value, ZoneIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidZoneIndex;
+    Zone zone;
+    if (!internalZone(value, zone)) return ARX_INVALID_DATA_POINTER;
+    if (!validZoneHeightMode(value.value.height_mode)) return ARX_LEVEL_BAD_ZONE_HEIGHT_MODE;
+    ArxReturnCode rc = level_validation::sceneError(scene::validateZoneCount(data_->scene.zones.size() + 1));
+    if (rc != ARX_OK) return rc;
+    scene::repairZoneName(data_->scene, zone);
+    rc = level_validation::sceneError(scene::validateZone(zone));
+    if (rc != ARX_OK) return rc;
+    out_index = scene::addZone(data_->scene, std::move(zone));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removeZone(ZoneIndex index) {
-  if (!validIndex(index, data_->scene.zones.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->scene.zones.erase(data_->scene.zones.begin() + static_cast<std::ptrdiff_t>(index));
-  return ARX_OK;
+ArxReturnCode Level::removeZone(ZoneIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.zones.size())) return ARX_INDEX_OUT_OF_RANGE;
+    scene::removeZone(data_->scene, index);
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::setPath(PathIndex index, const ArxLevelPathInput& value) {
-  if (!validIndex(index, data_->scene.paths.size())) return ARX_INDEX_OUT_OF_RANGE;
-  Path path;
-  if (!internalPath(value, path)) return ARX_INVALID_DATA_POINTER;
-  if (!validPathNodeTypes(value)) return ARX_LEVEL_BAD_PATH_NODE_TYPE;
-  ArxReturnCode rc = level_validation::sceneError(scene::validatePath(path));
-  if (rc != ARX_OK) return rc;
-  if (!pathNameAvailable(data_->scene, path.name, index)) return ARX_LEVEL_DUPLICATE_PATH_NAME;
-  data_->scene.paths[static_cast<std::size_t>(index)] = std::move(path);
-  return ARX_OK;
+ArxReturnCode Level::setPath(PathIndex index, const ArxLevelPathInput& value) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.paths.size())) return ARX_INDEX_OUT_OF_RANGE;
+    Path path;
+    if (!internalPath(value, path)) return ARX_INVALID_DATA_POINTER;
+    if (!validPathNodeTypes(value)) return ARX_LEVEL_BAD_PATH_NODE_TYPE;
+    scene::repairPathName(data_->scene, path, index);
+    ArxReturnCode rc = level_validation::sceneError(scene::validatePath(path));
+    if (rc != ARX_OK) return rc;
+    scene::setPath(data_->scene, index, std::move(path));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::addPath(const ArxLevelPathInput& value, PathIndex& out_index) {
-  out_index = kInvalidPathIndex;
-  Path path;
-  if (!internalPath(value, path)) return ARX_INVALID_DATA_POINTER;
-  if (!validPathNodeTypes(value)) return ARX_LEVEL_BAD_PATH_NODE_TYPE;
-  ArxReturnCode rc = level_validation::sceneError(scene::validatePath(path));
-  if (rc != ARX_OK) return rc;
-  if (!pathNameAvailable(data_->scene, path.name)) return ARX_LEVEL_DUPLICATE_PATH_NAME;
-  if (!canAppendIndex<PathIndex>(data_->scene.paths.size())) return ARX_LEVEL_TOO_MANY_PATHS;
-  const PathIndex index = static_cast<PathIndex>(data_->scene.paths.size());
-  data_->scene.paths.push_back(std::move(path));
-  out_index = index;
-  return ARX_OK;
+ArxReturnCode Level::addPath(const ArxLevelPathInput& value, PathIndex& out_index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    out_index = kInvalidPathIndex;
+    Path path;
+    if (!internalPath(value, path)) return ARX_INVALID_DATA_POINTER;
+    if (!validPathNodeTypes(value)) return ARX_LEVEL_BAD_PATH_NODE_TYPE;
+    ArxReturnCode rc = level_validation::sceneError(scene::validatePathCount(data_->scene.paths.size() + 1));
+    if (rc != ARX_OK) return rc;
+    scene::repairPathName(data_->scene, path);
+    rc = level_validation::sceneError(scene::validatePath(path));
+    if (rc != ARX_OK) return rc;
+    out_index = scene::addPath(data_->scene, std::move(path));
+    return ARX_OK;
+  });
 }
 
-ArxReturnCode Level::removePath(PathIndex index) {
-  if (!validIndex(index, data_->scene.paths.size())) return ARX_INDEX_OUT_OF_RANGE;
-  data_->scene.paths.erase(data_->scene.paths.begin() + static_cast<std::ptrdiff_t>(index));
-  return ARX_OK;
-}
-
-ArxReturnCode validateLevelModules(const LevelModules& modules, ArxAabb* out_bounds, ArxAabb* out_referenced_bounds) {
-  LevelValidationState state;
-  ArxReturnCode rc = validateLevelModules(modules, state);
-  if (rc != ARX_OK) return rc;
-  const auto& bounds = state.derived.bounds;
-  if (out_bounds) {
-    if (!bounds.has_value()) return ARX_INTERNAL_ERROR;
-    *out_bounds = *bounds;
-  }
-  const auto& referenced_bounds = state.derived.referenced_bounds;
-  if (out_referenced_bounds) {
-    if (!referenced_bounds.has_value()) return ARX_INTERNAL_ERROR;
-    *out_referenced_bounds = *referenced_bounds;
-  }
-  return ARX_OK;
-}
-
-ArxReturnCode validateLevelModules(const LevelModules& modules, LevelValidationState& out_state) {
-  LevelValidationState state;
-  ArxReturnCode rc = level_validation::all(modules, state);
-  if (rc == ARX_OK) out_state = state;
-  return rc;
+ArxReturnCode Level::removePath(PathIndex index) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!validIndex(index, data_->scene.paths.size())) return ARX_INDEX_OUT_OF_RANGE;
+    scene::removePath(data_->scene, index);
+    return ARX_OK;
+  });
 }
 
 }  // namespace pistoris

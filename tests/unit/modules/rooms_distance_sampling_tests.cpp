@@ -3,13 +3,14 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
 
 #include "modules/geometry.h"
 #include "modules/rooms.h"
 #include "modules/rooms/internal.h"
 
+#include <cstdint>
 #include <vector>
 
 using namespace pistoris;
@@ -50,7 +51,7 @@ void addHorizontalBlocker(GeometryData& geometry, RoomsData& rooms, RoomIndex ro
 }  // namespace
 
 TEST_SUITE("rooms::distance_sampling") {
-  TEST_CASE("Selects room face ids and skips ignored flags") {
+  TEST_CASE("Indexes room face ids and skips ignored flags") {
     GeometryData geometry;
     RoomsData rooms;
     rooms.definitions = {{"room_1"}, {"room_2"}};
@@ -60,12 +61,17 @@ TEST_SUITE("rooms::distance_sampling") {
     geometry.faces.push_back(makeFace(0, 3, 4, kFaceBitTrans));
     rooms.face_rooms = {0, 1, 0};
 
-    CHECK(rooms::faceIndicesForRoom(rooms, geometry, 0) == std::vector<FaceIndex>{0});
-    CHECK(rooms::faceIndicesForRoom(rooms, geometry, 0, 0) == std::vector<FaceIndex>{0, 2});
-    CHECK(rooms::faceIndicesForRoom(rooms, geometry, 1) == std::vector<FaceIndex>{1});
+    rooms::RoomGeometryIndex index(rooms, geometry);
+    REQUIRE(index.roomFaces(0).size() == 1);
+    CHECK(index.roomFaces(0)[0] == 0);
+    REQUIRE(index.roomFaces(1).size() == 1);
+    CHECK(index.roomFaces(1)[0] == 1);
 
     rooms.face_rooms = {0};
-    CHECK(rooms::faceIndicesForRoom(rooms, geometry, 0) == std::vector<FaceIndex>{0});
+    rooms::RoomGeometryIndex incomplete_index(rooms, geometry);
+    REQUIRE(incomplete_index.roomFaces(0).size() == 1);
+    CHECK(incomplete_index.roomFaces(0)[0] == 0);
+    CHECK(incomplete_index.roomFaces(1).empty());
   }
 
   TEST_CASE("Builds support index from selected room faces") {
@@ -75,14 +81,17 @@ TEST_SUITE("rooms::distance_sampling") {
     addSquare(geometry, rooms, 0, 0.0f, 100.0f, 0.0f, 100.0f);
     addSquare(geometry, rooms, 1, 200.0f, 300.0f, 0.0f, 100.0f);
 
-    geometry::SurfaceSupportIndex support = rooms::buildRoomSupportIndex(rooms, geometry, 0);
+    rooms::RoomGeometryIndex support(rooms, geometry);
+    std::vector<geometry::SurfaceSupportHit> hits;
 
-    CHECK(support.hasBounds());
-    CHECK_FALSE(support.hitsAt(25.0f, 25.0f).empty());
-    CHECK(support.hitsAt(225.0f, 25.0f).empty());
-    REQUIRE(support.triangles().size() == 2);
-    CHECK(support.triangles()[0].face == 0);
-    CHECK(support.triangles()[1].face == 1);
+    CHECK(support.hasRoomBounds(0));
+    support.findSupportHits(hits, 0, 25.0f, 25.0f);
+    CHECK_FALSE(hits.empty());
+    support.findSupportHits(hits, 0, 225.0f, 25.0f);
+    CHECK(hits.empty());
+    REQUIRE(support.roomFaces(0).size() == 2);
+    CHECK(support.roomFaces(0)[0] == 0);
+    CHECK(support.roomFaces(0)[1] == 1);
   }
 
   TEST_CASE("Offsets samples by support normal sign") {
@@ -105,14 +114,18 @@ TEST_SUITE("rooms::distance_sampling") {
     addSquare(geometry, rooms, 0, 0.0f, 100.0f, 0.0f, 100.0f);
     addHorizontalBlocker(geometry, rooms, 0);
 
-    CHECK_FALSE(rooms::sampleOffsetClear(rooms, geometry, 0, {50.0f, 0.0f, 50.0f}, {50.0f, -60.0f, 50.0f}));
+    std::vector<std::uint32_t> scratch;
+    rooms::RoomGeometryIndex blocked(rooms, geometry);
+    CHECK_FALSE(rooms::sampleOffsetClear(blocked, 0, {50.0f, 0.0f, 50.0f}, {50.0f, -60.0f, 50.0f}, scratch));
 
     rooms.face_rooms.back() = 1;
-    CHECK(rooms::sampleOffsetClear(rooms, geometry, 0, {50.0f, 0.0f, 50.0f}, {50.0f, -60.0f, 50.0f}));
+    rooms::RoomGeometryIndex other_room(rooms, geometry);
+    CHECK(rooms::sampleOffsetClear(other_room, 0, {50.0f, 0.0f, 50.0f}, {50.0f, -60.0f, 50.0f}, scratch));
 
     rooms.face_rooms.back() = 0;
     geometry.faces.back().flags = kFaceBitTrans;
-    CHECK(rooms::sampleOffsetClear(rooms, geometry, 0, {50.0f, 0.0f, 50.0f}, {50.0f, -60.0f, 50.0f}));
+    rooms::RoomGeometryIndex ignored(rooms, geometry);
+    CHECK(rooms::sampleOffsetClear(ignored, 0, {50.0f, 0.0f, 50.0f}, {50.0f, -60.0f, 50.0f}, scratch));
   }
 
   TEST_CASE("Adds sample nodes only for rooms with multiple portal nodes") {
@@ -128,8 +141,9 @@ TEST_SUITE("rooms::distance_sampling") {
     skipped_graph.rooms.resize(rooms.definitions.size());
     rooms::addRoomNode(skipped_graph.rooms[0], {{0.0f, -60.0f, 0.0f}, 0, 0, 0});
     skipped_graph.rooms[0].portal_nodes = {0};
-    rooms::RoomDistanceGenDiagnostics diagnostics;
-    rooms::addSampleNodes(rooms, geometry, options, skipped_graph, &diagnostics);
+    rooms::RoomDistanceGenerationDiagnostics diagnostics;
+    rooms::RoomGeometryIndex room_geometry(rooms, geometry);
+    rooms::addSampleNodes(rooms, room_geometry, options, skipped_graph, &diagnostics);
     CHECK(skipped_graph.rooms[0].nodes.size() == 1);
     REQUIRE(diagnostics.sampled_points_by_room.size() == 2);
     CHECK(diagnostics.sampled_points_by_room[0].empty());
@@ -140,7 +154,7 @@ TEST_SUITE("rooms::distance_sampling") {
     rooms::addRoomNode(graph.rooms[0], {{200.0f, -60.0f, 0.0f}, 0, 1, 0});
     graph.rooms[0].portal_nodes = {0, 1};
     diagnostics = {};
-    rooms::addSampleNodes(rooms, geometry, options, graph, &diagnostics);
+    rooms::addSampleNodes(rooms, room_geometry, options, graph, &diagnostics);
 
     CHECK(graph.rooms[0].nodes.size() > 2);
     REQUIRE(diagnostics.sampled_points_by_room.size() == 2);

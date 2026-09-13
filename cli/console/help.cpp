@@ -3,100 +3,276 @@
 
 #include "console/help.h"
 
-#include "console/diagnostics.h"
+#include "arx_pistoris/paths.hpp"
+
+#include "console/help_request.h"
+#include "console/style.h"
+#include "formats/format.h"
 #include "modules/module.h"
 #include "modules/registry.h"
+#include "routes/descriptor.h"
 #include "routes/registry.h"
+#include "routes/types.h"
 
-#include <cctype>
+#include <cassert>
+#include <cstddef>
 #include <cstdio>
-#include <string>
+#include <span>
 #include <string_view>
-#include <vector>
 
 namespace {
 
-struct HelpFilter {
-  bool cli = true;
-  cli::RouteMask routes = cli::kNoRoutes;
-  bool options = true;
-  bool debug = false;
-  bool conventions = false;
+constexpr std::size_t kLineWidth = 100;
+constexpr std::size_t kDescriptionColumn = 48;
+constexpr cli::Format kFormats[] = {
+    cli::Format::kFtl,
+    cli::Format::kFts,
+    cli::Format::kDlf,
+    cli::Format::kLlf,
+    cli::Format::kTea,
+    cli::Format::kAmb,
+    cli::Format::kObj,
+    cli::Format::kJson,
+    cli::Format::kGlb,
 };
 
-bool startsWith(std::string_view text, std::string_view prefix) {
-  return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
-}
+struct DomainPresentation {
+  const char* title;
+  const char* keyword;
+  cli::ConsoleStyle style;
+};
 
-bool topicMatches(const char* topic, const char* full) {
-  std::string_view needle = topic ? std::string_view(topic) : std::string_view();
-  std::string_view name = full;
-  return !needle.empty() && startsWith(name, needle);
-}
+std::string_view view(const char* text) { return text ? std::string_view(text) : std::string_view(); }
 
-HelpFilter makeHelpFilter(const std::vector<const char*>& topics) {
-  HelpFilter filter;
-  cli::RouteRegistryView routes = cli::routeRegistry();
-  for (std::size_t index = 0; index < routes.count; ++index) {
-    filter.routes |= cli::routeBit(routes.routes[index].kind);
+DomainPresentation routePresentation(cli::RouteKind kind) {
+  switch (kind) {
+    case cli::RouteKind::kLevel:
+      return {"LEVEL", "level", {.color = cli::ConsoleColor::kGreen, .bold = true}};
+    case cli::RouteKind::kModel:
+      return {"MODEL", "model", {.color = cli::ConsoleColor::kBrightMagenta, .bold = true}};
+    case cli::RouteKind::kAnimation:
+      return {"ANIMATION", "animation", {.color = cli::ConsoleColor::kMagenta, .bold = true}};
+    case cli::RouteKind::kAmbiance:
+      return {"AMBIANCE", "ambiance", {.color = cli::ConsoleColor::kYellow, .bold = true}};
+    case cli::RouteKind::kUnknown:
+      break;
   }
-  bool any_group = false;
-  bool any_section = false;
+  return {"CLI", "cli", {.bold = true}};
+}
 
-  for (const char* topic : topics) {
-    const bool matches_cli = topicMatches(topic, "cli");
-    cli::RouteMask matching_routes = cli::kNoRoutes;
-    for (std::size_t index = 0; index < routes.count; ++index) {
-      if (topicMatches(topic, routes.routes[index].name)) {
-        matching_routes |= cli::routeBit(routes.routes[index].kind);
-      }
+bool selectorStyle(std::string_view token, cli::ConsoleStyle& style) {
+  if (token.starts_with("level:")) {
+    style = routePresentation(cli::RouteKind::kLevel).style;
+    return true;
+  }
+  if (token.starts_with("model:")) {
+    style = routePresentation(cli::RouteKind::kModel).style;
+    return true;
+  }
+  if (token.starts_with("anim:")) {
+    style = routePresentation(cli::RouteKind::kAnimation).style;
+    return true;
+  }
+  if (token.starts_with("ambiance:")) {
+    style = routePresentation(cli::RouteKind::kAmbiance).style;
+    return true;
+  }
+  if (token.starts_with("cinematic:")) {
+    style = {.color = cli::ConsoleColor::kCyan, .bold = true};
+    return true;
+  }
+  return false;
+}
+
+cli::ConsoleStyle formatStyle(cli::Format format) {
+  switch (format) {
+    case cli::Format::kFts:
+    case cli::Format::kDlf:
+    case cli::Format::kLlf:
+      return {.color = cli::ConsoleColor::kGreen};
+    case cli::Format::kFtl:
+      return {.color = cli::ConsoleColor::kBrightMagenta};
+    case cli::Format::kTea:
+      return {.color = cli::ConsoleColor::kMagenta};
+    case cli::Format::kAmb:
+      return {.color = cli::ConsoleColor::kYellow};
+    case cli::Format::kObj:
+    case cli::Format::kJson:
+    case cli::Format::kGlb:
+      return {.bold = true};
+    case cli::Format::kUnset:
+    case cli::Format::kUnknown:
+      return {};
+  }
+  return {};
+}
+
+const char* pageName(cli::HelpPage page) {
+  switch (page) {
+    case cli::HelpPage::kGeneral:
+      return "GENERAL";
+    case cli::HelpPage::kSelectors:
+      return "SELECTORS";
+    case cli::HelpPage::kFormats:
+      return "FORMATS";
+    case cli::HelpPage::kDebug:
+      return "DEBUG";
+  }
+  return "GENERAL";
+}
+
+class HelpPrinter {
+ public:
+  explicit HelpPrinter(std::FILE* output) : output_(output) {}
+
+  void breadcrumb(DomainPresentation domain, cli::HelpPage page) const {
+    cli::writeStyled(output_, domain.style, domain.title);
+    std::fputs(" / ", output_);
+    cli::writeStyled(output_, {.bold = true}, pageName(page));
+    std::fputc('\n', output_);
+  }
+
+  void blank() const { std::fputc('\n', output_); }
+
+  void heading(std::string_view text) const {
+    cli::writeStyled(output_, {.bold = true}, text);
+    std::fputs(":\n", output_);
+  }
+
+  void line(std::string_view text = {}) const {
+    write(text);
+    std::fputc('\n', output_);
+  }
+
+  void wrapped(std::string_view text, std::size_t indent = 0) const {
+    spaces(indent);
+    writeWrapped(text, indent, indent);
+  }
+
+  void entry(std::size_t depth, std::string_view prefix, std::string_view usage, std::string_view description,
+             bool style_selectors = false) const {
+    const std::size_t usage_column = 2 + depth * 2;
+    spaces(usage_column);
+    write(prefix);
+    if (style_selectors) {
+      writeCommandArguments(usage);
+    } else {
+      write(usage);
     }
-    if (matches_cli || matching_routes != cli::kNoRoutes) {
-      if (!any_group) {
-        filter.cli = false;
-        filter.routes = cli::kNoRoutes;
-        any_group = true;
-      }
-      filter.cli = filter.cli || matches_cli;
-      filter.routes |= matching_routes;
+    const std::size_t usage_end = usage_column + prefix.size() + usage.size();
+    if (description.empty()) {
+      std::fputc('\n', output_);
+      return;
     }
 
-    if (topicMatches(topic, "options")) {
-      if (!any_section) {
-        filter.options = filter.debug = filter.conventions = false;
-        any_section = true;
-      }
-      filter.options = true;
+    if (usage_end >= kDescriptionColumn - 1) {
+      std::fputc('\n', output_);
+      spaces(kDescriptionColumn);
+    } else {
+      spaces(kDescriptionColumn - usage_end);
     }
-    if (topicMatches(topic, "debug")) {
-      if (!any_section) {
-        filter.options = filter.debug = filter.conventions = false;
-        any_section = true;
-      }
-      filter.debug = true;
+    writeWrapped(description, kDescriptionColumn, kDescriptionColumn);
+  }
+
+  void topic(DomainPresentation domain, std::string_view suffix, std::string_view description,
+             std::size_t description_column = 26) const {
+    spaces(2);
+    cli::writeStyled(output_, domain.style, domain.keyword);
+    if (!suffix.empty()) cli::writeStyled(output_, domain.style, suffix);
+    std::size_t column = 2 + std::string_view(domain.keyword).size() + suffix.size();
+    if (column >= description_column - 1) {
+      std::fputc('\n', output_);
+      spaces(description_column);
+    } else {
+      spaces(description_column - column);
     }
-    if (topicMatches(topic, "conventions")) {
-      if (!any_section) {
-        filter.options = filter.debug = filter.conventions = false;
-        any_section = true;
+    writeWrapped(description, description_column, description_column);
+  }
+
+  void formatLine(std::string_view label, cli::FormatMask formats) const {
+    spaces(2);
+    write(label);
+    if (label.size() < 18) spaces(18 - label.size());
+    bool first = true;
+    for (cli::Format format : kFormats) {
+      if ((formats & cli::formatBit(format)) == 0) continue;
+      if (!first) std::fputs(", ", output_);
+      cli::writeStyled(output_, formatStyle(format), cli::formatName(format));
+      first = false;
+    }
+    if (first) std::fputc('-', output_);
+    std::fputc('\n', output_);
+  }
+
+  std::FILE* output() const { return output_; }
+
+ private:
+  void spaces(std::size_t count) const {
+    for (std::size_t index = 0; index < count; ++index) std::fputc(' ', output_);
+  }
+
+  void write(std::string_view text) const { std::fwrite(text.data(), 1, text.size(), output_); }
+
+  void writeCommandArguments(std::string_view arguments) const {
+    while (!arguments.empty()) {
+      const std::size_t separator = arguments.find(' ');
+      const std::string_view token = arguments.substr(0, separator);
+      cli::ConsoleStyle style;
+      if (selectorStyle(token, style)) {
+        cli::writeStyled(output_, style, token);
+      } else {
+        write(token);
       }
-      filter.conventions = true;
+      if (separator == std::string_view::npos) return;
+      std::fputc(' ', output_);
+      arguments.remove_prefix(separator + 1);
     }
   }
 
-  return filter;
-}
+  void writeWrapped(std::string_view text, std::size_t column, std::size_t continuation_indent) const {
+    bool word_on_line = false;
+    while (!text.empty()) {
+      const std::size_t first = text.find_first_not_of(' ');
+      if (first == std::string_view::npos) break;
+      text.remove_prefix(first);
+      const std::size_t separator = text.find(' ');
+      const std::string_view word = text.substr(0, separator);
+      if (word_on_line && column + 1 + word.size() > kLineWidth) {
+        std::fputc('\n', output_);
+        spaces(continuation_indent);
+        column = continuation_indent;
+        word_on_line = false;
+      }
+      if (word_on_line) {
+        std::fputc(' ', output_);
+        ++column;
+      }
+      write(word);
+      column += word.size();
+      word_on_line = true;
+      if (separator == std::string_view::npos) break;
+      text.remove_prefix(separator + 1);
+    }
+    std::fputc('\n', output_);
+  }
+
+  std::FILE* output_;
+};
 
 bool moduleVisible(const cli::RegisteredModule& registered, const cli::RouteDescriptor* route) {
   const cli::Module& module = *registered.module;
-  if (!route)
+  if (!route) {
     return !registered.owner && (module.category() == cli::ModuleCategory::kSystem ||
                                  module.category() == cli::ModuleCategory::kTerminalAction);
+  }
   if (registered.owner) return registered.owner == route;
 
   switch (module.category()) {
-    case cli::ModuleCategory::kOutputFormat:
-      return (module.outputFormats() & route->output_formats) != 0;
+    case cli::ModuleCategory::kOutputFormat: {
+      const cli::RouteMask routes = cli::routesSupportingModule(module);
+      return (module.outputFormats() & route->output_formats) != 0 &&
+             (routes == cli::kNoRoutes || (routes & cli::routeBit(route->kind)) != 0);
+    }
     case cli::ModuleCategory::kFormatModifier: {
       const cli::FormatMask formats = route->primary_input_formats | route->output_formats;
       return (module.modifiedFormats() & formats) != 0;
@@ -114,151 +290,178 @@ bool moduleVisible(const cli::RegisteredModule& registered, const cli::RouteDesc
   return false;
 }
 
-void printModuleLine(std::FILE* output, const cli::RegisteredModule& registered, const cli::RouteDescriptor* route) {
-  constexpr int kUsageColumnWidth = 48;
-  const cli::Module& module = *registered.module;
-  const cli::ModuleHelp help = module.help(route);
-  int indent = static_cast<int>(registered.depth) * 2;
-  int usage_width = kUsageColumnWidth > indent ? kUsageColumnWidth - indent : 0;
-  if (help.description) {
-    std::fprintf(output, "  %*s%-*s %s\n", indent, "", usage_width, help.usage ? help.usage : "", help.description);
-  } else if (help.usage) {
-    std::fprintf(output, "  %*s%s\n", indent, "", help.usage);
-  }
-}
-
-bool printModuleHelp(std::FILE* output, const cli::RouteDescriptor* route, cli::HelpSection section) {
+bool printModuleHelp(const HelpPrinter& printer, const cli::RouteDescriptor* route, cli::HelpSection section) {
   bool any = false;
   cli::ModuleRegistryView registry = cli::moduleRegistry();
   for (std::size_t index = 0; index < registry.count; ++index) {
     const cli::RegisteredModule& registered = registry.modules[index];
-    const cli::Module& module = *registered.module;
-    const cli::ModuleHelp help = module.help(route);
-    if (help.section != section) continue;
-    if (!help.usage && !help.description) continue;
-    if (!moduleVisible(registered, route)) continue;
-    printModuleLine(output, registered, route);
+    const cli::ModuleHelp help = registered.module->help(route);
+    if (help.section != section || (!help.usage && !help.description) || !moduleVisible(registered, route)) continue;
+    printer.entry(registered.depth, {}, view(help.usage), view(help.description));
     any = true;
   }
   return any;
 }
 
-std::string routeDisplayName(const cli::RouteDescriptor& route) {
-  std::string name = route.name;
-  if (!name.empty()) name.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(name.front())));
-  return name;
-}
-
-const char* helpSectionName(cli::HelpSection section) {
-  switch (section) {
-    case cli::HelpSection::kOptions:
-      return "options";
-    case cli::HelpSection::kDebug:
-      return "debug";
-    case cli::HelpSection::kConventions:
-      return "conventions";
-  }
-  return "unknown";
-}
-
-void printCliSection(std::FILE* output, cli::HelpSection section) {
-  switch (section) {
-    case cli::HelpSection::kOptions:
-      std::fprintf(output, "\nCLI options:\n");
-      std::fprintf(output, "  Options may appear before, between, or after file paths.\n");
-      printModuleHelp(output, nullptr, section);
-      break;
-    case cli::HelpSection::kDebug:
-      std::fprintf(output, "\nCLI debug:\n");
-      std::fprintf(output, "  Nothing here yet.\n");
-      break;
-    case cli::HelpSection::kConventions:
-      std::fprintf(output, "\nCLI conventions:\n");
-      std::fprintf(output, "  Option prefixes are convenience only; full option names are stable for scripting.\n");
-      break;
+void printExamples(const HelpPrinter& printer, std::span<const cli::HelpExample> examples) {
+  assert(examples.size() <= cli::kMaxRouteHelpExamples);
+  for (const cli::HelpExample& example : examples) {
+    printer.entry(0, "arx-pistor ", view(example.arguments), view(example.description), true);
   }
 }
 
-void printRouteSection(std::FILE* output, const cli::RouteDescriptor& route, cli::HelpSection section) {
-  bool any = false;
-  std::string route_name = routeDisplayName(route);
-  std::fprintf(output, "\n%s %s:\n", route_name.c_str(), helpSectionName(section));
-  any = printModuleHelp(output, &route, section) || any;
-  if (route.help_provider) any = route.help_provider(output, section) || any;
-  if (!any) std::fprintf(output, "  Nothing here yet.\n");
+void printModelTypes(const HelpPrinter& printer) {
+  constexpr std::size_t kIndent = 15;
+  std::FILE* output = printer.output();
+  std::fputs("  Model types: ", output);
+  std::size_t column = kIndent;
+  bool first = true;
+  for (std::string_view type : pistoris::paths::modelSelectorTypes()) {
+    const std::size_t separator = first ? 0 : 2;
+    if (!first && column + separator + type.size() > kLineWidth) {
+      std::fputs(",\n               ", output);
+      column = kIndent;
+      first = true;
+    }
+    if (!first) {
+      std::fputs(", ", output);
+      column += 2;
+    }
+    std::fwrite(type.data(), 1, type.size(), output);
+    column += type.size();
+    first = false;
+  }
+  std::fputc('\n', output);
+}
+
+void printCliGeneral(const HelpPrinter& printer) {
+  static constexpr cli::HelpExample kExamples[] = {
+      {"--auto-mount level:1 level1.glb", "Export a mounted Level to an editable GLB."},
+      {"--auto-mount level1.glb level:1", "Bake that GLB back into the game resource layout."},
+      {"--help level", "Show Level conversion options."},
+  };
+
+  printer.breadcrumb({"CLI", "cli", {.bold = true}}, cli::HelpPage::kGeneral);
+  printer.wrapped("Convert Arx Fatalis resources between native, JSON, OBJ, and GLB representations.");
+  printer.blank();
+  printer.heading("Usage");
+  printer.line("  arx-pistor <inputs...> <output> [options]");
+  printer.line("  arx-pistor --help [TOPIC [SUBTOPIC]]");
+  printer.blank();
+  printer.heading("Examples");
+  printExamples(printer, kExamples);
+  printer.blank();
+  printer.heading("Help topics");
+  printer.topic({"CLI", "cli", {.bold = true}}, " selectors", "Resource selector syntax and mount behavior.");
+  printer.topic({"CLI", "cli", {.bold = true}}, " formats", "Formats accepted for each asset type.");
+  cli::RouteRegistryView routes = cli::routeRegistry();
+  for (std::size_t index = 0; index < routes.count; ++index) {
+    const cli::RouteDescriptor& route = routes.routes[index];
+    printer.topic(routePresentation(route.kind), {}, view(route.help.summary));
+  }
+  printer.topic(routePresentation(cli::RouteKind::kLevel), " debug", "Level diagnostic GLB outputs.");
+  printer.wrapped("Topic names accept unambiguous prefixes. Use full names in scripts.", 2);
+  printer.blank();
+  printer.heading("Options");
+  printModuleHelp(printer, nullptr, cli::HelpSection::kOptions);
+}
+
+void printCliSelectors(const HelpPrinter& printer) {
+  constexpr std::size_t kDescriptionColumn = 40;
+  printer.breadcrumb({"CLI", "cli", {.bold = true}}, cli::HelpPage::kSelectors);
+  printer.wrapped("Selectors are convenient aliases for common paths in the mounted game resource namespace.");
+  printer.blank();
+  printer.heading("Selectors");
+  printer.topic(routePresentation(cli::RouteKind::kLevel), ":<N>", "One numbered Level bundle.", kDescriptionColumn);
+  printer.topic(
+      routePresentation(cli::RouteKind::kModel), ":<type>:<name>[:<tweak>]", "One Model resource.", kDescriptionColumn);
+  DomainPresentation animation = routePresentation(cli::RouteKind::kAnimation);
+  animation.keyword = "anim";
+  printer.topic(animation, ":<npc|fix_inter>:<name>", "One Animation resource.", kDescriptionColumn);
+  printer.topic(routePresentation(cli::RouteKind::kAmbiance), ":<name>", "One Ambiance resource.", kDescriptionColumn);
+  printer.topic({"CINEMATIC", "cinematic", {.color = cli::ConsoleColor::kCyan, .bold = true}},
+                ":<name>",
+                "One Cinematic resource; Cinematic conversion is not available yet.",
+                kDescriptionColumn);
+  printModelTypes(printer);
+  printer.blank();
+  printer.wrapped(
+      "--mount folders are searched from left to right. --auto-mount appends the standard game and "
+      "unpacked folders. Without an explicit --mount, reads begin in the current directory.");
+  printer.wrapped("--write-mount selects the output root. Absolute paths bypass mounts.");
+}
+
+void printCliFormats(const HelpPrinter& printer) {
+  printer.breadcrumb({"CLI", "cli", {.bold = true}}, cli::HelpPage::kFormats);
+  printer.wrapped("Format support is determined by the selected asset type.");
+
+  cli::RouteRegistryView routes = cli::routeRegistry();
+  for (std::size_t index = 0; index < routes.count; ++index) {
+    const cli::RouteDescriptor& route = routes.routes[index];
+    printer.blank();
+    DomainPresentation domain = routePresentation(route.kind);
+    cli::writeStyled(printer.output(), domain.style, domain.title);
+    std::fputc('\n', printer.output());
+    printer.formatLine("Primary inputs", route.primary_input_formats);
+    if (route.extra_input_formats != cli::kNoFormats) printer.formatLine("Companion inputs", route.extra_input_formats);
+    printer.formatLine("Outputs", route.output_formats);
+  }
+}
+
+void printRouteGeneral(const HelpPrinter& printer, const cli::RouteDescriptor& route) {
+  printer.breadcrumb(routePresentation(route.kind), cli::HelpPage::kGeneral);
+  printer.wrapped(view(route.help.summary));
+  printer.blank();
+  printer.heading("Usage");
+  printer.entry(0, "arx-pistor ", view(route.help.synopsis), {});
+  printer.blank();
+  printer.heading("Examples");
+  printExamples(printer, route.help.examples);
+  printer.blank();
+  printer.heading("Formats");
+  printer.formatLine("Primary inputs", route.primary_input_formats);
+  if (route.extra_input_formats != cli::kNoFormats) printer.formatLine("Companion inputs", route.extra_input_formats);
+  printer.formatLine("Outputs", route.output_formats);
+  printer.blank();
+  printer.heading("Options");
+  printModuleHelp(printer, &route, cli::HelpSection::kOptions);
+}
+
+void printLevelDebug(const HelpPrinter& printer, const cli::RouteDescriptor& route) {
+  printer.breadcrumb(routePresentation(route.kind), cli::HelpPage::kDebug);
+  printer.wrapped("Export diagnostic GLB views while processing a Level.");
+  printer.blank();
+  printer.heading("Options");
+  printModuleHelp(printer, &route, cli::HelpSection::kDebug);
 }
 
 }  // namespace
 
 namespace cli {
 
-bool validateHelpTopics(const std::vector<const char*>& topics) {
-  RouteRegistryView routes = routeRegistry();
-  for (const char* topic : topics) {
-    bool known = topicMatches(topic, "cli") || topicMatches(topic, "options") || topicMatches(topic, "debug") ||
-                 topicMatches(topic, "conventions");
-    for (std::size_t index = 0; !known && index < routes.count; ++index) {
-      known = topicMatches(topic, routes.routes[index].name);
+void printHelp(std::FILE* output, const HelpRequest& request) {
+  HelpPrinter printer(output);
+  if (request.route) {
+    if (request.page == HelpPage::kDebug && request.route->kind == RouteKind::kLevel) {
+      printLevelDebug(printer, *request.route);
+    } else {
+      printRouteGeneral(printer, *request.route);
     }
-    if (!known) {
-      diagnostic(DiagnosticCode::kUnknownHelpTopic, "--help: unknown topic '%s'", topic ? topic : "");
-      return false;
-    }
-  }
-  return true;
-}
-
-void printUsage(std::FILE* output, const char* argv0, const std::vector<const char*>& topics) {
-  HelpFilter help = makeHelpFilter(topics);
-  std::fprintf(output, "Usage:\n");
-  std::fprintf(output, "  %s <inputs...> <output> [options]   convert file bundle\n", argv0);
-  std::fprintf(output, "\nExamples:\n");
-  std::fprintf(output, "  %s level.fts out.glb                export FTS scene GLB\n", argv0);
-  std::fprintf(output, "  %s level.fts level.llf level.dlf out.glb\n", argv0);
-  std::fprintf(output, "                                      export native Level bundle to GLB\n");
-  std::fprintf(output, "  %s --kind level level.glb out.glb   roundtrip Level GLB\n", argv0);
-  std::fprintf(output, "  %s --kind level level.glb out.fts   bake loose native Level bundle\n", argv0);
-  std::fprintf(output, "  %s --kind level level.glb out.dlf   bake game-resource native Level bundle\n", argv0);
-  std::fprintf(output, "  %s model.ftl anim1.tea out.glb      export FTL+TEA bundle\n", argv0);
-  std::fprintf(output, "  %s anim.tea out.tea                 rewrite/transform TEA\n", argv0);
-  std::fprintf(output, "  %s anim.tea out.json                export TEA JSON\n", argv0);
-  std::fprintf(output, "  %s anim.json out.tea                import TEA JSON\n", argv0);
-  std::fprintf(output, "  %s --mount data level:1 out.glb     load a mounted native Level bundle\n", argv0);
-  std::fprintf(output, "  %s --mount data --list-resources all\n", argv0);
-  std::fprintf(output, "                                      list mounted game resources\n");
-  std::fprintf(output, "  %s --mount data model.ftl model:npc:hero\n", argv0);
-  std::fprintf(output, "                                      write a mounted native Model bundle\n");
-
-  if (help.cli && help.options) printCliSection(output, HelpSection::kOptions);
-  if (help.cli && help.debug) printCliSection(output, HelpSection::kDebug);
-  if (help.cli && help.conventions) printCliSection(output, HelpSection::kConventions);
-
-  RouteRegistryView routes = routeRegistry();
-  for (std::size_t index = 0; index < routes.count; ++index) {
-    const RouteDescriptor& route = routes.routes[index];
-    if ((help.routes & routeBit(route.kind)) == 0) continue;
-    if (help.options) printRouteSection(output, route, HelpSection::kOptions);
-    if (help.debug) printRouteSection(output, route, HelpSection::kDebug);
-    if (help.conventions) printRouteSection(output, route, HelpSection::kConventions);
+    return;
   }
 
-  std::fprintf(output, "\nFormats:\n");
-  std::fprintf(output, "  %s --kind model <input.glb> <out.ftl> GLB -> FTL + sibling .tea files\n", argv0);
-  std::fprintf(output, "  Supported input formats: FTL, FTS, DLF, LLF, TEA, OBJ, JSON, GLB\n");
-  std::fprintf(output, "Model outputs:           FTL, OBJ, JSON, GLB\n");
-  std::fprintf(output, "Level outputs:           GLB, JSON, loose FTS bundle, DLF game-resource bundle\n");
-  std::fprintf(output, "Animation outputs:       TEA, JSON\n");
-  std::fprintf(output, "\nResource selectors:\n");
-  std::fprintf(output, "  level:<N>\n");
-  std::fprintf(output, "  model:<type>:<name>[:<tweak>]\n");
-  std::fprintf(output, "  Model types: npc, fix_inter, system, armor, jewelry, magic, movable, provisions,\n");
-  std::fprintf(output, "               quest_item, special, weapons\n");
-  std::fprintf(output, "  anim:<npc|fix_inter>:<name>\n");
-  std::fprintf(output, "  cinematic:<name>\n");
-  std::fprintf(output, "  ambiance:<name>\n");
-  std::fprintf(output, "  Each selector names exactly one game resource.\n");
-  std::fprintf(output, "  Reads search mounts left-to-right; native resource outputs use the first mount.\n");
-  std::fprintf(output, "  With no --mount, the current directory is the only mount.\n");
+  switch (request.page) {
+    case HelpPage::kSelectors:
+      printCliSelectors(printer);
+      return;
+    case HelpPage::kFormats:
+      printCliFormats(printer);
+      return;
+    case HelpPage::kGeneral:
+    case HelpPage::kDebug:
+      printCliGeneral(printer);
+      return;
+  }
 }
 
 }  // namespace cli

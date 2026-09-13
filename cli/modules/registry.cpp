@@ -7,6 +7,7 @@
 #include "formats/format.h"
 #include "modules/module.h"
 #include "modules/root.h"
+#include "routes/descriptor.h"
 #include "routes/registry.h"
 #include "routes/types.h"
 
@@ -24,10 +25,6 @@
 
 namespace {
 
-bool startsWith(std::string_view text, std::string_view prefix) {
-  return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
-}
-
 std::string_view lookupKey(const char* token) {
   if (!token || token[0] != '-') return {};
   return std::string_view(token + 1);
@@ -41,6 +38,12 @@ struct RegistryData {
 void fail(RegistryData& data, std::string message) {
   if (data.error.empty()) data.error = std::move(message);
 }
+
+bool nonEmpty(const char* text) { return text && *text; }
+
+bool completeHelp(const cli::ModuleHelp& help) { return nonEmpty(help.usage) && nonEmpty(help.description); }
+
+bool hiddenHelp(const cli::ModuleHelp& help) { return !help.usage && !help.description; }
 
 void registerModule(cli::ModuleRef reference, const cli::Module* parent, std::uint8_t depth,
                     const cli::RouteDescriptor* owning_route, RegistryData& data,
@@ -79,7 +82,7 @@ void registerModule(cli::ModuleRef reference, const cli::Module* parent, std::ui
   }
 
   const cli::ModuleHelp help = module.help(owning_route);
-  if (!help.usage || !help.description) {
+  if (!completeHelp(help)) {
     fail(data, std::string("incomplete help metadata on ") + module.stableName());
     return;
   }
@@ -228,8 +231,20 @@ RegistryData buildRegistry() {
     const cli::RouteDescriptor& route = routes.routes[index];
     if (route.kind == cli::RouteKind::kUnknown || !route.name || std::string_view(route.name).empty() ||
         route.primary_input_formats == cli::kNoFormats || route.output_formats == cli::kNoFormats ||
-        !route.create_invocation || !route.probe || !route.resolve || !route.execute) {
+        !route.create_invocation || !route.probe || !route.resolve || !route.execute ||
+        !nonEmpty(route.help.synopsis) || !nonEmpty(route.help.summary) ||
+        route.help.examples.size() > cli::kMaxRouteHelpExamples) {
       fail(data, "incomplete route descriptor");
+      return data;
+    }
+    for (const cli::HelpExample& example : route.help.examples) {
+      if (!nonEmpty(example.arguments) || !nonEmpty(example.description)) {
+        fail(data, std::string("incomplete help example on route ") + route.name);
+        return data;
+      }
+    }
+    if (!route.modules.empty() && !route.create_options) {
+      fail(data, std::string("route modules require an options factory: ") + route.name);
       return data;
     }
     if (!route_kinds.insert(route.kind).second || !route_names.insert(route.name).second) {
@@ -242,6 +257,22 @@ RegistryData buildRegistry() {
     register_roots(route.modules, &route);
   }
   if (!data.error.empty()) return data;
+
+  for (const cli::RegisteredModule& item : data.modules) {
+    const cli::ModuleHelp registered_help = item.module->help(item.owner);
+    for (std::size_t index = 0; index < routes.count; ++index) {
+      const cli::ModuleHelp help = item.module->help(&routes.routes[index]);
+      if (hiddenHelp(help)) continue;
+      if (!completeHelp(help)) {
+        fail(data, std::string("incomplete route help metadata on ") + item.module->stableName());
+        return data;
+      }
+      if (help.section != registered_help.section) {
+        fail(data, std::string("inconsistent route help section on ") + item.module->stableName());
+        return data;
+      }
+    }
+  }
 
   validateRelationships(data, registered);
   if (!data.error.empty()) return data;
@@ -339,7 +370,7 @@ OptionMatch resolveModule(const char* token) {
     for (const char* name : module.keywords()) {
       std::string_view option_key = std::string_view(name).substr(1);
       if (option_key == key) return {.module = &module};
-      if (!startsWith(option_key, key)) continue;
+      if (!option_key.starts_with(key)) continue;
       if (unique && unique != &module) return {.ambiguous = true};
       unique = &module;
     }
@@ -356,7 +387,7 @@ void printModuleSuggestions(const char* token) {
   for (std::size_t index = 0; index < registry.count; ++index) {
     const Module& module = *registry.modules[index].module;
     bool match = std::ranges::any_of(
-        module.keywords(), [&](const char* name) { return startsWith(std::string_view(name).substr(1), key); });
+        module.keywords(), [&](const char* name) { return std::string_view(name).substr(1).starts_with(key); });
     if (!match) continue;
     std::fprintf(stderr, "%s%s", any ? ", " : "", module.stableName());
     any = true;

@@ -1,0 +1,68 @@
+{
+  "$schema": "https://arx-tools.github.io/schemas/dlf.schema.json",
+  "fogs": [],
+  "header": {
+    "lastModifiedAt": 1789179310,
+    "lastModifiedBy": "arx-pistoris",
+    "levelIdx": 9,
+    "numberOfPolygonsInFTS": 0,
+    "player": {
+      "orientation": {
+        "a": 0.0,
+        "b": -0.0,
+        "g": 0.0
+      },
+      "position": {
+        "x": 153.05712890625,
+        "y": -97.82599639892578,
+        "z": 151.77032470703125
+      }
+    }
+  },
+  "interactiveObjects": [],
+  "paths": [],
+  "zones": [
+    {
+      "height": -1,
+      "name": "check_out_arx-convert",
+      "points": [
+        {
+          "position": {
+            "x": 109.5711441040039,
+            "y": 49.60093688964844,
+            "z": 106.49986267089844
+          },
+          "time": 0,
+          "type": 0
+        },
+        {
+          "position": {
+            "x": 109.5711441040039,
+            "y": 49.60093688964844,
+            "z": 193.24636840820313
+          },
+          "time": 0,
+          "type": 0
+        },
+        {
+          "position": {
+            "x": 196.31764221191406,
+            "y": 49.60093688964844,
+            "z": 193.24636840820313
+          },
+          "time": 0,
+          "type": 0
+        },
+        {
+          "position": {
+            "x": 196.31764221191406,
+            "y": 49.60093688964844,
+            "z": 106.49986267089844
+          },
+          "time": 0,
+          "type": 0
+        }
+      ]
+    }
+  ]
+}

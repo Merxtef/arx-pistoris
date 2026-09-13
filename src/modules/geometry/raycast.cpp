@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"  // IWYU pragma: keep
 

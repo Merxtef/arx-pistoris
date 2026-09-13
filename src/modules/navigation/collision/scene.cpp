@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 #include "modules/navigation/collision/internal.h"
 #include "modules/navigation/traversal.h"
+#include "utils/math/quat.h"
+#include "utils/math/rotation.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <utility>
+#include <vector>
 
 namespace pistoris::navigation {
 namespace {
@@ -26,22 +30,6 @@ struct StepPlacementResult {
   ArxVector3 requested = {};
 };
 
-float rotateSin(float degrees) {
-  constexpr float kPi = 3.14159265358979323846f;
-  return std::sin(degrees * kPi / 180.0f);
-}
-
-float rotateCos(float degrees) {
-  constexpr float kPi = 3.14159265358979323846f;
-  return std::cos(degrees * kPi / 180.0f);
-}
-
-ArxVector3 rotateAroundY(const ArxVector3& value, float degrees) {
-  float s = rotateSin(degrees);
-  float c = rotateCos(degrees);
-  return {value.x * c + value.z * s, value.y, -value.x * s + value.z * c};
-}
-
 }  // namespace
 
 struct NavigationCollisionScene::Impl {
@@ -49,13 +37,13 @@ struct NavigationCollisionScene::Impl {
 
   explicit Impl(const GeometryData& geometry) : index(geometry) {}
 
-  StepPlacementResult tryStep(Cylinder& cylinder, const ArxVector3& step,
-                              const CylinderTraversalOptions& options) const {
+  StepPlacementResult tryStep(Cylinder& cylinder, const ArxVector3& step, const CylinderTraversalOptions& options,
+                              std::vector<std::uint32_t>& candidate_scratch) const {
     Cylinder test = cylinder;
     test.origin = test.origin + step;
     ArxVector3 requested = test.origin;
     PlacementResult placed = collision::placeCylinderAt(
-        index, test.origin, test.radius, test.height, options.max_step_up, options.max_step_up);
+        index, test.origin, test.radius, test.height, options.max_step_up, options.max_step_up, candidate_scratch);
     if (placed.status == CylinderPlacementStatus::kPlaced) {
       test = placed.cylinder;
       cylinder = test;
@@ -70,14 +58,18 @@ NavigationCollisionScene::NavigationCollisionScene(const GeometryData& geometry)
 NavigationCollisionScene::~NavigationCollisionScene() = default;
 
 CylinderPlacementStatus NavigationCollisionScene::endpointStatus(const ArxVector3& position, float radius, float height,
-                                                                 float probe_depth, float tolerance) const {
-  return collision::placeCylinderAt(impl_->index, position, radius, height, probe_depth, tolerance).status;
+                                                                 float probe_depth, float tolerance,
+                                                                 std::vector<std::uint32_t>& candidate_scratch) const {
+  return collision::placeCylinderAt(impl_->index, position, radius, height, probe_depth, tolerance, candidate_scratch)
+      .status;
 }
 
 CylinderPlacementStatus NavigationCollisionScene::placeEndpointAt(const ArxVector3& position, float radius,
                                                                   float height, float probe_depth, float tolerance,
-                                                                  ArxVector3& out) const {
-  PlacementResult placed = collision::placeCylinderAt(impl_->index, position, radius, height, probe_depth, tolerance);
+                                                                  ArxVector3& out,
+                                                                  std::vector<std::uint32_t>& candidate_scratch) const {
+  PlacementResult placed =
+      collision::placeCylinderAt(impl_->index, position, radius, height, probe_depth, tolerance, candidate_scratch);
   out = placed.cylinder.origin;
   return placed.status;
 }
@@ -127,10 +119,16 @@ void recordTraversalFailure(CylinderTraversalFailure* failure, const ArxVector3&
 CylinderTraversalStatus NavigationCollisionScene::traversalStatus(const ArxVector3& first, const ArxVector3& second,
                                                                   float radius, float height,
                                                                   const CylinderTraversalOptions& options,
+                                                                  std::vector<std::uint32_t>& candidate_scratch,
                                                                   CylinderTraversalFailure* failure) const {
   float start_tolerance = cylinderEndpointPlacementTolerance(height);
-  PlacementResult start = collision::placeCylinderAt(
-      impl_->index, first, radius, height, cylinderEndpointPlacementProbeDepth(height), start_tolerance);
+  PlacementResult start = collision::placeCylinderAt(impl_->index,
+                                                     first,
+                                                     radius,
+                                                     height,
+                                                     cylinderEndpointPlacementProbeDepth(height),
+                                                     start_tolerance,
+                                                     candidate_scratch);
   if (start.status != CylinderPlacementStatus::kPlaced) {
     recordTraversalFailure(failure, first, start.cylinder.origin, CylinderTraversalAttempt::kStart, 0);
     return startTraversalStatus(start.status);
@@ -148,7 +146,7 @@ CylinderTraversalStatus NavigationCollisionScene::traversalStatus(const ArxVecto
     ArxVector3 step = direction * step_distance;
     distance -= step_distance;
 
-    StepPlacementResult direct = impl_->tryStep(cylinder, step, options);
+    StepPlacementResult direct = impl_->tryStep(cylinder, step, options, candidate_scratch);
     if (direct.placement.status == CylinderPlacementStatus::kPlaced) continue;
 
     bool found = false;
@@ -164,7 +162,10 @@ CylinderTraversalStatus NavigationCollisionScene::traversalStatus(const ArxVecto
                std::pair{90.0f, CylinderTraversalAttempt::kLeft90},
            }) {
         StepPlacementResult left =
-            impl_->tryStep(cylinder, rotateAroundY(direction, angle.first) * step_distance, options);
+            impl_->tryStep(cylinder,
+                           math::rotateAroundY(direction, angle.first * math::kRadiansPerDegree) * step_distance,
+                           options,
+                           candidate_scratch);
         if (left.placement.status == CylinderPlacementStatus::kPlaced) {
           found = true;
           break;
@@ -178,7 +179,10 @@ CylinderTraversalStatus NavigationCollisionScene::traversalStatus(const ArxVecto
             : angle.second == CylinderTraversalAttempt::kLeft60 ? CylinderTraversalAttempt::kRight60
                                                                 : CylinderTraversalAttempt::kRight90;
         StepPlacementResult right =
-            impl_->tryStep(cylinder, rotateAroundY(direction, -angle.first) * step_distance, options);
+            impl_->tryStep(cylinder,
+                           math::rotateAroundY(direction, -angle.first * math::kRadiansPerDegree) * step_distance,
+                           options,
+                           candidate_scratch);
         if (right.placement.status == CylinderPlacementStatus::kPlaced) {
           found = true;
           break;
@@ -207,8 +211,10 @@ CylinderTraversalStatus NavigationCollisionScene::traversalStatus(const ArxVecto
 }
 
 bool NavigationCollisionScene::traversable(const ArxVector3& first, const ArxVector3& second, float radius,
-                                           float height, const CylinderTraversalOptions& options) const {
-  return traversalStatus(first, second, radius, height, options) == CylinderTraversalStatus::kTraversable;
+                                           float height, const CylinderTraversalOptions& options,
+                                           std::vector<std::uint32_t>& candidate_scratch) const {
+  return traversalStatus(first, second, radius, height, options, candidate_scratch) ==
+         CylinderTraversalStatus::kTraversable;
 }
 
 }  // namespace pistoris::navigation

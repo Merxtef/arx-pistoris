@@ -3,21 +3,25 @@
 
 #include "fogs.h"
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "coordinates.h"
 #include "external/glb/container.h"
 #include "external/glb/node_graph.h"
-#include "external/glb/utils/level/tokens.h"
 #include "external/glb/utils/node.h"
+#include "external/glb/utils/tokens.h"
+#include "external/glb/utils/transform.h"
 #include "level/data.h"
 #include "modules/scene.h"
 #include "objects.h"
-#include "utils/math/mat3.h"
+#include "utils/log.h"
+#include "utils/math/finite.h"
 #include "utils/math/mat4.h"
 #include "utils/math/quat.h"
+#include "utils/math/rotation.h"
 #include "utils/name_tokens.h"
 
 #include <algorithm>
@@ -32,41 +36,16 @@
 #include <vector>
 
 namespace pistoris::glb_level {
+
+using glb::parseFloatToken;
+using glb::parseSignedToken;
 namespace {
 
 constexpr float kDirectionHelperRadius = 50.0f;
 constexpr float kTransformTolerance = 1.0e-4f;
-constexpr float kDegreesPerRadian = 180.0f / 3.14159265358979323846f;
 constexpr std::string_view kFogPrefix = "arx_fog__";
 constexpr std::string_view kSettings = "SETTINGS__";
 constexpr std::string_view kDirection = "DIRECTION__";
-
-bool finite(const ArxVector3& value) {
-  return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
-}
-
-bool usableTransform(const math::Mat4& transform) {
-  ArxVector3 columns[3] = {
-      {transform(0, 0), transform(1, 0), transform(2, 0)},
-      {transform(0, 1), transform(1, 1), transform(2, 1)},
-      {transform(0, 2), transform(1, 2), transform(2, 2)},
-  };
-  float scale[3] = {math::lengthf(columns[0]), math::lengthf(columns[1]), math::lengthf(columns[2])};
-  for (float value : scale)
-    if (!std::isfinite(value) || value <= 0.0f) return false;
-  if (std::abs(math::dotf(columns[0], columns[1])) > kTransformTolerance * scale[0] * scale[1] ||
-      std::abs(math::dotf(columns[0], columns[2])) > kTransformTolerance * scale[0] * scale[2] ||
-      std::abs(math::dotf(columns[1], columns[2])) > kTransformTolerance * scale[1] * scale[2])
-    return false;
-
-  ArxMat3 rotation;
-  for (int row = 0; row < 3; ++row)
-    for (int column = 0; column < 3; ++column) rotation(row, column) = transform(row, column) / scale[column];
-  if (!std::isfinite(math::determinant(rotation)) || math::determinant(rotation) <= 0.0f) return false;
-
-  ArxVector3 position = math::translation(transform);
-  return finite(position);
-}
 
 bool parseColor(std::string_view text, ArxColor3& out) {
   std::size_t first = text.find('_');
@@ -91,7 +70,7 @@ ArxAngle angleFromDirection(const ArxVector3& direction) {
   ArxVector3 normalized = math::normalize(direction);
   float pitch = std::asin(std::clamp(-normalized.y, -1.0f, 1.0f));
   float yaw = std::atan2(normalized.x, normalized.z);
-  return {pitch * kDegreesPerRadian, yaw * kDegreesPerRadian, 0.0f};
+  return {pitch * math::kDegreesPerRadian, yaw * math::kDegreesPerRadian, 0.0f};
 }
 
 ArxQuat rotationFromDirection(const ArxVector3& direction) { return math::angleToQuat(angleFromDirection(direction)); }
@@ -180,7 +159,7 @@ ArxReturnCode parseDirection(const cgltf_data& data, const std::vector<math::Mat
     if (child_index < 0 || static_cast<std::size_t>(child_index) >= data.nodes_count) return ARX_GLB_BAD_FORMAT;
     ArxVector3 target = math::translation(world[static_cast<std::size_t>(child_index)]);
     ArxVector3 delta{target.x - position.x, target.y - position.y, target.z - position.z};
-    if (!finite(delta) || math::lengthf(delta) <= kTransformTolerance) return ARX_GLB_BAD_LEVEL_FOG;
+    if (!math::finite(delta) || math::lengthf(delta) <= kTransformTolerance) return ARX_GLB_BAD_LEVEL_FOG;
     if (!selected) {
       const std::optional<ArxVector3> converted = toArxVector(delta, units);
       if (!converted) return ARX_GLB_BAD_FORMAT;
@@ -231,8 +210,7 @@ void exportFogs(const LevelModules& level, const ArxAabb& referenced_bounds, con
 }
 
 ArxReturnCode importFogs(const cgltf_data& data, const std::vector<math::Mat4>& world,
-                         std::span<const std::size_t> nodes, const ImportUnits& units, LevelModules& level,
-                         std::vector<std::string>& warnings) {
+                         std::span<const std::size_t> nodes, const ImportUnits& units, LevelModules& level) {
   for (std::size_t node_index : nodes) {
     if (node_index >= data.nodes_count || node_index >= world.size()) return ARX_GLB_BAD_FORMAT;
     const cgltf_node& node = data.nodes[node_index];
@@ -240,7 +218,8 @@ ArxReturnCode importFogs(const cgltf_data& data, const std::vector<math::Mat4>& 
     std::string_view fog_name = name.substr(kFogPrefix.size());
     if (fog_name.empty() || hasDoubleUnderscore(fog_name) || !glb::simpleEmptyNode(node)) return ARX_GLB_BAD_LEVEL_FOG;
 
-    if (!usableTransform(world[node_index])) return ARX_GLB_BAD_LEVEL_FOG;
+    glb::DecomposedTransform decomposed;
+    if (!glb::decomposeTransform(world[node_index], decomposed)) return ARX_GLB_BAD_LEVEL_FOG;
 
     Fog fog;
     fog.position = math::translation(world[node_index]);
@@ -259,8 +238,8 @@ ArxReturnCode importFogs(const cgltf_data& data, const std::vector<math::Mat4>& 
     fog.scale = *scale;
     fog.speed = *speed;
     if (glb::hasNonIdentityLocalScale(node))
-      warnings.push_back(std::format("GLB -> Level: fog '{}' has nonidentity local scale; scale ignored", name));
-    if (!scene::normalizeRotation(fog.rotation)) return ARX_GLB_BAD_LEVEL_FOG;
+      log(ARX_LOG_WARN, "GLB -> Level: fog '{}' has nonidentity local scale; scale ignored", name);
+    if (!math::normalizeRotation(fog.rotation)) return ARX_GLB_BAD_LEVEL_FOG;
     level.scene.fogs.push_back(fog);
   }
   return ARX_OK;

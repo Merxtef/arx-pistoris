@@ -3,35 +3,40 @@
 
 #pragma once
 
+#include "arx_pistoris/glb.hpp"
 #include "arx_pistoris/level.hpp"
 
 #include "formats/modifiers.h"
 #include "routes/options.h"
 
+#include <optional>
 #include <string>
 
 namespace cli::level {
 
-static_assert(kMinGlbArxUnitsPerUnit == pistoris::kMinArxUnitsPerGlbUnit);
-static_assert(kMaxGlbArxUnitsPerUnit == pistoris::kMaxArxUnitsPerGlbUnit);
+static_assert(kMinGlbArxUnitsPerUnit == pistoris::glb::kMinArxUnitsPerUnit);
+static_assert(kMaxGlbArxUnitsPerUnit == pistoris::glb::kMaxArxUnitsPerUnit);
 
 inline constexpr float kAnchorSpacingRadiusFactor = 2.0f;
 inline constexpr float kAnchorLinkDistanceSpacingFactor = 1.5f;
 
+struct MinimapSamplerPaths {
+  std::string foreground;
+  std::string background;
+  std::string water;
+  std::string lava;
+};
+
 struct LevelOptions final : RouteOptions {
   pistoris::Level::GlbImportOptions glb_import;
   pistoris::Level::GlbExportOptions glb_export;
+  bool load_previews = false;
   bool weld_vertices = false;
   pistoris::Level::VertexWeldOptions vertex_welding;
   bool dlf_only = false;
   bool reconstruct_quads = true;
-  bool export_textures = true;
-  bool input_texture_folder_specified = false;
-  std::string input_texture_folder;
   bool fts_scene_directory_specified = false;
   std::string fts_scene_directory;
-  bool output_texture_folder_specified = false;
-  std::string output_texture_folder;
   std::string signer;
   bool generate_nav_surface = false;
   bool nav_surface_from_floor = false;
@@ -51,7 +56,18 @@ struct LevelOptions final : RouteOptions {
   bool anchor_link_distance_specified = false;
   bool generate_static_lighting = false;
   pistoris::Level::StaticLightingGenOptions static_lighting_generation;
+  bool generate_minimap = false;
+  pistoris::Level::MinimapGenerationOptions minimap_generation;
+  MinimapSamplerPaths minimap_sampler_paths;
+  std::optional<pistoris::ArxColor3> minimap_border_color;
 };
+
+inline pistoris::ArxColor3 effectiveMinimapBorderColor(const LevelOptions& options) noexcept {
+  if (options.minimap_border_color) return *options.minimap_border_color;
+  if (options.generate_minimap && options.minimap_generation.halo_radius != 0)
+    return options.minimap_generation.halo_color;
+  return {1.0f, 1.0f, 1.0f};
+}
 
 inline void applyFormatModifiers(LevelOptions& options, const FormatModifierOptions& modifiers) {
   const auto& units = modifiers.glb.arx_units_per_unit;

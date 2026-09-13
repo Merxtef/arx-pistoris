@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "utils/math/mat3.h"
 #include "utils/math/mat4.h"
@@ -16,6 +16,8 @@ struct DecomposedTransform {
   ArxVector3 scale = {1.0f, 1.0f, 1.0f};
 };
 
+bool isAffineTransform(const math::Mat4& transform) noexcept;
+bool canonicalizeAffineTransform(math::Mat4& transform) noexcept;
 bool decomposeTransform(const math::Mat4& world, DecomposedTransform& out) noexcept;
 
 }  // namespace pistoris::glb

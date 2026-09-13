@@ -3,15 +3,19 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/image.h"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level/types.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/texture.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -30,20 +34,11 @@ struct Data;
 }
 
 struct NativeLevelBundle;
+class Model;
 
-// Zero-based positions in the current collection, not persistent object identities
-// Any non-const Level call invalidates previously acquired indices and borrowed views
 inline constexpr FaceType kLevelFaceBitsAll = ARX_LEVEL_FACE_BITS_ALL;
 inline constexpr float kLevelMinXZ = 0.0f;
 inline constexpr float kLevelMaxXZ = 16000.0f;
-inline constexpr float kMinArxUnitsPerGlbUnit = 1.0f;
-inline constexpr float kMaxArxUnitsPerGlbUnit = 1000.0f;
-
-enum class NativeTexturePathMode : std::uint8_t {
-  kPreserve,
-  kRebase,
-};
-
 inline constexpr std::int16_t kAnchorFlagBlocked = 1 << 3;
 inline constexpr std::int16_t kAnchorFlagsAll = kAnchorFlagBlocked;
 inline constexpr float kDefaultAnchorRadius = 50.0f;
@@ -76,6 +71,8 @@ struct LevelDebugAccess;
 
 }  // namespace level_debug
 
+// Collection indices are current zero-based positions, not persistent identities
+// Non-const calls invalidate collection indices and borrowed views
 class Level {
  public:
   enum class PositionWeldMetric : std::uint8_t {
@@ -90,114 +87,151 @@ class Level {
   };
 
   struct VertexWeldOptions {
+    // Positive weld tolerance
     float radius = 1.0e-4f;
     PositionWeldMetric metric = PositionWeldMetric::kEuclidean;
     DegenerateFacePolicy degenerate_faces = DegenerateFacePolicy::kPreserve;
   };
 
   struct NavSurfaceSourceOptions {
-    // Offset applied above the generated navigation surface, -Y is up
+    // Applied along Arx up (-Y)
     float clearance = kDefaultNavSurfaceClearance;
-    // Minimum cosine against the Arx up direction accepted as support
+    // Minimum support-normal dot with Arx up
     float support_min_up_cos = kDefaultNavSurfaceSupportMinUpCos;
-    // Face flags excluded from support selection; NOPATH is always excluded by the selector
+    // Ignored support flags; NOPATH always ignored
     FaceType support_ignore_flags = kDefaultNavSurfaceIgnoreFlags;
   };
 
   struct NavSurfaceGenOptions : NavSurfaceSourceOptions {
-    // Navigation probe cylinder radius
     float radius = kDefaultAnchorRadius;
-    // Signed navigation probe cylinder height in Arx coordinates, -Y is up
+    // Signed cylinder height, -Y up
     float height = kDefaultAnchorHeight;
-    // Maximum support correction during navigation probing, -Y is up
+    // Maximum upward support correction
     float max_step_up = kDefaultNavSurfaceMaxStepUp;
   };
 
   struct NavSurfacePruneOptions {
+    // Fraction of largest component, range [0, 1]
     float min_component_area_ratio = 0.05f;
+    // Absolute area floor in square Arx units
     double min_component_area = 0.0;
   };
 
   struct AnchorGenOptions {
-    // Distance between anchor sampling points
     float sample_spacing = 100.0f;
-    // Generated anchor cylinder radius
     float radius = kDefaultAnchorRadius;
-    // Signed generated anchor cylinder height in Arx coordinates, -Y is up
+    // Signed cylinder height, -Y up
     float height = kDefaultAnchorHeight;
   };
 
   struct AnchorPruneOptions {
+    // Fraction of largest component, range [0, 1]
     float min_component_anchor_ratio = 0.05f;
+    // Absolute component count floor
     std::uint32_t min_component_anchor_count = 1;
   };
 
   struct AnchorConnectionGenOptions {
-    // Maximum XZ-projected distance between anchors considered for linking
+    // Maximum XZ candidate distance
     float max_distance = 150.0f;
-    // Maximum cylinder traversal segment length
+    // Maximum traversal step length
     float max_step_distance = 40.0f;
-    // Maximum support correction per traversal step, -Y is up
+    // Maximum upward correction per step
     float max_step_up = 55.0f;
-    // Multiplier applied to anchor radius during traversal checks
+    // Traversal radius factor, range [0.5, 1]
     float radius_scale = 0.9f;
-    // Maximum traversal steps per candidate link
     int max_steps = 100;
   };
 
   struct RoomDistanceGenOptions {
-    // Offset from portal plane to the per-room access point
+    // Portal-to-access-point offset
     float portal_side_offset = kDefaultRoomDistancePortalOffset;
-    // Grid spacing for room-distance sample nodes
     float sample_spacing = kDefaultRoomDistanceSampleSpacing;
-    // Vertical offset from support surface to visibility graph node, -Y is up
+    // Support-to-node offset, -Y up
     float sample_height_offset = kDefaultRoomDistanceSampleHeight;
-    float max_link_distance = 0.0f;  // = 1.5 * sample_spacing
+    // 0 selects 1.5 * sample_spacing
+    float max_link_distance = 0.0f;
   };
 
   struct StaticLightingGenOptions {
-    // Minimum generated corner color
+    // Minimum corner color, components [0, 1]
     ArxColor3 ambient_color = kDefaultStaticLightingAmbientColor;
-    // Original editor static light multiplier
+    // Nonnegative legacy static-light multiplier
     float global_factor = kDefaultStaticLightingGlobalFactor;
-    // Apply per-corner normal response
     bool use_normals = true;
-    // Test static geometry visibility for shadow casting
     bool use_shadows = true;
   };
 
   struct GlbUnitOptions {
-    // Inclusive [kMinArxUnitsPerGlbUnit, kMaxArxUnitsPerGlbUnit]
+    // Range [1, 1000]
     float arx_units_per_glb_unit = 100.0f;
   };
 
   struct GlbImportOptions : GlbUnitOptions {
-    // Missing offset selects automatic 100-unit-aligned XZ placement
+    // Arx position mapped to GLB origin
+    // Empty selects automatic 100-unit-aligned XZ placement
     std::optional<ArxVector3> arx_offset;
   };
 
   struct GlbExportOptions : GlbUnitOptions {
+    // Arx position mapped to GLB origin
     ArxVector3 arx_offset = {};
   };
 
-  struct GlbImportInfo {
-    ArxVector3 applied_arx_offset = {};
+  struct MinimapView {
+    ArxEncodedImageView encoded_image{};
+    ArxRect world_xz_bounds{};
+  };
+
+  struct MinimapRenderOptions {
+    // Arx-unit projection offset
+    ArxVector2 projection_offset{};
+    ArxColor3 fill_color{};
+  };
+
+  struct GameMinimapRenderOptions {
+    // Arx-unit projection offset
+    ArxVector2 projection_offset{};
+    ArxColor3 fill_color{};
+    ArxColor3 border_color{1.0f, 1.0f, 1.0f};
+  };
+
+  struct MinimapSampler {
+    ArxEncodedImageView image{};
+    // Constant color or image multiplier, components [0, 1]
+    ArxColor3 color{};
+  };
+
+  struct MinimapGenerationOptions {
+    MinimapSampler foreground{.color = {0.18f, 0.34f, 0.80f}};
+    MinimapSampler background{.color = {0.56f, 0.68f, 0.90f}};
+    MinimapSampler water{.color = {0.72f, 0.60f, 0.45f}};
+    MinimapSampler lava{.color = {0.25f, 0.80f, 0.90f}};
+    // Applied to background pixels nearest occupied geometry
+    ArxColor3 halo_color{1.0f, 1.0f, 1.0f};
+    // Chebyshev radius in pixels; 0 disables halo
+    std::uint32_t halo_radius = 5;
   };
 
   struct NativeBakeOptions {
-    std::string_view level_name;
-    std::string_view texture_folder;
-    NativeTexturePathMode texture_path_mode = NativeTexturePathMode::kPreserve;
+    // Used when dlf_scene_path is empty
+    std::string_view level_name = {};
+    NativeTextureBakeOptions textures = {};
     bool reconstruct_quads = true;
-    bool include_texture_files = true;
+    // Overrides level_name-derived path
     std::string_view dlf_scene_path = {};
   };
 
-  struct NativeDlfBakeOptions {
+  struct DlfBakeOptions {
+    // Used when dlf_scene_path is empty
     std::string_view level_name;
+    // Subtracted from DLF scene positions
     ArxVector3 target_fts_offset = {};
+    // Overrides level_name-derived path
     std::string_view dlf_scene_path = {};
   };
+
+  // --- Lifetime ---
 
   Level();
   ~Level();
@@ -211,35 +245,77 @@ class Level {
   friend void swap(Level& first, Level& second) noexcept { first.swap(second); }
   void reset();
 
-  [[nodiscard]] static ArxReturnCode fromNative(Level& out, const fts::Data& fts, const llf::Data* llf = nullptr,
-                                                const dlf::Data* dlf = nullptr);
-  [[nodiscard]] static ArxReturnCode fromGlb(Level& out, std::span<const std::uint8_t> data);
-  [[nodiscard]] static ArxReturnCode fromGlb(Level& out, std::span<const std::uint8_t> data,
-                                             const GlbImportOptions& options, GlbImportInfo* info = nullptr);
+  // --- Conversion ---
 
-  [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out) const;
-  [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out, const GlbExportOptions& options) const;
-  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeBakeOptions& options, NativeLevelBundle& out) const;
-  [[nodiscard]] ArxReturnCode bakeNativeDlf(const NativeDlfBakeOptions& options, dlf::Data& out) const;
-  [[nodiscard]] ArxReturnCode validate() const;
-  [[nodiscard]] ArxReturnCode validateMesh() const;
-  [[nodiscard]] ArxReturnCode validateVertices() const;
-  [[nodiscard]] ArxReturnCode validateTextures() const;
-  [[nodiscard]] ArxReturnCode validateFaces() const;
-  [[nodiscard]] ArxReturnCode validateFaceRooms() const;
-  [[nodiscard]] ArxReturnCode validateCornerColors() const;
-  [[nodiscard]] ArxReturnCode validateRooms() const;
-  [[nodiscard]] ArxReturnCode validatePortals() const;
-  [[nodiscard]] ArxReturnCode validateRoomDistances() const;
-  [[nodiscard]] ArxReturnCode validateNavSurface() const;
-  [[nodiscard]] ArxReturnCode validateAnchors() const;
-  [[nodiscard]] ArxReturnCode validateAnchorConnections() const;
-  [[nodiscard]] ArxReturnCode validateLights() const;
-  [[nodiscard]] ArxReturnCode validatePlayerSpawn() const;
-  [[nodiscard]] ArxReturnCode validateEntities() const;
-  [[nodiscard]] ArxReturnCode validateFogs() const;
-  [[nodiscard]] ArxReturnCode validateZones() const;
-  [[nodiscard]] ArxReturnCode validatePaths() const;
+  [[nodiscard]] static ArxReturnCode importNative(Level& out, const fts::Data& fts, const llf::Data* llf = nullptr,
+                                                  const dlf::Data* dlf = nullptr,
+                                                  std::vector<std::string>* texture_source_paths = nullptr) noexcept;
+  [[nodiscard]] static ArxReturnCode importGlb(Level& out, std::span<const std::uint8_t> data) noexcept;
+  [[nodiscard]] static ArxReturnCode importGlb(Level& out, std::span<const std::uint8_t> data,
+                                               const GlbImportOptions& options, ArxLevelGlbImportInfo* info = nullptr,
+                                               std::vector<std::string>* texture_source_paths = nullptr) noexcept;
+
+  [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out, const GlbExportOptions& options) const noexcept;
+  [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out, std::span<const Model* const> model_previews,
+                                        ArxLevelModelPreviewReport* report = nullptr) const noexcept;
+  [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out, std::span<const Model* const> model_previews,
+                                        const GlbExportOptions& options,
+                                        ArxLevelModelPreviewReport* report = nullptr) const noexcept;
+  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeBakeOptions& options, NativeLevelBundle& out) const noexcept;
+  [[nodiscard]] ArxReturnCode bakeDlf(const DlfBakeOptions& options, dlf::Data& out) const noexcept;
+
+  // --- Validation ---
+
+  [[nodiscard]] ArxReturnCode validate() const noexcept;
+  [[nodiscard]] ArxReturnCode validateMesh() const noexcept;
+  [[nodiscard]] ArxReturnCode validateVertices() const noexcept;
+  [[nodiscard]] ArxReturnCode validateTextures() const noexcept;
+  [[nodiscard]] ArxReturnCode validateFaces() const noexcept;
+  [[nodiscard]] ArxReturnCode validateFaceRooms() const noexcept;
+  [[nodiscard]] ArxReturnCode validateCornerColors() const noexcept;
+  [[nodiscard]] ArxReturnCode validateRooms() const noexcept;
+  [[nodiscard]] ArxReturnCode validatePortals() const noexcept;
+  [[nodiscard]] ArxReturnCode validateRoomDistances() const noexcept;
+  [[nodiscard]] ArxReturnCode validateNavSurface() const noexcept;
+  [[nodiscard]] ArxReturnCode validateAnchors() const noexcept;
+  [[nodiscard]] ArxReturnCode validateAnchorConnections() const noexcept;
+  [[nodiscard]] ArxReturnCode validateLights() const noexcept;
+  [[nodiscard]] ArxReturnCode validatePlayerSpawn() const noexcept;
+  [[nodiscard]] ArxReturnCode validateEntities() const noexcept;
+  [[nodiscard]] ArxReturnCode validateFogs() const noexcept;
+  [[nodiscard]] ArxReturnCode validateZones() const noexcept;
+  [[nodiscard]] ArxReturnCode validatePaths() const noexcept;
+  [[nodiscard]] ArxReturnCode validateMinimap() const noexcept;
+  [[nodiscard]] ArxReturnCode validateLoadingScreen() const noexcept;
+
+  // --- Resource data ---
+
+  [[nodiscard]] std::string_view resourcePath() const noexcept;
+  [[nodiscard]] ArxReturnCode setResourcePath(std::string_view resource_path) noexcept;
+
+  // --- Images ---
+
+  [[nodiscard]] MinimapView minimap() const noexcept;
+  [[nodiscard]] ArxEncodedImageView loadingScreen() const noexcept;
+  [[nodiscard]] ArxReturnCode setMinimap(ArxEncodedImageView encoded_image, ArxRect world_xz_bounds) noexcept;
+  [[nodiscard]] ArxReturnCode setMinimapFromProjection(ArxEncodedImageView encoded_image,
+                                                       ArxVector2 projection_offset) noexcept;
+  void clearMinimap() noexcept;
+  [[nodiscard]] ArxReturnCode renderMinimapPng(const MinimapRenderOptions& options,
+                                               std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode renderGameMinimapPng(const GameMinimapRenderOptions& options,
+                                                   std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode renderCompactMinimapPng(ArxVector2& out_projection_offset,
+                                                      std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode setLoadingScreen(ArxEncodedImageView encoded_image) noexcept;
+  void clearLoadingScreen() noexcept;
+  [[nodiscard]] ArxReturnCode renderLoadingScreenPng(std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode renderFullscreenLoadingScreenPng(std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode transcodeLoadingScreenPng(std::vector<std::uint8_t>& out) const noexcept;
+
+  // --- Inspection ---
+
   [[nodiscard]] std::optional<ArxAabb> bounds() const;
   [[nodiscard]] std::optional<ArxAabb> referencedBounds() const;
 
@@ -261,7 +337,7 @@ class Level {
                                            ArxLevelVertex* out_vertices) const noexcept;
   [[nodiscard]] ArxReturnCode copyFaces(std::size_t offset, std::size_t count, ArxLevelFace* out_faces) const noexcept;
   [[nodiscard]] ArxReturnCode copyTextureViews(std::size_t offset, std::size_t count,
-                                               ArxLevelTextureView* out_views) const noexcept;
+                                               ArxTextureView* out_views) const noexcept;
   [[nodiscard]] ArxReturnCode copyRooms(std::size_t offset, std::size_t count, ArxLevelRoom* out_rooms) const noexcept;
   [[nodiscard]] ArxReturnCode copyPortals(std::size_t offset, std::size_t count,
                                           ArxLevelPortal* out_portals) const noexcept;
@@ -288,90 +364,107 @@ class Level {
   [[nodiscard]] ArxReturnCode copyPaths(std::size_t offset, std::size_t count, ArxLevelPath* out_paths) const noexcept;
   [[nodiscard]] ArxReturnCode copyPathNodes(PathIndex path, std::size_t offset, std::size_t count,
                                             ArxLevelPathNode* out_nodes) const noexcept;
-  [[nodiscard]] ArxReturnCode getRoomDistance(RoomIndex room_a, RoomIndex room_b, std::uint8_t& out_has_distance,
-                                              ArxLevelRoomDistance& out_distance) const noexcept;
+  [[nodiscard]] ArxReturnCode roomDistance(RoomIndex room_a, RoomIndex room_b, std::uint8_t& out_has_distance,
+                                           ArxLevelRoomDistance& out_distance) const noexcept;
+
+  // --- Mesh editing ---
 
   [[nodiscard]] ArxReturnCode setVertex(VertexIndex index, ArxLevelVertex vertex) noexcept;
-  [[nodiscard]] ArxReturnCode addVertex(ArxLevelVertex vertex, VertexIndex& out_index);
+  [[nodiscard]] ArxReturnCode addVertex(ArxLevelVertex vertex, VertexIndex& out_index) noexcept;
   [[nodiscard]] ArxReturnCode addVertices(const ArxLevelVertex* vertices, std::size_t count,
-                                          VertexIndex& out_first_index);
-  [[nodiscard]] ArxReturnCode setFace(FaceIndex index, const ArxLevelFace& face);
-  [[nodiscard]] ArxReturnCode addFace(const ArxLevelFace& face, FaceIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeFace(FaceIndex index);
-  [[nodiscard]] ArxReturnCode compactVertices(std::size_t* removed = nullptr);
-  [[nodiscard]] ArxReturnCode compactTextures(std::size_t* removed = nullptr);
-  [[nodiscard]] ArxReturnCode weldVertices();
-  [[nodiscard]] ArxReturnCode weldVertices(const VertexWeldOptions& options);
-  [[nodiscard]] ArxReturnCode setTexture(TextureIndex index, const ArxLevelTextureView& texture);
-  [[nodiscard]] ArxReturnCode addTexture(const ArxLevelTextureView& texture, TextureIndex& out_index);
-  [[nodiscard]] ArxReturnCode setTextureImage(TextureIndex index, ArxEncodedImageView encoded_image);
+                                          VertexIndex& out_first_index) noexcept;
+  [[nodiscard]] ArxReturnCode setFace(FaceIndex index, const ArxLevelFace& face) noexcept;
+  [[nodiscard]] ArxReturnCode addFace(const ArxLevelFace& face, FaceIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeFace(FaceIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode compactVertices(std::size_t* removed = nullptr) noexcept;
+  [[nodiscard]] ArxReturnCode compactTextures(std::size_t* removed = nullptr) noexcept;
+  [[nodiscard]] ArxReturnCode rebaseTexturePaths(std::string_view directory) noexcept;
+  [[nodiscard]] ArxReturnCode weldVertices() noexcept;
+  [[nodiscard]] ArxReturnCode weldVertices(const VertexWeldOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode setTexture(TextureIndex index, const ArxTextureView& texture) noexcept;
+  [[nodiscard]] ArxReturnCode addTexture(const ArxTextureView& texture, TextureIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode setTextureImage(TextureIndex index, ArxEncodedImageView encoded_image) noexcept;
   [[nodiscard]] ArxReturnCode clearTextureImage(TextureIndex index) noexcept;
   [[nodiscard]] ArxReturnCode setFaceRoom(FaceIndex face, RoomIndex room) noexcept;
-  [[nodiscard]] ArxReturnCode setCornerColor(FaceIndex face, std::uint8_t corner, ArxColor3 color);
+  [[nodiscard]] ArxReturnCode setCornerColor(FaceIndex face, std::uint8_t corner, ArxColor3 color) noexcept;
   void clearCornerColors() noexcept;
-  [[nodiscard]] ArxReturnCode replaceMesh(const ArxLevelMeshInput& mesh);
+  [[nodiscard]] ArxReturnCode replaceMesh(const ArxLevelMeshInput& mesh) noexcept;
   void clearMesh() noexcept;
 
-  [[nodiscard]] ArxReturnCode setRoom(RoomIndex index, const ArxLevelRoom& room);
-  [[nodiscard]] ArxReturnCode addRoom(const ArxLevelRoom& room, RoomIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeRoom(RoomIndex index);
-  [[nodiscard]] ArxReturnCode setPortal(PortalIndex index, const ArxLevelPortal& portal);
-  [[nodiscard]] ArxReturnCode addPortal(const ArxLevelPortal& portal, PortalIndex& out_index);
-  [[nodiscard]] ArxReturnCode removePortal(PortalIndex index);
-  [[nodiscard]] ArxReturnCode setRoomDistance(const ArxLevelRoomDistance& distance);
-  [[nodiscard]] ArxReturnCode replaceRoomDistances(const ArxLevelRoomDistance* distances, std::size_t count);
+  // --- Rooms ---
+
+  [[nodiscard]] ArxReturnCode setRoom(RoomIndex index, const ArxLevelRoom& room) noexcept;
+  [[nodiscard]] ArxReturnCode addRoom(const ArxLevelRoom& room, RoomIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeRoom(RoomIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode setPortal(PortalIndex index, const ArxLevelPortal& portal) noexcept;
+  [[nodiscard]] ArxReturnCode addPortal(const ArxLevelPortal& portal, PortalIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removePortal(PortalIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode setRoomDistance(const ArxLevelRoomDistance& distance) noexcept;
+  [[nodiscard]] ArxReturnCode replaceRoomDistances(const ArxLevelRoomDistance* distances, std::size_t count) noexcept;
   void clearRoomDistances() noexcept;
 
-  [[nodiscard]] ArxReturnCode setAnchor(AnchorIndex index, const ArxLevelAnchor& anchor);
-  [[nodiscard]] ArxReturnCode addAnchor(const ArxLevelAnchor& anchor, AnchorIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeAnchor(AnchorIndex index);
-  [[nodiscard]] ArxReturnCode setAnchorConnection(AnchorConnectionIndex index, ArxLevelAnchorConnection connection);
+  // --- Navigation ---
+
+  [[nodiscard]] ArxReturnCode setAnchor(AnchorIndex index, const ArxLevelAnchor& anchor) noexcept;
+  [[nodiscard]] ArxReturnCode addAnchor(const ArxLevelAnchor& anchor, AnchorIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeAnchor(AnchorIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode setAnchorConnection(AnchorConnectionIndex index,
+                                                  ArxLevelAnchorConnection connection) noexcept;
   [[nodiscard]] ArxReturnCode addAnchorConnection(ArxLevelAnchorConnection connection,
-                                                  AnchorConnectionIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeAnchorConnection(AnchorConnectionIndex index);
-  [[nodiscard]] ArxReturnCode replaceAnchors(const ArxLevelAnchorsInput& anchors);
+                                                  AnchorConnectionIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeAnchorConnection(AnchorConnectionIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode replaceAnchors(const ArxLevelAnchorsInput& anchors) noexcept;
   void clearAnchors() noexcept;
 
-  [[nodiscard]] ArxReturnCode setNavSurface(const ArxLevelNavSurfaceInput& surface);
+  [[nodiscard]] ArxReturnCode setNavSurface(const ArxLevelNavSurfaceInput& surface) noexcept;
   void clearNavSurface() noexcept;
 
-  [[nodiscard]] ArxReturnCode setLight(LightIndex index, const ArxLevelLight& light);
-  [[nodiscard]] ArxReturnCode addLight(const ArxLevelLight& light, LightIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeLight(LightIndex index);
+  // --- Scene ---
 
-  [[nodiscard]] ArxReturnCode setPlayerSpawn(const ArxLevelPlayerSpawn& spawn);
+  [[nodiscard]] ArxReturnCode setLight(LightIndex index, const ArxLevelLight& light) noexcept;
+  [[nodiscard]] ArxReturnCode addLight(const ArxLevelLight& light, LightIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeLight(LightIndex index) noexcept;
+
+  [[nodiscard]] ArxReturnCode setPlayerSpawn(const ArxLevelPlayerSpawn& spawn) noexcept;
   void clearPlayerSpawn() noexcept;
-  [[nodiscard]] ArxReturnCode setEntity(EntityIndex index, const ArxLevelEntity& entity);
-  [[nodiscard]] ArxReturnCode addEntity(const ArxLevelEntity& entity, EntityIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeEntity(EntityIndex index);
-  [[nodiscard]] ArxReturnCode setFog(FogIndex index, const ArxLevelFog& fog);
-  [[nodiscard]] ArxReturnCode addFog(const ArxLevelFog& fog, FogIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeFog(FogIndex index);
-  [[nodiscard]] ArxReturnCode setZone(ZoneIndex index, const ArxLevelZoneInput& zone);
-  [[nodiscard]] ArxReturnCode addZone(const ArxLevelZoneInput& zone, ZoneIndex& out_index);
-  [[nodiscard]] ArxReturnCode removeZone(ZoneIndex index);
-  [[nodiscard]] ArxReturnCode setPath(PathIndex index, const ArxLevelPathInput& path);
-  [[nodiscard]] ArxReturnCode addPath(const ArxLevelPathInput& path, PathIndex& out_index);
-  [[nodiscard]] ArxReturnCode removePath(PathIndex index);
+  [[nodiscard]] ArxReturnCode setEntity(EntityIndex index, const ArxLevelEntity& entity) noexcept;
+  [[nodiscard]] ArxReturnCode addEntity(const ArxLevelEntity& entity, EntityIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeEntity(EntityIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode setFog(FogIndex index, const ArxLevelFog& fog) noexcept;
+  [[nodiscard]] ArxReturnCode addFog(const ArxLevelFog& fog, FogIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeFog(FogIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode setZone(ZoneIndex index, const ArxLevelZoneInput& zone) noexcept;
+  [[nodiscard]] ArxReturnCode addZone(const ArxLevelZoneInput& zone, ZoneIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removeZone(ZoneIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode setPath(PathIndex index, const ArxLevelPathInput& path) noexcept;
+  [[nodiscard]] ArxReturnCode addPath(const ArxLevelPathInput& path, PathIndex& out_index) noexcept;
+  [[nodiscard]] ArxReturnCode removePath(PathIndex index) noexcept;
 
-  [[nodiscard]] ArxReturnCode generateNavSurface();
-  [[nodiscard]] ArxReturnCode generateNavSurface(const NavSurfaceGenOptions& options);
-  [[nodiscard]] ArxReturnCode setNavSurfaceFromFloor();
-  [[nodiscard]] ArxReturnCode setNavSurfaceFromFloor(const NavSurfaceSourceOptions& options);
-  [[nodiscard]] ArxReturnCode pruneNavSurfaceIslands();
-  [[nodiscard]] ArxReturnCode pruneNavSurfaceIslands(const NavSurfacePruneOptions& options);
-  [[nodiscard]] ArxReturnCode generateAnchors();
-  [[nodiscard]] ArxReturnCode generateAnchors(const AnchorGenOptions& options);
-  [[nodiscard]] ArxReturnCode generateAnchorConnections();
-  [[nodiscard]] ArxReturnCode generateAnchorConnections(const AnchorConnectionGenOptions& options);
-  [[nodiscard]] ArxReturnCode pruneAnchorIslands();
-  [[nodiscard]] ArxReturnCode pruneAnchorIslands(const AnchorPruneOptions& options);
-  [[nodiscard]] ArxReturnCode generateRoomDistances();
-  [[nodiscard]] ArxReturnCode generateRoomDistances(const RoomDistanceGenOptions& options);
-  [[nodiscard]] ArxReturnCode generateStaticLighting();
-  [[nodiscard]] ArxReturnCode generateStaticLighting(const StaticLightingGenOptions& options);
+  // --- Generation ---
+
+  [[nodiscard]] ArxReturnCode generateNavSurface() noexcept;
+  [[nodiscard]] ArxReturnCode generateNavSurface(const NavSurfaceGenOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode setNavSurfaceFromFloor() noexcept;
+  [[nodiscard]] ArxReturnCode setNavSurfaceFromFloor(const NavSurfaceSourceOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode pruneNavSurfaceIslands() noexcept;
+  [[nodiscard]] ArxReturnCode pruneNavSurfaceIslands(const NavSurfacePruneOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode generateAnchors() noexcept;
+  [[nodiscard]] ArxReturnCode generateAnchors(const AnchorGenOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode generateAnchorConnections() noexcept;
+  [[nodiscard]] ArxReturnCode generateAnchorConnections(const AnchorConnectionGenOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode pruneAnchorIslands() noexcept;
+  [[nodiscard]] ArxReturnCode pruneAnchorIslands(const AnchorPruneOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode generateRoomDistances() noexcept;
+  [[nodiscard]] ArxReturnCode generateRoomDistances(const RoomDistanceGenOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode generateStaticLighting() noexcept;
+  [[nodiscard]] ArxReturnCode generateStaticLighting(const StaticLightingGenOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode generateMinimap() noexcept;
+  [[nodiscard]] ArxReturnCode generateMinimap(const MinimapGenerationOptions& options) noexcept;
 
  private:
+  ArxReturnCode renderMinimapProjectionPng(const MinimapRenderOptions& options, std::optional<ArxColor3> border_color,
+                                           std::vector<std::uint8_t>& out) const;
+
   struct Data;
 
   std::unique_ptr<Data> data_;

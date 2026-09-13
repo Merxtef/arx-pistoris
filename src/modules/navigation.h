@@ -3,10 +3,9 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 
@@ -38,7 +37,7 @@ struct SurfaceDebugTriangle {
   std::array<ArxVector3, 3> vertices = {};
 };
 
-struct NavSurfaceGenDiagnostics {
+struct NavSurfaceGenerationDiagnostics {
   std::vector<SurfaceDebugTriangle> support;
   std::vector<SurfaceDebugTriangle> base;
   std::vector<SurfaceDebugTriangle> repaired;
@@ -48,19 +47,19 @@ struct NavSurfacePruneDiagnostics {
   std::vector<SurfaceDebugTriangle> pruned;
 };
 
-enum class AnchorGenDebugStatus : std::uint8_t {
+enum class AnchorGenerationDebugStatus : std::uint8_t {
   kRepaired,
   kRejected,
 };
 
-struct AnchorGenDebugPoint {
+struct AnchorGenerationDebugPoint {
   ArxVector3 requested = {};
   ArxVector3 resolved = {};
-  AnchorGenDebugStatus status = AnchorGenDebugStatus::kRejected;
+  AnchorGenerationDebugStatus status = AnchorGenerationDebugStatus::kRejected;
 };
 
-struct AnchorGenDiagnostics {
-  std::vector<AnchorGenDebugPoint> points;
+struct AnchorGenerationDiagnostics {
+  std::vector<AnchorGenerationDebugPoint> points;
 };
 
 struct AnchorComponentPruneDiagnostics {
@@ -111,17 +110,17 @@ struct AnchorConnectionRejectedDebugSegment {
   int step_index = 0;
 };
 
-struct AnchorConnectionGenDiagnostics {
+struct AnchorConnectionGenerationDiagnostics {
   std::vector<AnchorConnectionEndpointDebugPoint> skipped_endpoints;
   std::vector<AnchorConnectionRejectedDebugSegment> rejected_connections;
 };
 
 struct NavigationDiagnostics {
-  NavSurfaceGenDiagnostics surface;
+  NavSurfaceGenerationDiagnostics surface;
   NavSurfacePruneDiagnostics surface_pruning;
-  AnchorGenDiagnostics anchors;
+  AnchorGenerationDiagnostics anchors;
   AnchorComponentPruneDiagnostics anchor_pruning;
-  AnchorConnectionGenDiagnostics connections;
+  AnchorConnectionGenerationDiagnostics connections;
 };
 
 }  // namespace navigation
@@ -176,7 +175,9 @@ enum class Error : std::uint8_t {
   kBadAnchorFlags,
   kTooManyConnections,
   kBadConnectionIndex,
+  kDuplicateConnection,
   kBadConnectionOrder,
+  kBadIndex,
 };
 
 struct NavSurfaceSourceOptions {
@@ -185,7 +186,7 @@ struct NavSurfaceSourceOptions {
   FaceType support_ignore_flags = kDefaultNavSurfaceIgnoreFlags;
 };
 
-struct NavSurfaceGenOptions : NavSurfaceSourceOptions {
+struct NavSurfaceGenerationOptions : NavSurfaceSourceOptions {
   float radius = kDefaultAnchorRadius;
   float height = kDefaultAnchorHeight;
   float max_step_up = kDefaultNavSurfaceMaxStepUp;
@@ -196,7 +197,7 @@ struct NavSurfacePruneOptions {
   double min_component_area = 0.0;
 };
 
-struct AnchorGenOptions {
+struct AnchorGenerationOptions {
   float sample_spacing = 100.0f;
   float radius = kDefaultAnchorRadius;
   float height = kDefaultAnchorHeight;
@@ -207,7 +208,7 @@ struct AnchorComponentPruneOptions {
   std::uint32_t min_component_anchor_count = 1;
 };
 
-struct AnchorConnectionGenOptions {
+struct AnchorConnectionGenerationOptions {
   float max_distance = 150.0f;
   float max_step_distance = 40.0f;
   float max_step_up = 55.0f;
@@ -215,32 +216,86 @@ struct AnchorConnectionGenOptions {
   int max_steps = 100;
 };
 
+struct NavSurfaceComponentPrunePlan {
+  std::optional<NavSurface> replacement;
+  std::size_t removed_components = 0;
+  std::size_t removed_triangles = 0;
+  double removed_area = 0.0;
+};
+
+struct AnchorComponentPrunePlan {
+  std::vector<AnchorIndex> remap;
+  std::size_t kept_connection_count = 0;
+  std::size_t removed_components = 0;
+  std::size_t removed_anchors = 0;
+};
+
+// --- Validation ---
+
+Error validateAnchorCount(std::size_t count) noexcept;
 Error validateAnchor(const Anchor& anchor) noexcept;
 Error validateAnchorDefinitions(std::span<const Anchor> anchors);
-std::size_t makeAnchorNamesUnique(std::span<Anchor> anchors);
 Error validateConnection(const AnchorConnection& connection, std::size_t anchor_count);
 Error validateConnections(std::span<const Anchor> anchors, std::span<const AnchorConnection> connections);
+Error validateConnectionPlacement(const NavigationData& navigation, AnchorConnectionIndex index,
+                                  const AnchorConnection& connection) noexcept;
+Error validateConnectionInsertion(const NavigationData& navigation, const AnchorConnection& connection,
+                                  AnchorConnectionIndex& out_index) noexcept;
 Error validateSurface(const NavSurface& surface);
 Error validateSurface(const std::optional<NavSurface>& surface);
 Error validate(const NavigationData& navigation);
 
-Error generateSurface(NavSurface& out, const GeometryData& geometry, const NavSurfaceGenOptions& options,
-                      NavSurfaceGenDiagnostics* diagnostics = nullptr);
-Error generateSurfaceFromFloorPolygons(NavSurface& out, const GeometryData& geometry,
-                                       const NavSurfaceSourceOptions& options,
-                                       NavSurfaceGenDiagnostics* diagnostics = nullptr);
+// --- Queries ---
+
+std::size_t surfaceComponentCount(const NavSurface& surface);
+
+// --- Mutation ---
+
+void setAnchor(NavigationData& navigation, AnchorIndex index, Anchor anchor) noexcept;
+AnchorIndex addAnchor(NavigationData& navigation, Anchor anchor);
+void removeAnchor(NavigationData& navigation, AnchorIndex index) noexcept;
+void setConnection(NavigationData& navigation, AnchorConnectionIndex index, AnchorConnection connection) noexcept;
+void insertConnection(NavigationData& navigation, AnchorConnectionIndex index, AnchorConnection connection);
+void removeConnection(NavigationData& navigation, AnchorConnectionIndex index) noexcept;
+void replaceAnchors(NavigationData& navigation, std::vector<Anchor>&& anchors,
+                    std::vector<AnchorConnection>&& connections) noexcept;
+void replaceConnections(NavigationData& navigation, std::vector<AnchorConnection>&& connections) noexcept;
+void clearAnchors(NavigationData& navigation) noexcept;
+void setSurface(NavigationData& navigation, NavSurface surface) noexcept;
+void clearSurface(NavigationData& navigation) noexcept;
+
+// --- Repair ---
+
+void repairAnchorName(const NavigationData& navigation, Anchor& anchor, AnchorIndex ignored = kInvalidAnchorIndex);
+std::size_t repairAnchorNames(std::span<Anchor> anchors);
 Error pruneSurfaceComponents(NavSurface& surface, const NavSurfacePruneOptions& options,
                              NavSurfacePruneDiagnostics* diagnostics = nullptr);
-std::size_t surfaceComponentCount(const NavSurface& surface);
-Error generateAnchors(std::vector<Anchor>& out, const GeometryData& geometry, const NavSurface& surface,
-                      const ArxAabb& referenced_bounds, const AnchorGenOptions& options,
-                      AnchorGenDiagnostics* diagnostics = nullptr);
 Error pruneAnchorComponents(std::vector<Anchor>& anchors, std::vector<AnchorConnection>& connections,
                             const AnchorComponentPruneOptions& options,
                             AnchorComponentPruneDiagnostics* diagnostics = nullptr);
+Error planSurfaceComponentPrune(NavSurfaceComponentPrunePlan& out, const NavSurface& surface,
+                                const NavSurfacePruneOptions& options,
+                                NavSurfacePruneDiagnostics* diagnostics = nullptr);
+void applySurfaceComponentPrune(NavSurface& surface, NavSurfaceComponentPrunePlan&& plan) noexcept;
+Error planAnchorComponentPrune(AnchorComponentPrunePlan& out, std::span<const Anchor> anchors,
+                               std::span<const AnchorConnection> connections,
+                               const AnchorComponentPruneOptions& options,
+                               AnchorComponentPruneDiagnostics* diagnostics = nullptr);
+void applyAnchorComponentPrune(std::vector<Anchor>& anchors, std::vector<AnchorConnection>& connections,
+                               AnchorComponentPrunePlan&& plan) noexcept;
+
+// --- Generation ---
+
+Error generateSurface(NavSurface& out, const GeometryData& geometry, const NavSurfaceGenerationOptions& options,
+                      NavSurfaceGenerationDiagnostics* diagnostics = nullptr);
+Error generateSurfaceFromFloor(NavSurface& out, const GeometryData& geometry, const NavSurfaceSourceOptions& options,
+                               NavSurfaceGenerationDiagnostics* diagnostics = nullptr);
+Error generateAnchors(std::vector<Anchor>& out, const GeometryData& geometry, const NavSurface& surface,
+                      const ArxAabb& referenced_bounds, const AnchorGenerationOptions& options,
+                      AnchorGenerationDiagnostics* diagnostics = nullptr);
 Error generateAnchorConnections(std::vector<AnchorConnection>& out, const GeometryData& geometry,
-                                std::span<const Anchor> anchors, const AnchorConnectionGenOptions& options,
-                                AnchorConnectionGenDiagnostics* diagnostics = nullptr);
+                                std::span<const Anchor> anchors, const AnchorConnectionGenerationOptions& options,
+                                AnchorConnectionGenerationDiagnostics* diagnostics = nullptr);
 
 }  // namespace navigation
 }  // namespace pistoris

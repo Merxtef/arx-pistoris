@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
 namespace cli {
 

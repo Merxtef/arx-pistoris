@@ -3,6 +3,7 @@
 
 #include "routes/registry.h"
 
+#include "routes/ambiance/route.h"
 #include "routes/animation/route.h"
 #include "routes/descriptor.h"
 #include "routes/level/route.h"
@@ -15,6 +16,7 @@ namespace cli {
 RouteRegistryView routeRegistry() {
   static const RouteDescriptor kRoutes[] = {
       animation::routeDescriptor(),
+      ambiance::routeDescriptor(),
       model::routeDescriptor(),
       level::routeDescriptor(),
   };

@@ -1,0 +1,65 @@
+ON INIT {
+ SETNAME [description_human_male_armor_demonstrator]
+ SET @route 505
+ SET @head_covered 0
+ ACCEPT
+}
+
+ON INITEND {
+ GOSUB GO_TO_DESTINATION
+ ACCEPT
+}
+
+ON REACHEDTARGET {
+ IF (^TARGET == MARKER_0505) {
+  BEHAVIOR FRIENDLY
+  GOSUB RANDOMIZE_ARMOR
+  SET @route 506
+  TIMERroute 1 3 GOSUB GO_TO_DESTINATION ACCEPT
+  REFUSE
+ }
+ IF (^TARGET == MARKER_0506) {
+  BEHAVIOR FRIENDLY
+  SET @route 505
+  TIMERroute 1 10 GOSUB GO_TO_DESTINATION ACCEPT
+  REFUSE
+ }
+ ACCEPT
+}
+
+>>RANDOMIZE_ARMOR
+ TWEAK HEAD "base"
+ TWEAK TORSO "base"
+ TWEAK LEGS "base"
+
+ IF (@head_covered == 1) {
+  SET @head_covered 0
+ }
+ ELSE {
+  RANDOM 40 {
+   TWEAK HEAD "heavy_armor"
+   SET @head_covered 1
+  }
+ }
+
+ RANDOM 50 {
+  TWEAK TORSO "heavy_armor"
+ }
+ RANDOM 50 {
+  TWEAK LEGS "heavy_armor"
+ }
+RETURN
+
+>>GO_TO_DESTINATION
+ TIMERroute OFF
+ BEHAVIOR MOVE_TO
+ SETMOVEMODE RUN
+ IF (@route == 505) {
+  SETTARGET MARKER_0505
+  RETURN
+ }
+ IF (@route == 506) {
+  SETTARGET MARKER_0506
+  RETURN
+ }
+RETURN

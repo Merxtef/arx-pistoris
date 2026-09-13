@@ -3,11 +3,11 @@
 
 #include "objects.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 #include "arx_pistoris/level.hpp"
 
 #include "coordinates.h"
-#include "external/glb/utils/level/tokens.h"
+#include "external/glb/utils/tokens.h"
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 #include "utils/name_tokens.h"
@@ -21,6 +21,8 @@
 #include <vector>
 
 namespace pistoris::glb_level {
+
+using glb::parseFloatToken;
 
 constexpr std::string_view kAnchorPrefix = "arx_anchor__";
 constexpr std::string_view kRoomPrefix = "arx_room__";
@@ -84,9 +86,11 @@ bool isReservedRoomName(std::string_view name) { return name.starts_with(kRoomPr
 
 std::string roomNodeName(const Room& room) { return std::format("arx_room__{}", room.name); }
 
-std::string roomNameFromNode(std::string_view node_name) {
-  if (!isReservedRoomName(node_name)) return {};
-  return std::string(node_name.substr(kRoomPrefix.size()));
+std::optional<std::string> roomNameFromNode(std::string_view node_name) {
+  if (!isReservedRoomName(node_name)) return std::nullopt;
+  const std::string_view name = node_name.substr(kRoomPrefix.size());
+  if (name.empty() || hasDoubleUnderscore(name)) return std::nullopt;
+  return std::string(name);
 }
 
 std::string portalNodeName(const Portal& portal, const RoomsData& rooms) {

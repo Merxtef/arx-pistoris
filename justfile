@@ -98,10 +98,15 @@ dev:
 sanitize:
     cmake --workflow --preset sanitize
 
-# Build with clang-tidy diagnostics enforced as errors
+# Apply available clang-tidy fixes
 tidy:
     cmake --preset tidy
-    cmake --build --preset tidy
+    cmake --build --preset tidy --parallel 1
+
+# Check clang-tidy diagnostics as errors
+tidy-check:
+    cmake --preset tidy-check
+    cmake --build --preset tidy-check
 
 # Build the release preset
 release:
@@ -118,6 +123,11 @@ format-check:
     cmake --preset dev
     cmake --build --preset dev --target format-check
 
+# Regenerate cataloged native fixtures from authored sources
+regenerate-fixtures:
+    cmake --preset dev
+    cmake --build --preset dev --target regenerate-fixtures
+
 # Build fuzz targets
 fuzz-build:
     cmake --preset fuzz
@@ -126,7 +136,7 @@ fuzz-build:
 # Build, install, and verify the release CLI package
 [unix]
 package-smoke:
-    cmake --preset release -DARX_WARNINGS_AS_ERRORS=ON
+    cmake --preset release
     cmake --build --preset release --target arx_pistoris_cli
     cmake -E remove_directory build-release/package
     cmake --install build-release --prefix build-release/package/arx-pistoris
@@ -134,7 +144,7 @@ package-smoke:
 
 [windows]
 package-smoke:
-    cmake --preset release -DARX_WARNINGS_AS_ERRORS=ON
+    cmake --preset release
     cmake --build --preset release --target arx_pistoris_cli
     cmake -E remove_directory build-release/package
     cmake --install build-release --prefix build-release/package/arx-pistoris
@@ -143,16 +153,16 @@ package-smoke:
 # Run the local release gate
 pre-release:
     just format-check
-    cmake --preset dev -DARX_WARNINGS_AS_ERRORS=ON
+    cmake --preset dev
     cmake --build --preset dev
     ctest --preset dev
-    cmake --preset sanitize -DARX_WARNINGS_AS_ERRORS=ON
+    cmake --preset sanitize
     cmake --build --preset sanitize
     ctest --preset sanitize
-    cmake --preset tidy -DARX_WARNINGS_AS_ERRORS=ON
-    cmake --build --preset tidy
-    cmake --preset fuzz -DARX_WARNINGS_AS_ERRORS=ON
+    just tidy-check
+    cmake --preset fuzz
     cmake --build --preset fuzz
+    ctest --test-dir build-fuzz --output-on-failure -L fuzz-smoke
     just package-smoke
 
 # Run test binaries directly: just run-tests [suite] [target]
@@ -409,12 +419,12 @@ coverage path="":
       Write-Host "HTML report: $Html/index.html"
     }
 
-# Run a fuzzer: just fuzz <ftl|tea|obj|glb|fts|llf|dlf|level> [roundtrip|json|mtl|native-fts|native-llf|native-dlf|native-dlf-embedded]
+# Run a fuzzer: just fuzz <ftl|tea|amb|obj|glb|image|audio|model|animation|ambiance|fts|llf|dlf|level> [variant]
 [unix]
 fuzz format variant="":
     @just fuzz-run "{{ format }}" 0 "{{ variant }}"
 
-# Run a fuzzer with value profiling and final stats: just fuzz-mine <ftl|tea|obj|glb|fts|llf|dlf|level> [roundtrip|json|mtl|native-fts|native-llf|native-dlf|native-dlf-embedded]
+# Run a fuzzer with value profiling and final stats: just fuzz-mine <format> [variant]
 [unix]
 fuzz-mine format variant="":
     @just fuzz-run "{{ format }}" 1 "{{ variant }}"
@@ -428,27 +438,34 @@ fuzz-run format mine="0" variant="":
     mine="{{ mine }}"
 
     case "$format/$variant" in
-      ftl/)          exe=arx_pistoris_ftl_fuzz;           corpus=fuzz-corpus/ftl;           seeds=data/fixtures/model/native; dict=fuzz/ftl.dict ;;
-      ftl/roundtrip) exe=arx_pistoris_ftl_roundtrip_fuzz; corpus=fuzz-corpus/ftl-roundtrip; seeds=data/fixtures/model/native; dict=fuzz/ftl.dict ;;
-      ftl/json)      exe=arx_pistoris_ftl_json_fuzz;      corpus=fuzz-corpus/ftl-json;      seeds=fuzz/seeds/ftl-json; dict= ;;
-      tea/)          exe=arx_pistoris_tea_fuzz;           corpus=fuzz-corpus/tea;           seeds=data/fixtures/animation/native; dict=fuzz/tea.dict ;;
-      tea/roundtrip) exe=arx_pistoris_tea_roundtrip_fuzz; corpus=fuzz-corpus/tea-roundtrip; seeds=data/fixtures/animation/native; dict=fuzz/tea.dict ;;
-      tea/json)      exe=arx_pistoris_tea_json_fuzz;      corpus=fuzz-corpus/tea-json;      seeds=fuzz/seeds/tea-json; dict= ;;
-      obj/)          exe=arx_pistoris_obj_fuzz;           corpus=fuzz-corpus/obj;           seeds=data/fixtures/model/obj; dict=fuzz/obj.dict ;;
-      obj/mtl)       exe=arx_pistoris_obj_with_mtl_fuzz;  corpus=fuzz-corpus/obj-with-mtl;  seeds=data/fixtures/model/obj; dict=fuzz/obj.dict ;;
-      glb/)          exe=arx_pistoris_glb_import_fuzz;    corpus=fuzz-corpus/glb;           seeds=build-fuzz/fuzz-seeds/glb; dict= ;;
-      fts/)          exe=arx_pistoris_fts_fuzz;           corpus=fuzz-corpus/fts;           seeds=data/fixtures/level/fts/native; dict=fuzz/fts.dict ;;
-      fts/roundtrip) exe=arx_pistoris_fts_roundtrip_fuzz; corpus=fuzz-corpus/fts-roundtrip; seeds=data/fixtures/level/fts/native; dict=fuzz/fts.dict ;;
-      llf/)          exe=arx_pistoris_llf_fuzz;           corpus=fuzz-corpus/llf;           seeds=data/fixtures/level/llf/native; dict=fuzz/llf.dict ;;
-      llf/roundtrip) exe=arx_pistoris_llf_roundtrip_fuzz; corpus=fuzz-corpus/llf-roundtrip; seeds=data/fixtures/level/llf/native; dict=fuzz/llf.dict ;;
-      dlf/)          exe=arx_pistoris_dlf_fuzz;           corpus=fuzz-corpus/dlf;           seeds=data/fixtures/level/dlf/native; dict=fuzz/dlf.dict ;;
-      dlf/roundtrip) exe=arx_pistoris_dlf_roundtrip_fuzz; corpus=fuzz-corpus/dlf-roundtrip; seeds=data/fixtures/level/dlf/native; dict=fuzz/dlf.dict ;;
-      level/native-fts)          exe=arx_pistoris_level_native_fts_fuzz;          corpus=fuzz-corpus/level-native-fts;          seeds=data/fixtures/level/fts/native; dict=fuzz/fts.dict ;;
-      level/native-llf)          exe=arx_pistoris_level_native_llf_fuzz;          corpus=fuzz-corpus/level-native-llf;          seeds=data/fixtures/level/llf/native; dict=fuzz/llf.dict ;;
-      level/native-dlf)          exe=arx_pistoris_level_native_dlf_fuzz;          corpus=fuzz-corpus/level-native-dlf;          seeds=data/fixtures/level/dlf/native; dict=fuzz/dlf.dict ;;
-      level/native-dlf-embedded) exe=arx_pistoris_level_native_dlf_embedded_fuzz; corpus=fuzz-corpus/level-native-dlf-embedded; seeds=data/fixtures/level/dlf/native; dict=fuzz/dlf.dict ;;
+      ftl/)          exe=arx_pistoris_ftl_fuzz;           corpus=fuzz-corpus/ftl;           seeds=build-fuzz/fuzz-seeds/ftl; dict=fuzz/ftl.dict ;;
+      ftl/roundtrip) exe=arx_pistoris_ftl_roundtrip_fuzz; corpus=fuzz-corpus/ftl-roundtrip; seeds=build-fuzz/fuzz-seeds/ftl; dict=fuzz/ftl.dict ;;
+      model/native)  exe=arx_pistoris_model_native_import_fuzz; corpus=fuzz-corpus/model-native; seeds=build-fuzz/fuzz-seeds/ftl; dict=fuzz/ftl.dict ;;
+      model/glb)     exe=arx_pistoris_model_glb_import_fuzz; corpus=fuzz-corpus/model-glb; seeds=build-fuzz/fuzz-seeds/model-glb; dict= ;;
+      tea/)          exe=arx_pistoris_tea_fuzz;           corpus=fuzz-corpus/tea;           seeds=build-fuzz/fuzz-seeds/tea; dict=fuzz/tea.dict ;;
+      tea/roundtrip) exe=arx_pistoris_tea_roundtrip_fuzz; corpus=fuzz-corpus/tea-roundtrip; seeds=build-fuzz/fuzz-seeds/tea; dict=fuzz/tea.dict ;;
+      animation/native) exe=arx_pistoris_animation_native_import_fuzz; corpus=fuzz-corpus/animation-native; seeds=build-fuzz/fuzz-seeds/tea; dict=fuzz/tea.dict ;;
+      amb/)          exe=arx_pistoris_amb_fuzz;           corpus=fuzz-corpus/amb;           seeds=build-fuzz/fuzz-seeds/amb; dict= ;;
+      amb/roundtrip) exe=arx_pistoris_amb_roundtrip_fuzz; corpus=fuzz-corpus/amb-roundtrip; seeds=build-fuzz/fuzz-seeds/amb; dict= ;;
+      ambiance/native) exe=arx_pistoris_ambiance_native_import_fuzz; corpus=fuzz-corpus/ambiance-native; seeds=build-fuzz/fuzz-seeds/amb; dict= ;;
+      ambiance/glb)    exe=arx_pistoris_ambiance_glb_import_fuzz; corpus=fuzz-corpus/ambiance-glb; seeds=build-fuzz/fuzz-seeds/ambiance-glb; dict= ;;
+      obj/)          exe=arx_pistoris_obj_fuzz;           corpus=fuzz-corpus/obj;           seeds=build-fuzz/fuzz-seeds/obj; dict=fuzz/obj.dict ;;
+      obj/mtl)       exe=arx_pistoris_obj_with_mtl_fuzz;  corpus=fuzz-corpus/obj-with-mtl;  seeds=build-fuzz/fuzz-seeds/obj-mtl; dict=fuzz/obj.dict ;;
+      glb/)          exe=arx_pistoris_glb_container_fuzz; corpus=fuzz-corpus/glb-container; seeds=build-fuzz/fuzz-seeds/glb-container; dict= ;;
+      image/)        exe=arx_pistoris_image_fuzz;         corpus=fuzz-corpus/image;         seeds=build-fuzz/fuzz-seeds/image; dict= ;;
+      audio/)        exe=arx_pistoris_audio_fuzz;         corpus=fuzz-corpus/audio;         seeds=build-fuzz/fuzz-seeds/audio; dict= ;;
+      fts/)          exe=arx_pistoris_fts_fuzz;           corpus=fuzz-corpus/fts;           seeds=build-fuzz/fuzz-seeds/fts; dict=fuzz/fts.dict ;;
+      fts/roundtrip) exe=arx_pistoris_fts_roundtrip_fuzz; corpus=fuzz-corpus/fts-roundtrip; seeds=build-fuzz/fuzz-seeds/fts; dict=fuzz/fts.dict ;;
+      llf/)          exe=arx_pistoris_llf_fuzz;           corpus=fuzz-corpus/llf;           seeds=build-fuzz/fuzz-seeds/llf; dict=fuzz/llf.dict ;;
+      llf/roundtrip) exe=arx_pistoris_llf_roundtrip_fuzz; corpus=fuzz-corpus/llf-roundtrip; seeds=build-fuzz/fuzz-seeds/llf; dict=fuzz/llf.dict ;;
+      dlf/)          exe=arx_pistoris_dlf_fuzz;           corpus=fuzz-corpus/dlf;           seeds=build-fuzz/fuzz-seeds/dlf; dict=fuzz/dlf.dict ;;
+      dlf/roundtrip) exe=arx_pistoris_dlf_roundtrip_fuzz; corpus=fuzz-corpus/dlf-roundtrip; seeds=build-fuzz/fuzz-seeds/dlf; dict=fuzz/dlf.dict ;;
+      level/native-fts)          exe=arx_pistoris_level_native_fts_fuzz;          corpus=fuzz-corpus/level-native-fts;          seeds=build-fuzz/fuzz-seeds/fts; dict=fuzz/fts.dict ;;
+      level/native-llf)          exe=arx_pistoris_level_native_llf_fuzz;          corpus=fuzz-corpus/level-native-llf;          seeds=build-fuzz/fuzz-seeds/llf; dict=fuzz/llf.dict ;;
+      level/native-dlf)          exe=arx_pistoris_level_native_dlf_fuzz;          corpus=fuzz-corpus/level-native-dlf;          seeds=build-fuzz/fuzz-seeds/dlf; dict=fuzz/dlf.dict ;;
+      level/native-dlf-embedded) exe=arx_pistoris_level_native_dlf_embedded_fuzz; corpus=fuzz-corpus/level-native-dlf-embedded; seeds=build-fuzz/fuzz-seeds/dlf; dict=fuzz/dlf.dict ;;
       level/glb)                 exe=arx_pistoris_level_glb_import_fuzz;          corpus=fuzz-corpus/level-glb;                 seeds=build-fuzz/fuzz-seeds/level-glb; dict=fuzz/level-glb.dict ;;
-      *) echo "error: unknown target '$format $variant'. Valid: ftl, ftl roundtrip, ftl json, tea, tea roundtrip, tea json, obj, obj mtl, glb, fts, fts roundtrip, llf, llf roundtrip, dlf, dlf roundtrip, level native-fts, level native-llf, level native-dlf, level native-dlf-embedded, level glb" >&2; exit 1 ;;
+      *) echo "error: unknown target '$format $variant'. See docs/TESTING.md for valid fuzz targets" >&2; exit 1 ;;
     esac
 
     exe_path="build-fuzz/bin/$exe"
@@ -468,12 +485,12 @@ fuzz-run format mine="0" variant="":
     echo "Running fuzzer: $exe"
     "$exe_path" "${args[@]}"
 
-# Run a fuzzer: just fuzz <ftl|tea|obj|glb|fts|llf|dlf|level> [roundtrip|json|mtl|native-fts|native-llf|native-dlf|native-dlf-embedded]
+# Run a fuzzer: just fuzz <ftl|tea|amb|obj|glb|image|audio|model|animation|ambiance|fts|llf|dlf|level> [variant]
 [windows]
 fuzz format variant="":
     @just fuzz-run "{{ format }}" 0 "{{ variant }}"
 
-# Run a fuzzer with value profiling and final stats: just fuzz-mine <ftl|tea|obj|glb|fts|llf|dlf|level> [roundtrip|json|mtl|native-fts|native-llf|native-dlf|native-dlf-embedded]
+# Run a fuzzer with value profiling and final stats: just fuzz-mine <format> [variant]
 [windows]
 fuzz-mine format variant="":
     @just fuzz-run "{{ format }}" 1 "{{ variant }}"
@@ -485,27 +502,34 @@ fuzz-run format mine="0" variant="":
     $Mine = '{{ mine }}'
 
     switch ("$Format/$Variant") {
-      'ftl/'          { $Exe = 'arx_pistoris_ftl_fuzz';           $Corpus = 'fuzz-corpus/ftl';           $Seeds = 'data/fixtures/model/native'; $Dict = 'fuzz/ftl.dict' }
-      'ftl/roundtrip' { $Exe = 'arx_pistoris_ftl_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/ftl-roundtrip'; $Seeds = 'data/fixtures/model/native'; $Dict = 'fuzz/ftl.dict' }
-      'ftl/json'      { $Exe = 'arx_pistoris_ftl_json_fuzz';      $Corpus = 'fuzz-corpus/ftl-json';      $Seeds = 'fuzz/seeds/ftl-json'; $Dict = $null }
-      'tea/'          { $Exe = 'arx_pistoris_tea_fuzz';           $Corpus = 'fuzz-corpus/tea';           $Seeds = 'data/fixtures/animation/native'; $Dict = 'fuzz/tea.dict' }
-      'tea/roundtrip' { $Exe = 'arx_pistoris_tea_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/tea-roundtrip'; $Seeds = 'data/fixtures/animation/native'; $Dict = 'fuzz/tea.dict' }
-      'tea/json'      { $Exe = 'arx_pistoris_tea_json_fuzz';      $Corpus = 'fuzz-corpus/tea-json';      $Seeds = 'fuzz/seeds/tea-json'; $Dict = $null }
-      'obj/'          { $Exe = 'arx_pistoris_obj_fuzz';           $Corpus = 'fuzz-corpus/obj';           $Seeds = 'data/fixtures/model/obj'; $Dict = 'fuzz/obj.dict' }
-      'obj/mtl'       { $Exe = 'arx_pistoris_obj_with_mtl_fuzz';  $Corpus = 'fuzz-corpus/obj-with-mtl';  $Seeds = 'data/fixtures/model/obj'; $Dict = 'fuzz/obj.dict' }
-      'glb/'          { $Exe = 'arx_pistoris_glb_import_fuzz';    $Corpus = 'fuzz-corpus/glb';           $Seeds = 'build-fuzz/fuzz-seeds/glb'; $Dict = $null }
-      'fts/'          { $Exe = 'arx_pistoris_fts_fuzz';           $Corpus = 'fuzz-corpus/fts';           $Seeds = 'data/fixtures/level/fts/native'; $Dict = 'fuzz/fts.dict' }
-      'fts/roundtrip' { $Exe = 'arx_pistoris_fts_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/fts-roundtrip'; $Seeds = 'data/fixtures/level/fts/native'; $Dict = 'fuzz/fts.dict' }
-      'llf/'          { $Exe = 'arx_pistoris_llf_fuzz';           $Corpus = 'fuzz-corpus/llf';           $Seeds = 'data/fixtures/level/llf/native'; $Dict = 'fuzz/llf.dict' }
-      'llf/roundtrip' { $Exe = 'arx_pistoris_llf_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/llf-roundtrip'; $Seeds = 'data/fixtures/level/llf/native'; $Dict = 'fuzz/llf.dict' }
-      'dlf/'          { $Exe = 'arx_pistoris_dlf_fuzz';           $Corpus = 'fuzz-corpus/dlf';           $Seeds = 'data/fixtures/level/dlf/native'; $Dict = 'fuzz/dlf.dict' }
-      'dlf/roundtrip' { $Exe = 'arx_pistoris_dlf_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/dlf-roundtrip'; $Seeds = 'data/fixtures/level/dlf/native'; $Dict = 'fuzz/dlf.dict' }
-      'level/native-fts'          { $Exe = 'arx_pistoris_level_native_fts_fuzz';          $Corpus = 'fuzz-corpus/level-native-fts';          $Seeds = 'data/fixtures/level/fts/native'; $Dict = 'fuzz/fts.dict' }
-      'level/native-llf'          { $Exe = 'arx_pistoris_level_native_llf_fuzz';          $Corpus = 'fuzz-corpus/level-native-llf';          $Seeds = 'data/fixtures/level/llf/native'; $Dict = 'fuzz/llf.dict' }
-      'level/native-dlf'          { $Exe = 'arx_pistoris_level_native_dlf_fuzz';          $Corpus = 'fuzz-corpus/level-native-dlf';          $Seeds = 'data/fixtures/level/dlf/native'; $Dict = 'fuzz/dlf.dict' }
-      'level/native-dlf-embedded' { $Exe = 'arx_pistoris_level_native_dlf_embedded_fuzz'; $Corpus = 'fuzz-corpus/level-native-dlf-embedded'; $Seeds = 'data/fixtures/level/dlf/native'; $Dict = 'fuzz/dlf.dict' }
+      'ftl/'          { $Exe = 'arx_pistoris_ftl_fuzz';           $Corpus = 'fuzz-corpus/ftl';           $Seeds = 'build-fuzz/fuzz-seeds/ftl'; $Dict = 'fuzz/ftl.dict' }
+      'ftl/roundtrip' { $Exe = 'arx_pistoris_ftl_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/ftl-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/ftl'; $Dict = 'fuzz/ftl.dict' }
+      'model/native'  { $Exe = 'arx_pistoris_model_native_import_fuzz'; $Corpus = 'fuzz-corpus/model-native'; $Seeds = 'build-fuzz/fuzz-seeds/ftl'; $Dict = 'fuzz/ftl.dict' }
+      'model/glb'     { $Exe = 'arx_pistoris_model_glb_import_fuzz'; $Corpus = 'fuzz-corpus/model-glb'; $Seeds = 'build-fuzz/fuzz-seeds/model-glb'; $Dict = $null }
+      'tea/'          { $Exe = 'arx_pistoris_tea_fuzz';           $Corpus = 'fuzz-corpus/tea';           $Seeds = 'build-fuzz/fuzz-seeds/tea'; $Dict = 'fuzz/tea.dict' }
+      'tea/roundtrip' { $Exe = 'arx_pistoris_tea_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/tea-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/tea'; $Dict = 'fuzz/tea.dict' }
+      'animation/native' { $Exe = 'arx_pistoris_animation_native_import_fuzz'; $Corpus = 'fuzz-corpus/animation-native'; $Seeds = 'build-fuzz/fuzz-seeds/tea'; $Dict = 'fuzz/tea.dict' }
+      'amb/'          { $Exe = 'arx_pistoris_amb_fuzz';           $Corpus = 'fuzz-corpus/amb';           $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = $null }
+      'amb/roundtrip' { $Exe = 'arx_pistoris_amb_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/amb-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = $null }
+      'ambiance/native' { $Exe = 'arx_pistoris_ambiance_native_import_fuzz'; $Corpus = 'fuzz-corpus/ambiance-native'; $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = $null }
+      'ambiance/glb'    { $Exe = 'arx_pistoris_ambiance_glb_import_fuzz'; $Corpus = 'fuzz-corpus/ambiance-glb'; $Seeds = 'build-fuzz/fuzz-seeds/ambiance-glb'; $Dict = $null }
+      'obj/'          { $Exe = 'arx_pistoris_obj_fuzz';           $Corpus = 'fuzz-corpus/obj';           $Seeds = 'build-fuzz/fuzz-seeds/obj'; $Dict = 'fuzz/obj.dict' }
+      'obj/mtl'       { $Exe = 'arx_pistoris_obj_with_mtl_fuzz';  $Corpus = 'fuzz-corpus/obj-with-mtl';  $Seeds = 'build-fuzz/fuzz-seeds/obj-mtl'; $Dict = 'fuzz/obj.dict' }
+      'glb/'          { $Exe = 'arx_pistoris_glb_container_fuzz'; $Corpus = 'fuzz-corpus/glb-container'; $Seeds = 'build-fuzz/fuzz-seeds/glb-container'; $Dict = $null }
+      'image/'        { $Exe = 'arx_pistoris_image_fuzz';         $Corpus = 'fuzz-corpus/image';         $Seeds = 'build-fuzz/fuzz-seeds/image'; $Dict = $null }
+      'audio/'        { $Exe = 'arx_pistoris_audio_fuzz';         $Corpus = 'fuzz-corpus/audio';         $Seeds = 'build-fuzz/fuzz-seeds/audio'; $Dict = $null }
+      'fts/'          { $Exe = 'arx_pistoris_fts_fuzz';           $Corpus = 'fuzz-corpus/fts';           $Seeds = 'build-fuzz/fuzz-seeds/fts'; $Dict = 'fuzz/fts.dict' }
+      'fts/roundtrip' { $Exe = 'arx_pistoris_fts_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/fts-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/fts'; $Dict = 'fuzz/fts.dict' }
+      'llf/'          { $Exe = 'arx_pistoris_llf_fuzz';           $Corpus = 'fuzz-corpus/llf';           $Seeds = 'build-fuzz/fuzz-seeds/llf'; $Dict = 'fuzz/llf.dict' }
+      'llf/roundtrip' { $Exe = 'arx_pistoris_llf_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/llf-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/llf'; $Dict = 'fuzz/llf.dict' }
+      'dlf/'          { $Exe = 'arx_pistoris_dlf_fuzz';           $Corpus = 'fuzz-corpus/dlf';           $Seeds = 'build-fuzz/fuzz-seeds/dlf'; $Dict = 'fuzz/dlf.dict' }
+      'dlf/roundtrip' { $Exe = 'arx_pistoris_dlf_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/dlf-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/dlf'; $Dict = 'fuzz/dlf.dict' }
+      'level/native-fts'          { $Exe = 'arx_pistoris_level_native_fts_fuzz';          $Corpus = 'fuzz-corpus/level-native-fts';          $Seeds = 'build-fuzz/fuzz-seeds/fts'; $Dict = 'fuzz/fts.dict' }
+      'level/native-llf'          { $Exe = 'arx_pistoris_level_native_llf_fuzz';          $Corpus = 'fuzz-corpus/level-native-llf';          $Seeds = 'build-fuzz/fuzz-seeds/llf'; $Dict = 'fuzz/llf.dict' }
+      'level/native-dlf'          { $Exe = 'arx_pistoris_level_native_dlf_fuzz';          $Corpus = 'fuzz-corpus/level-native-dlf';          $Seeds = 'build-fuzz/fuzz-seeds/dlf'; $Dict = 'fuzz/dlf.dict' }
+      'level/native-dlf-embedded' { $Exe = 'arx_pistoris_level_native_dlf_embedded_fuzz'; $Corpus = 'fuzz-corpus/level-native-dlf-embedded'; $Seeds = 'build-fuzz/fuzz-seeds/dlf'; $Dict = 'fuzz/dlf.dict' }
       'level/glb'                 { $Exe = 'arx_pistoris_level_glb_import_fuzz';          $Corpus = 'fuzz-corpus/level-glb';                 $Seeds = 'build-fuzz/fuzz-seeds/level-glb'; $Dict = 'fuzz/level-glb.dict' }
-      default         { Write-Host "error: unknown target '$Format $Variant'. Valid: ftl, ftl roundtrip, ftl json, tea, tea roundtrip, tea json, obj, obj mtl, glb, fts, fts roundtrip, llf, llf roundtrip, dlf, dlf roundtrip, level native-fts, level native-llf, level native-dlf, level native-dlf-embedded, level glb" -ForegroundColor Red; exit 1 }
+      default         { Write-Host "error: unknown target '$Format $Variant'. See docs/TESTING.md for valid fuzz targets" -ForegroundColor Red; exit 1 }
     }
 
     $ExePath = "build-fuzz/bin/$Exe.exe"

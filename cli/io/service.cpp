@@ -3,7 +3,7 @@
 
 #include "io/service.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/runtime/types.h"
 
 #include "console/diagnostics.h"
 #include "console/logging.h"
@@ -142,7 +142,7 @@ bool cli::IoService::writeFile(const char* path, const void* data, std::size_t s
   std::filesystem::path native_path;
   std::string error = path ? std::string() : std::string("path is null");
   if (!path || !io_detail::pathFromUtf8(path, native_path, error)) {
-    diagnostic(DiagnosticCode::kIoCreateFailed, "Invalid output path: %s", error.c_str());
+    diagnostic(DiagnosticCode::kIoPathInvalid, "Invalid output path: %s", error.c_str());
     return false;
   }
   return writeNativeFile(native_path, data, size);
@@ -157,7 +157,7 @@ bool cli::IoService::writeNativeFile(const std::filesystem::path& path, const vo
   const std::string display_path = io_detail::pathToUtf8(path);
   std::string error;
   if (!io_detail::validateNativePathSyntax(path, error)) {
-    diagnostic(DiagnosticCode::kIoCreateFailed, "Invalid output path '%s': %s", display_path.c_str(), error.c_str());
+    diagnostic(DiagnosticCode::kIoPathInvalid, "Invalid output path '%s': %s", display_path.c_str(), error.c_str());
     return false;
   }
 

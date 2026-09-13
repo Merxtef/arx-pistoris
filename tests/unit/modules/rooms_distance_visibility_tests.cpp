@@ -3,12 +3,16 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/flags.h"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/indices.h"
 
 #include "modules/geometry.h"
 #include "modules/rooms.h"
 #include "modules/rooms/internal.h"
+
+#include <cstdint>
+#include <span>
+#include <vector>
 
 using namespace pistoris;
 
@@ -49,12 +53,15 @@ TEST_SUITE("rooms::distance_visibility") {
     RoomsData rooms;
     rooms.definitions = {{"room_1"}, {"room_2"}};
     addVerticalBlocker(geometry, rooms, 0);
+    std::vector<std::uint32_t> scratch;
+    rooms::RoomGeometryIndex blocked(rooms, geometry);
 
-    CHECK(rooms::blockedByRoomGeometry(rooms, geometry, 0, {0.0f, -50.0f, 50.0f}, {100.0f, -50.0f, 50.0f}));
-    CHECK_FALSE(rooms::blockedByRoomGeometry(rooms, geometry, 1, {0.0f, -50.0f, 50.0f}, {100.0f, -50.0f, 50.0f}));
+    CHECK(rooms::blockedByRoomGeometry(blocked, 0, {0.0f, -50.0f, 50.0f}, {100.0f, -50.0f, 50.0f}, scratch));
+    CHECK_FALSE(rooms::blockedByRoomGeometry(blocked, 1, {0.0f, -50.0f, 50.0f}, {100.0f, -50.0f, 50.0f}, scratch));
 
     geometry.faces[0].flags = kFaceBitTrans;
-    CHECK_FALSE(rooms::blockedByRoomGeometry(rooms, geometry, 0, {0.0f, -50.0f, 50.0f}, {100.0f, -50.0f, 50.0f}));
+    rooms::RoomGeometryIndex ignored(rooms, geometry);
+    CHECK_FALSE(rooms::blockedByRoomGeometry(ignored, 0, {0.0f, -50.0f, 50.0f}, {100.0f, -50.0f, 50.0f}, scratch));
   }
 
   TEST_CASE("Adds visibility edges and diagnostics") {
@@ -68,13 +75,17 @@ TEST_SUITE("rooms::distance_visibility") {
     rooms::RoomDistanceOptions options;
     options.sample_spacing = 100.0f;
     options.max_link_distance = 200.0f;
-    rooms::RoomDistanceGenDiagnostics diagnostics;
+    rooms::RoomDistanceGenerationDiagnostics diagnostics;
+    rooms::RoomGeometryIndex room_geometry(rooms, geometry);
 
-    rooms::addVisibilityEdges(rooms, geometry, options, graph, &diagnostics);
+    rooms::addVisibilityEdges(rooms, room_geometry, options, graph, &diagnostics);
+    const rooms::RoomDistanceAdjacency adjacency =
+        rooms::buildAdjacency(graph.rooms[0].nodes.size(), graph.rooms[0].edges);
 
-    REQUIRE(graph.rooms[0].adjacency[0].size() == 1);
-    CHECK(graph.rooms[0].adjacency[0][0].to == 1);
-    CHECK(graph.rooms[0].adjacency[0][0].cost == doctest::Approx(100.0f));
+    const std::span<const rooms::RoomDistanceEdge> edges = rooms::adjacentEdges(adjacency, 0);
+    REQUIRE(edges.size() == 1);
+    CHECK(edges[0].to == 1);
+    CHECK(edges[0].cost == doctest::Approx(100.0f));
     REQUIRE(diagnostics.in_room_visibility_edges.size() == 1);
     CHECK(diagnostics.in_room_visibility_edges[0].room_1 == 0);
   }
@@ -90,11 +101,34 @@ TEST_SUITE("rooms::distance_visibility") {
     rooms::RoomDistanceOptions options;
     options.sample_spacing = 100.0f;
     options.max_link_distance = 50.0f;
+    rooms::RoomGeometryIndex room_geometry(rooms, geometry);
 
-    rooms::addVisibilityEdges(rooms, geometry, options, graph);
+    rooms::addVisibilityEdges(rooms, room_geometry, options, graph);
+    const rooms::RoomDistanceAdjacency adjacency =
+        rooms::buildAdjacency(graph.rooms[0].nodes.size(), graph.rooms[0].edges);
 
-    CHECK(graph.rooms[0].adjacency[0].empty());
-    CHECK(graph.rooms[0].adjacency[1].empty());
+    CHECK(rooms::adjacentEdges(adjacency, 0).empty());
+    CHECK(rooms::adjacentEdges(adjacency, 1).empty());
+  }
+
+  TEST_CASE("Finds links across more than one sampling cell") {
+    GeometryData geometry;
+    RoomsData rooms;
+    rooms.definitions = {{"room"}};
+    rooms::RoomDistanceGenerationGraph graph;
+    graph.rooms.resize(1);
+    rooms::addRoomNode(graph.rooms[0], {{99.0f, -50.0f, 0.0f}, 0});
+    rooms::addRoomNode(graph.rooms[0], {{201.0f, -50.0f, 0.0f}, 0});
+    rooms::RoomDistanceOptions options;
+    options.sample_spacing = 100.0f;
+    options.max_link_distance = 150.0f;
+    rooms::RoomGeometryIndex room_geometry(rooms, geometry);
+
+    rooms::addVisibilityEdges(rooms, room_geometry, options, graph);
+
+    REQUIRE(graph.rooms[0].edges.size() == 1);
+    CHECK(graph.rooms[0].edges[0].first == 0);
+    CHECK(graph.rooms[0].edges[0].second == 1);
   }
 
   TEST_CASE("Skips blocked visibility edges") {
@@ -109,12 +143,14 @@ TEST_SUITE("rooms::distance_visibility") {
     rooms::RoomDistanceOptions options;
     options.sample_spacing = 100.0f;
     options.max_link_distance = 200.0f;
+    rooms::RoomGeometryIndex blocked(rooms, geometry);
 
-    rooms::addVisibilityEdges(rooms, geometry, options, graph);
-    CHECK(graph.rooms[0].adjacency[0].empty());
+    rooms::addVisibilityEdges(rooms, blocked, options, graph);
+    CHECK(graph.rooms[0].edges.empty());
 
     rooms.face_rooms[0] = 1;
-    rooms::addVisibilityEdges(rooms, geometry, options, graph);
-    CHECK(graph.rooms[0].adjacency[0].size() == 1);
+    rooms::RoomGeometryIndex unblocked(rooms, geometry);
+    rooms::addVisibilityEdges(rooms, unblocked, options, graph);
+    CHECK(graph.rooms[0].edges.size() == 1);
   }
 }

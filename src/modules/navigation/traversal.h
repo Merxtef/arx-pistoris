@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
@@ -11,10 +11,11 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 namespace pistoris::navigation {
 
-struct AnchorConnectionGenOptions;
+struct AnchorConnectionGenerationOptions;
 
 enum class CylinderPlacementStatus : std::uint8_t {
   kPlaced,
@@ -87,14 +88,18 @@ class NavigationCollisionScene {
   NavigationCollisionScene& operator=(NavigationCollisionScene&&) = delete;
 
   [[nodiscard]] CylinderPlacementStatus endpointStatus(const ArxVector3& position, float radius, float height,
-                                                       float probe_depth, float tolerance) const;
+                                                       float probe_depth, float tolerance,
+                                                       std::vector<std::uint32_t>& candidate_scratch) const;
   [[nodiscard]] CylinderPlacementStatus placeEndpointAt(const ArxVector3& position, float radius, float height,
-                                                        float probe_depth, float tolerance, ArxVector3& out) const;
+                                                        float probe_depth, float tolerance, ArxVector3& out,
+                                                        std::vector<std::uint32_t>& candidate_scratch) const;
   [[nodiscard]] CylinderTraversalStatus traversalStatus(const ArxVector3& first, const ArxVector3& second, float radius,
                                                         float height, const CylinderTraversalOptions& options,
+                                                        std::vector<std::uint32_t>& candidate_scratch,
                                                         CylinderTraversalFailure* failure = nullptr) const;
   [[nodiscard]] bool traversable(const ArxVector3& first, const ArxVector3& second, float radius, float height,
-                                 const CylinderTraversalOptions& options) const;
+                                 const CylinderTraversalOptions& options,
+                                 std::vector<std::uint32_t>& candidate_scratch) const;
 
  private:
   struct Impl;
@@ -109,18 +114,20 @@ class StaticAnchorTraversal {
   StaticAnchorTraversal(StaticAnchorTraversal&&) = delete;
   StaticAnchorTraversal& operator=(StaticAnchorTraversal&&) = delete;
 
-  [[nodiscard]] CylinderPlacementStatus endpointStatus(const Anchor& anchor, const AnchorConnectionGenOptions& options,
-                                                       ArxVector3* resolved = nullptr) const;
+  [[nodiscard]] CylinderPlacementStatus endpointStatus(const Anchor& anchor,
+                                                       const AnchorConnectionGenerationOptions& options,
+                                                       ArxVector3* resolved = nullptr);
   [[nodiscard]] CylinderPlacementStatus placeEndpointAt(const ArxVector3& position, float radius, float height,
-                                                        ArxVector3& out) const;
+                                                        ArxVector3& out);
   [[nodiscard]] CylinderTraversalStatus traversalStatus(const Anchor& first, const Anchor& second,
-                                                        const AnchorConnectionGenOptions& options,
-                                                        CylinderTraversalFailure* failure = nullptr) const;
+                                                        const AnchorConnectionGenerationOptions& options,
+                                                        CylinderTraversalFailure* failure = nullptr);
   [[nodiscard]] bool traversable(const Anchor& first, const Anchor& second,
-                                 const AnchorConnectionGenOptions& options) const;
+                                 const AnchorConnectionGenerationOptions& options);
 
  private:
   NavigationCollisionScene scene_;
+  std::vector<std::uint32_t> candidate_scratch_;
 };
 
 }  // namespace pistoris::navigation

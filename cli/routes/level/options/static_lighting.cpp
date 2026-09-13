@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 #include "arx_pistoris/level.hpp"
 
 #include "console/diagnostics.h"
@@ -19,14 +19,13 @@ namespace {
 class GenerateStaticLightingModule final : public RouteModule {
  public:
   std::span<const char* const> keywords() const noexcept override {
-    static constexpr const char* kKeywords[] = {"--generate-static-lighting"};
+    static constexpr const char* kKeywords[] = {"--gen-static-lighting"};
     return kKeywords;
   }
 
   ModuleHelp help(const RouteDescriptor*) const noexcept override {
-    return {HelpSection::kOptions,
-            "--generate-static-lighting",
-            "Generate Level static corner lighting from current lights."};
+    return {
+        HelpSection::kOptions, "--gen-static-lighting", "Generate Level static corner lighting from current lights."};
   }
 
   std::span<const ModuleRef> children() const noexcept override {

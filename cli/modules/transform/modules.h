@@ -12,6 +12,8 @@ namespace cli::modules::transform {
 const Module& rotateModule();
 const Module& scaleModule();
 const Module& offsetModule();
+const Module& rebaseTexturesModule();
+const Module& rebaseSoundsModule();
 std::span<const ModuleRef> rootModules();
 
 }  // namespace cli::modules::transform

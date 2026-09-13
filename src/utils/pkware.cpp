@@ -3,7 +3,7 @@
 
 #include "pkware.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/status.h"
 
 #include <algorithm>
 #include <cstdint>

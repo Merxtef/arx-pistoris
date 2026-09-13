@@ -3,87 +3,196 @@
 
 #include "formats/classification.h"
 
+#include "arx_pistoris/native/amb.hpp"
 #include "arx_pistoris/native/tea.hpp"
 
+#include "base/ascii.h"
 #include "formats/format.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <nlohmann/json.hpp>
+#include <span>
+#include <string>
 #include <string_view>
-#include <vector>
 
 namespace cli {
 namespace {
 
 FileFacts classified(Format format, PayloadKind kind) { return {.format = format, .kind = kind}; }
 
-}  // namespace
+enum JsonRootKey : std::uint16_t {
+  kKeyNone = 0,
+  kKeyKeyframes = 1U << 0U,
+  kKeyPolygons = 1U << 1U,
+  kKeyRoomDistances = 1U << 2U,
+  kKeyTextureContainers = 1U << 3U,
+  kKeyInteractiveObjects = 1U << 4U,
+  kKeyFogs = 1U << 5U,
+  kKeyZones = 1U << 6U,
+  kKeyLights = 1U << 7U,
+  kKeyColors = 1U << 8U,
+  kKeyVertices = 1U << 9U,
+  kKeyTracks = 1U << 10U,
+};
 
-static PayloadKind detectJsonPayloadKind(const std::vector<std::uint8_t>& buf) {
-  std::string_view text(reinterpret_cast<const char*>(buf.data()), buf.size());
-  if (text.find("https://arx-tools.github.io/schemas/ftl.schema.json") != std::string_view::npos) {
-    return PayloadKind::kFtl;
+std::uint32_t rootKey(std::string_view key) noexcept {
+  if (key == "keyframes") return kKeyKeyframes;
+  if (key == "polygons") return kKeyPolygons;
+  if (key == "roomDistances") return kKeyRoomDistances;
+  if (key == "textureContainers") return kKeyTextureContainers;
+  if (key == "interactiveObjects") return kKeyInteractiveObjects;
+  if (key == "fogs") return kKeyFogs;
+  if (key == "zones") return kKeyZones;
+  if (key == "lights") return kKeyLights;
+  if (key == "colors") return kKeyColors;
+  if (key == "vertices") return kKeyVertices;
+  if (key == "tracks") return kKeyTracks;
+  return kKeyNone;
+}
+
+class JsonHintReader final : public nlohmann::json_sax<nlohmann::json> {
+ public:
+  bool null() override { return scalar(); }
+  bool boolean(bool) override { return scalar(); }
+  bool number_integer(number_integer_t) override { return scalar(); }
+  bool number_unsigned(number_unsigned_t) override { return scalar(); }
+  bool number_float(number_float_t, const string_t&) override { return scalar(); }
+
+  bool string(string_t& value) override {
+    if (capture_schema_) schema = value;
+    return scalar();
   }
-  if (text.find("https://arx-tools.github.io/schemas/tea.schema.json") != std::string_view::npos) {
-    return PayloadKind::kTea;
+
+  bool binary(binary_t&) override { return scalar(); }
+
+  bool start_object(std::size_t) override {
+    beginContainer();
+    if (depth_ == 1U) root_object_ = true;
+    return true;
   }
-  if (text.find("https://arx-tools.github.io/schemas/fts.schema.json") != std::string_view::npos) {
-    return PayloadKind::kFts;
+
+  bool key(string_t& value) override {
+    capture_schema_ = root_object_ && depth_ == 1U && value == "$schema";
+    if (root_object_ && depth_ == 1U) keys |= rootKey(value);
+    return true;
   }
-  if (text.find("https://arx-tools.github.io/schemas/dlf.schema.json") != std::string_view::npos) {
-    return PayloadKind::kDlf;
+
+  bool end_object() override {
+    capture_schema_ = false;
+    --depth_;
+    return true;
   }
-  if (text.find("https://arx-tools.github.io/schemas/llf.schema.json") != std::string_view::npos) {
-    return PayloadKind::kLlf;
+
+  bool start_array(std::size_t) override {
+    beginContainer();
+    return true;
   }
-  if (text.find("\"keyframes\"") != std::string_view::npos &&
-      text.find("\"totalNumberOfFrames\"") != std::string_view::npos) {
-    return PayloadKind::kTea;
+
+  bool end_array() override {
+    capture_schema_ = false;
+    --depth_;
+    return true;
   }
-  if (text.find("\"polygons\"") != std::string_view::npos && text.find("\"roomDistances\"") != std::string_view::npos &&
-      text.find("\"textureContainers\"") != std::string_view::npos) {
-    return PayloadKind::kFts;
+
+  bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override { return false; }
+
+  std::string schema;
+  std::uint32_t keys = kKeyNone;
+
+ private:
+  bool scalar() noexcept {
+    capture_schema_ = false;
+    return true;
   }
-  if (text.find("\"interactiveObjects\"") != std::string_view::npos &&
-      text.find("\"fogs\"") != std::string_view::npos && text.find("\"zones\"") != std::string_view::npos) {
-    return PayloadKind::kDlf;
+
+  void beginContainer() noexcept {
+    capture_schema_ = false;
+    ++depth_;
   }
-  if (text.find("\"lights\"") != std::string_view::npos && text.find("\"colors\"") != std::string_view::npos &&
-      text.find("\"numberOfPolygonsInFTS\"") != std::string_view::npos) {
-    return PayloadKind::kLlf;
-  }
-  if (text.find("\"vertices\"") != std::string_view::npos &&
-      text.find("\"textureContainers\"") != std::string_view::npos) {
-    return PayloadKind::kFtl;
-  }
+
+  std::size_t depth_ = 0;
+  bool root_object_ = false;
+  bool capture_schema_ = false;
+};
+
+PayloadKind payloadKindFromJsonSuffix(std::string_view path) noexcept {
+  if (endsWithAsciiInsensitive(path, ".ftl.json")) return PayloadKind::kFtl;
+  if (endsWithAsciiInsensitive(path, ".tea.json")) return PayloadKind::kTea;
+  if (endsWithAsciiInsensitive(path, ".fts.json")) return PayloadKind::kFts;
+  if (endsWithAsciiInsensitive(path, ".dlf.json")) return PayloadKind::kDlf;
+  if (endsWithAsciiInsensitive(path, ".llf.json")) return PayloadKind::kLlf;
+  if (endsWithAsciiInsensitive(path, ".amb.json")) return PayloadKind::kAmb;
   return PayloadKind::kUnknown;
 }
 
-static bool hasIdentity(const std::vector<std::uint8_t>& buf, std::size_t offset, const char* identity,
-                        std::size_t size) {
-  return buf.size() >= offset + size && std::memcmp(buf.data() + offset, identity, size) == 0;
+PayloadKind payloadKindFromSchema(std::string_view schema) noexcept {
+  if (schema == "https://arx-tools.github.io/schemas/ftl.schema.json") return PayloadKind::kFtl;
+  if (schema == "https://arx-tools.github.io/schemas/tea.schema.json") return PayloadKind::kTea;
+  if (schema == "https://arx-tools.github.io/schemas/fts.schema.json") return PayloadKind::kFts;
+  if (schema == "https://arx-tools.github.io/schemas/dlf.schema.json") return PayloadKind::kDlf;
+  if (schema == "https://arx-tools.github.io/schemas/llf.schema.json") return PayloadKind::kLlf;
+  if (schema == "https://arx-tools.github.io/schemas/amb.schema.json") return PayloadKind::kAmb;
+  return PayloadKind::kUnknown;
 }
 
-static bool isTea(const std::vector<std::uint8_t>& buf) {
+bool hasKeys(std::uint32_t actual, std::uint32_t expected) noexcept { return (actual & expected) == expected; }
+
+PayloadKind payloadKindFromRootKeys(std::uint32_t keys) noexcept {
+  if (hasKeys(keys, kKeyKeyframes)) return PayloadKind::kTea;
+  if (hasKeys(keys, kKeyPolygons | kKeyRoomDistances | kKeyTextureContainers)) return PayloadKind::kFts;
+  if (hasKeys(keys, kKeyInteractiveObjects | kKeyFogs | kKeyZones)) return PayloadKind::kDlf;
+  if (hasKeys(keys, kKeyLights | kKeyColors)) return PayloadKind::kLlf;
+  if (hasKeys(keys, kKeyVertices | kKeyTextureContainers)) return PayloadKind::kFtl;
+  if (hasKeys(keys, kKeyTracks)) return PayloadKind::kAmb;
+  return PayloadKind::kUnknown;
+}
+
+PayloadKind detectJsonPayloadKind(std::span<const std::uint8_t> buffer, std::string_view path) {
+  const PayloadKind suffix_kind = payloadKindFromJsonSuffix(path);
+  if (suffix_kind != PayloadKind::kUnknown) return suffix_kind;
+
+  JsonHintReader hints;
+  if (!nlohmann::json::sax_parse(buffer.begin(), buffer.end(), &hints)) return PayloadKind::kUnknown;
+  const PayloadKind schema_kind = payloadKindFromSchema(hints.schema);
+  return schema_kind == PayloadKind::kUnknown ? payloadKindFromRootKeys(hints.keys) : schema_kind;
+}
+
+bool hasIdentity(std::span<const std::uint8_t> buffer, std::size_t offset, const char* identity,
+                 std::size_t size) noexcept {
+  return buffer.size() >= offset + size && std::memcmp(buffer.data() + offset, identity, size) == 0;
+}
+
+bool isTea(std::span<const std::uint8_t> buffer) noexcept {
   constexpr std::size_t kMagicSize = sizeof(pistoris::kTeaMagic);
-  return buf.size() >= kMagicSize && std::memcmp(buf.data(), pistoris::kTeaMagic, kMagicSize) == 0;
+  return buffer.size() >= kMagicSize && std::memcmp(buffer.data(), pistoris::kTeaMagic, kMagicSize) == 0;
 }
 
-static bool isGlb(const std::vector<std::uint8_t>& buf) {
-  return buf.size() >= 4 && std::memcmp(buf.data(), "glTF", 4) == 0;
+bool isGlb(std::span<const std::uint8_t> buffer) noexcept {
+  return buffer.size() >= 4 && std::memcmp(buffer.data(), "glTF", 4) == 0;
 }
 
-static bool isDlf(const std::vector<std::uint8_t>& buf) {
+bool isAmb(std::span<const std::uint8_t> buffer) noexcept {
+  std::uint32_t magic = 0;
+  if (buffer.size() < sizeof(magic)) return false;
+  std::memcpy(&magic, buffer.data(), sizeof(magic));
+  return magic == pistoris::kAmbMagic;
+}
+
+bool isDlf(std::span<const std::uint8_t> buffer) noexcept {
   constexpr char kIdentity[] = "DANAE_FILE";
-  return hasIdentity(buf, sizeof(float), kIdentity, sizeof(kIdentity));
+  return hasIdentity(buffer, sizeof(float), kIdentity, sizeof(kIdentity));
 }
 
-FileFacts classifyInput(const std::vector<std::uint8_t>& buf, const char* path) {
-  Format extension_format = formatFromPath(path);
-  if (isTea(buf)) return classified(Format::kTea, PayloadKind::kTea);
-  if (isGlb(buf)) return classified(Format::kGlb, PayloadKind::kGlb);
-  if (isDlf(buf)) return classified(Format::kDlf, PayloadKind::kDlf);
+}  // namespace
+
+FileFacts classifyInput(std::span<const std::uint8_t> buffer, std::string_view path) {
+  const Format extension_format = formatFromPath(path);
+  if (isTea(buffer)) return classified(Format::kTea, PayloadKind::kTea);
+  if (isGlb(buffer)) return classified(Format::kGlb, PayloadKind::kGlb);
+  if (isAmb(buffer)) return classified(Format::kAmb, PayloadKind::kAmb);
+  if (isDlf(buffer)) return classified(Format::kDlf, PayloadKind::kDlf);
 
   FileFacts facts{.format = extension_format};
   switch (facts.format) {
@@ -100,7 +209,7 @@ FileFacts classifyInput(const std::vector<std::uint8_t>& buf, const char* path) 
       facts.kind = PayloadKind::kObj;
       break;
     case Format::kJson:
-      facts.kind = detectJsonPayloadKind(buf);
+      facts.kind = detectJsonPayloadKind(buffer, path);
       break;
     default:
       facts.kind = PayloadKind::kUnknown;

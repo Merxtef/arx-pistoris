@@ -1,17 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/navigation/collision/internal.h"
-#include "utils/math/geometry.h"
+#include "utils/math/geometry_algorithms.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
 #include <optional>
-#include <vector>
 
 namespace pistoris::navigation::collision {
 namespace {
@@ -27,25 +26,33 @@ bool overlapsCylinderXzBounds(const TraversalFace& face, const Cylinder& cylinde
          face.min.z <= cylinder.origin.z + radius && face.max.z >= cylinder.origin.z - radius;
 }
 
-void addFootprintSample(const Cylinder& cylinder, const ArxVector3& sample, std::vector<ArxVector3>& samples) {
+void addFootprintSample(const Cylinder& cylinder, const ArxVector3& sample, FootprintHit& hit, bool& has_sample) {
   if (!pointInCircle(sample.x, sample.z, cylinder)) return;
-  samples.push_back(sample);
+  if (!has_sample) {
+    hit.point = sample;
+    hit.min_y = sample.y;
+    hit.max_y = sample.y;
+    has_sample = true;
+    return;
+  }
+  hit.min_y = std::min(hit.min_y, sample.y);
+  hit.max_y = std::max(hit.max_y, sample.y);
 }
 
-void addEdgeFootprintSamples(const ArxVector3& a, const ArxVector3& b, const Cylinder& cylinder,
-                             std::vector<ArxVector3>& samples) {
+void addEdgeFootprintSamples(const ArxVector3& a, const ArxVector3& b, const Cylinder& cylinder, FootprintHit& hit,
+                             bool& has_sample) {
   Vec2<double> av = math::xz(a);
   Vec2<double> bv = math::xz(b);
   Vec2<double> ab = bv - av;
   double ab_len_squared = math::dot(ab, ab);
   if (ab_len_squared <= std::numeric_limits<double>::epsilon()) {
-    addFootprintSample(cylinder, a, samples);
+    addFootprintSample(cylinder, a, hit, has_sample);
     return;
   }
 
   Vec2<double> center{cylinder.origin.x, cylinder.origin.z};
   double closest = std::clamp(math::dot(center - av, ab) / ab_len_squared, 0.0, 1.0);
-  addFootprintSample(cylinder, math::lerp(a, b, closest), samples);
+  addFootprintSample(cylinder, math::lerp(a, b, closest), hit, has_sample);
 
   Vec2<double> ac = av - center;
   double aa = ab_len_squared;
@@ -55,7 +62,7 @@ void addEdgeFootprintSamples(const ArxVector3& a, const ArxVector3& b, const Cyl
   if (discriminant < 0.0) return;
   double root = std::sqrt(discriminant);
   for (double t : {(-bb - root) / (2.0 * aa), (-bb + root) / (2.0 * aa)}) {
-    if (t >= 0.0 && t <= 1.0) addFootprintSample(cylinder, math::lerp(a, b, t), samples);
+    if (t >= 0.0 && t <= 1.0) addFootprintSample(cylinder, math::lerp(a, b, t), hit, has_sample);
   }
 }
 
@@ -68,26 +75,18 @@ float broadphaseRadius(const Cylinder& cylinder) {
 std::optional<FootprintHit> footprintHit(const TraversalFace& face, const Cylinder& cylinder) {
   if (!overlapsCylinderXzBounds(face, cylinder)) return std::nullopt;
 
-  std::vector<ArxVector3> samples;
-  samples.reserve(12);
+  FootprintHit hit;
+  hit.normal = face.normal;
+  bool has_sample = false;
   ArxVector3 projected{};
   if (math::closestPointOnTriangleXz(face.vertices, {cylinder.origin.x, cylinder.origin.z}, projected))
-    addFootprintSample(cylinder, projected, samples);
+    addFootprintSample(cylinder, projected, hit, has_sample);
   for (std::size_t i = 0; i < face.vertices.size(); ++i) {
-    addFootprintSample(cylinder, face.vertices[i], samples);
-    addEdgeFootprintSamples(face.vertices[i], face.vertices[(i + 1) % face.vertices.size()], cylinder, samples);
+    addFootprintSample(cylinder, face.vertices[i], hit, has_sample);
+    addEdgeFootprintSamples(face.vertices[i], face.vertices[(i + 1) % face.vertices.size()], cylinder, hit, has_sample);
   }
 
-  if (samples.empty()) return std::nullopt;
-  FootprintHit hit;
-  hit.point = samples.front();
-  hit.normal = face.normal;
-  hit.min_y = samples.front().y;
-  hit.max_y = samples.front().y;
-  for (const ArxVector3& sample : samples) {
-    hit.min_y = std::min(hit.min_y, sample.y);
-    hit.max_y = std::max(hit.max_y, sample.y);
-  }
+  if (!has_sample) return std::nullopt;
   return hit;
 }
 

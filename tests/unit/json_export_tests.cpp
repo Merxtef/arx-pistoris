@@ -3,16 +3,22 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
-#include "arx_pistoris/flags.h"
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/tea.hpp"
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/paths.hpp"
 
 #include "external/json.h"
 #include "helpers.h"
+#include "nlohmann/json.hpp"
+#include "support/native_equivalence.h"
 
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -57,7 +63,41 @@ TEST_SUITE("json") {
 
     pistoris::ftl::Data d2;
     CHECK(pistoris::importJsonToFtl(s, &d2) == ARX_OK);
-    checkEq(d, d2);
+    test_support::checkEquivalent(d, d2);
+  }
+
+  TEST_CASE("FtlJsonAcceptsMissingSchemaAndRejectsDeclaredMismatch") {
+    const auto source = makeData(1);
+    std::string encoded;
+    REQUIRE(pistoris::exportFtlToJson(source, false, encoded) == ARX_OK);
+
+    nlohmann::json json = nlohmann::json::parse(encoded);
+    json.erase("$schema");
+    pistoris::ftl::Data imported;
+    CHECK(pistoris::importJsonToFtl(json.dump(), &imported) == ARX_OK);
+
+    json["$schema"] = "https://arx-tools.github.io/schemas/tea.schema.json";
+    imported = makeData(3);
+    CHECK(pistoris::importJsonToFtl(json.dump(), &imported) == ARX_JSON_BAD_SCHEMA);
+    CHECK(imported.vertices.size() == 3);
+
+    json["$schema"] = "https://example.invalid/unknown.schema.json";
+    CHECK(pistoris::importJsonToFtl(json.dump(), &imported) == ARX_JSON_BAD_SCHEMA);
+    CHECK(imported.vertices.size() == 3);
+  }
+
+  TEST_CASE("FtlJsonRejectsNonFiniteImportAndExport") {
+    const char* encoded =
+        R"({"header":{"origin":0,"name":""},"vertices":[{"vector":{"x":1e39,"y":0,"z":0},"norm":{"x":0,"y":1,"z":0}}],"faces":[],"textureContainers":[],"groups":[],"actions":[],"selections":[]})";
+    pistoris::ftl::Data imported = makeData(3);
+    CHECK(pistoris::importJsonToFtl(encoded, &imported) == ARX_JSON_BAD_SCHEMA);
+    CHECK(imported.vertices.size() == 3);
+
+    pistoris::ftl::Data source = makeData(1);
+    source.vertices[0].normal.x = std::numeric_limits<float>::infinity();
+    std::string output = "unchanged";
+    CHECK(pistoris::exportFtlToJson(source, false, output) == ARX_JSON_UNREPRESENTABLE_VALUE);
+    CHECK(output == "unchanged");
   }
 
   TEST_CASE("JsonRoundtripFull") {
@@ -92,7 +132,69 @@ TEST_SUITE("json") {
 
     pistoris::ftl::Data d2;
     CHECK(pistoris::importJsonToFtl(s, &d2) == ARX_OK);
-    checkEq(d, d2);
+    test_support::checkEquivalent(d, d2);
+  }
+
+  TEST_CASE("FtsJsonRestoresPolygonCellsAndSlots") {
+    pistoris::fts::Data source = makeTriangleFtsData();
+    source.scene.sizex = 160;
+    source.scene.sizez = 160;
+    source.scene.num_rooms = 2;
+    source.scene.num_polys = 3;
+    source.cells.resize(160U * 160U);
+    source.rooms.resize(3);
+    source.room_distances.resize(9);
+
+    const std::string path = pistoris::paths::levelFts(1);
+    REQUIRE(path.size() < sizeof(source.header.path));
+    std::memcpy(source.header.path, path.c_str(), path.size() + 1U);
+
+    source.cells[0].polygons[0].area = 1.0f;
+    pistoris::fts::Poly second = source.cells[0].polygons[0];
+    second.room = 2;
+    second.area = 2.0f;
+    source.cells[0].polygons.push_back(second);
+
+    pistoris::fts::Poly third = source.cells[0].polygons[0];
+    third.area = 3.0f;
+    for (std::size_t corner = 0; corner < 3; ++corner) {
+      third.v[corner].ssx += 100.0f;
+      third.v[corner].ssz += 100.0f;
+    }
+    source.cells[161].polygons.push_back(third);
+
+    source.rooms[1].data.num_polys = 2;
+    source.rooms[1].polygons = {{1, 1, 0, 0}, {0, 0, 0, 0}};
+    source.rooms[2].data.num_polys = 1;
+    source.rooms[2].polygons = {{0, 0, 1, 0}};
+
+    std::string encoded;
+    REQUIRE(pistoris::exportFtsToJson(source, false, encoded) == ARX_OK);
+    pistoris::fts::Data roundtrip;
+    REQUIRE(pistoris::importJsonToFts(encoded, &roundtrip) == ARX_OK);
+    REQUIRE(roundtrip.cells[0].polygons.size() == 2);
+    CHECK(roundtrip.cells[0].polygons[0].area == 1.0f);
+    CHECK(roundtrip.cells[0].polygons[1].area == 2.0f);
+    REQUIRE(roundtrip.cells[161].polygons.size() == 1);
+    CHECK(roundtrip.cells[161].polygons[0].area == 3.0f);
+
+    nlohmann::json relocated_json = nlohmann::json::parse(encoded);
+    relocated_json["rooms"][1]["polygons"][0]["cellX"] = 2;
+    pistoris::fts::Data relocated;
+    REQUIRE(pistoris::importJsonToFts(relocated_json.dump(), &relocated) == ARX_OK);
+    CHECK(relocated.cells[161].polygons.empty());
+    REQUIRE(relocated.cells[162].polygons.size() == 1);
+    CHECK(relocated.cells[162].polygons[0].area == 3.0f);
+
+    nlohmann::json incomplete_json = nlohmann::json::parse(encoded);
+    incomplete_json["rooms"][1]["polygons"].erase(incomplete_json["rooms"][1]["polygons"].begin());
+    pistoris::fts::Data incomplete;
+    REQUIRE(pistoris::importJsonToFts(incomplete_json.dump(), &incomplete) == ARX_OK);
+    REQUIRE(incomplete.cells[0].polygons.size() == 2);
+    CHECK(incomplete.cells[0].polygons[0].area == 1.0f);
+    CHECK(incomplete.cells[0].polygons[1].area == 2.0f);
+    REQUIRE(incomplete.cells[161].polygons.size() == 1);
+    CHECK(incomplete.cells[161].polygons[0].area == 3.0f);
   }
 
   TEST_CASE("JsonFaceArrayFields") {
@@ -162,6 +264,21 @@ TEST_SUITE("json") {
         R"({"header":{"origin":0,"name":""},"vertices":[{"vector":{"x":0,"y":0,"z":0},"norm":{"x":0,"y":1,"z":0}}],"faces":[{"faceType":0,"vertexIdx":[0,0],"u":[0,0,0],"v":[0,0,0],"textureIdx":0}],"textureContainers":[],"groups":[],"actions":[],"selections":[]})";
     pistoris::ftl::Data d;
     CHECK(pistoris::importJsonToFtl(text, &d) == ARX_JSON_BAD_SCHEMA);
+  }
+
+  TEST_CASE("FtlJsonRejectsUnsignedOverflowInSignedField") {
+    pistoris::ftl::Data source = makeData(3);
+    source.faces.push_back(makeFace(0, 1, 2));
+    std::string encoded;
+    REQUIRE(pistoris::exportFtlToJson(source, false, encoded) == ARX_OK);
+
+    nlohmann::json json = nlohmann::json::parse(encoded);
+    json["faces"][0]["textureIdx"] = std::numeric_limits<std::uint64_t>::max();
+
+    pistoris::ftl::Data imported = makeData(1);
+    CHECK(pistoris::importJsonToFtl(json.dump(), &imported) == ARX_JSON_BAD_SCHEMA);
+    CHECK(imported.vertices.size() == 1);
+    CHECK(imported.faces.empty());
   }
 
   TEST_CASE("JsonImportRejectsBadCollectionMemberSchemas") {
@@ -295,7 +412,29 @@ TEST_SUITE("json") {
 
     pistoris::tea::Data imported;
     CHECK(pistoris::importJsonToTea(out, &imported) == ARX_OK);
-    checkEq(tea, imported);
+    test_support::checkEquivalent(tea, imported);
+  }
+
+  TEST_CASE("TeaJsonAcceptsMissingSchemaAndRejectsDeclaredMismatch") {
+    pistoris::tea::Data source;
+    source.num_frames = 1;
+    source.num_groups = 1;
+    pistoris::tea::Keyframe keyframe;
+    keyframe.num_frame = 1;
+    keyframe.groups.push_back({});
+    source.keyframes.push_back(std::move(keyframe));
+
+    std::string encoded;
+    REQUIRE(pistoris::exportTeaToJson(source, false, encoded) == ARX_OK);
+    nlohmann::json json = nlohmann::json::parse(encoded);
+    json.erase("$schema");
+    pistoris::tea::Data imported;
+    CHECK(pistoris::importJsonToTea(json.dump(), &imported) == ARX_OK);
+
+    json["$schema"] = "https://arx-tools.github.io/schemas/ftl.schema.json";
+    imported.num_frames = 7;
+    CHECK(pistoris::importJsonToTea(json.dump(), &imported) == ARX_JSON_BAD_SCHEMA);
+    CHECK(imported.num_frames == 7);
   }
 
   TEST_CASE("TeaJsonImportArxConvertShape") {
@@ -310,7 +449,7 @@ TEST_SUITE("json") {
     CHECK(tea.keyframes[0].flag_frame == pistoris::kTeaFlagFrameStep);
     REQUIRE(tea.keyframes[0].groups.size() == 1);
     CHECK(tea.keyframes[0].groups[0].key_group == 1);
-    checkEq(tea.keyframes[0].groups[0].translate, pistoris::ArxVector3{1.0f, 2.0f, 3.0f});
+    CHECK(test_support::equivalent(tea.keyframes[0].groups[0].translate, pistoris::ArxVector3{1.0f, 2.0f, 3.0f}));
     REQUIRE(tea.keyframes[0].sample.has_value());
     CHECK(std::string(tea.keyframes[0].sample->name) == "foot.wav");
   }

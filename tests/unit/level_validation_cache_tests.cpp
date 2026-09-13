@@ -3,10 +3,10 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/pistoris_types.h"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
 
 #include "level/data.h"
-#include "level/level.h"
 #include "level/validation.h"
 #include "modules/geometry.h"
 #include "modules/lights.h"
@@ -23,10 +23,11 @@ pistoris::LevelModules validLevelModules() {
 
   LevelModules modules;
   modules.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
+  constexpr ArxVector3 kNormal = {0.0f, -1.0f, 0.0f};
   Face face;
-  face.corners[0] = {0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f};
-  face.corners[1] = {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f};
-  face.corners[2] = {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f};
+  face.corners[0] = {0, kNormal, 0.0f, 0.0f};
+  face.corners[1] = {1, kNormal, 1.0f, 0.0f};
+  face.corners[2] = {2, kNormal, 0.0f, 1.0f};
   modules.geometry.faces.push_back(face);
   modules.rooms.definitions.push_back({"room"});
   modules.rooms.face_rooms.push_back(0);
@@ -40,7 +41,8 @@ TEST_SUITE("Level validation cache") {
     using namespace pistoris;
 
     CHECK(level_validation::geometryError(geometry::Error::kTooManyVertices) == ARX_LEVEL_TOO_MANY_VERTICES);
-    CHECK(level_validation::geometryError(geometry::Error::kTooManyTextures) == ARX_LEVEL_TOO_MANY_TEXTURES);
+    CHECK(level_validation::textureError(textures::Error::kTooManyTextures) == ARX_LEVEL_TOO_MANY_TEXTURES);
+    CHECK(level_validation::textureError(textures::Error::kDuplicateTexture) == ARX_LEVEL_BAD_TEXTURE_PATH);
     CHECK(level_validation::geometryError(geometry::Error::kTooManyFaces) == ARX_LEVEL_TOO_MANY_FACES);
     CHECK(level_validation::geometryError(geometry::Error::kBadVertexWeldSegment) == ARX_LEVEL_BAD_VERTEX_WELD_SEGMENT);
     CHECK(level_validation::geometryError(geometry::Error::kOverlappingVertexWeldSegments) ==
@@ -48,8 +50,11 @@ TEST_SUITE("Level validation cache") {
 
     CHECK(level_validation::roomsError(rooms::Error::kNoRooms) == ARX_LEVEL_NO_ROOMS);
     CHECK(level_validation::roomsError(rooms::Error::kTooManyRooms) == ARX_LEVEL_TOO_MANY_ROOMS);
+    CHECK(level_validation::roomsError(rooms::Error::kBadRoomName) == ARX_LEVEL_BAD_ROOM_NAME);
+    CHECK(level_validation::roomsError(rooms::Error::kDuplicateRoomName) == ARX_LEVEL_DUPLICATE_ROOM_NAME);
     CHECK(level_validation::roomsError(rooms::Error::kBadFaceRoomCount) == ARX_LEVEL_BAD_FACE_ROOM_COUNT);
     CHECK(level_validation::roomsError(rooms::Error::kTooManyPortals) == ARX_LEVEL_TOO_MANY_PORTALS);
+    CHECK(level_validation::roomsError(rooms::Error::kBadPortalName) == ARX_LEVEL_BAD_PORTAL_NAME);
     CHECK(level_validation::roomsError(rooms::Error::kDuplicatePortalName) == ARX_LEVEL_DUPLICATE_PORTAL_NAME);
     CHECK(level_validation::roomsError(rooms::Error::kInconsistentPortalOrientation) ==
           ARX_LEVEL_INCONSISTENT_PORTAL_ORIENTATION);
@@ -62,6 +67,7 @@ TEST_SUITE("Level validation cache") {
           ARX_LEVEL_DEGENERATE_NAV_SURFACE_TRIANGLE);
     CHECK(level_validation::navigationError(navigation::Error::kSurfaceRequired) == ARX_LEVEL_NAV_SURFACE_REQUIRED);
     CHECK(level_validation::navigationError(navigation::Error::kTooManyAnchors) == ARX_LEVEL_TOO_MANY_ANCHORS);
+    CHECK(level_validation::navigationError(navigation::Error::kBadAnchorName) == ARX_LEVEL_BAD_ANCHOR_NAME);
     CHECK(level_validation::navigationError(navigation::Error::kDuplicateAnchorName) ==
           ARX_LEVEL_DUPLICATE_ANCHOR_NAME);
     CHECK(level_validation::navigationError(navigation::Error::kBadAnchorPosition) == ARX_LEVEL_BAD_ANCHOR_POSITION);
@@ -73,8 +79,11 @@ TEST_SUITE("Level validation cache") {
     CHECK(level_validation::lightingError(lights::Error::kBadCornerColorCount) == ARX_LEVEL_BAD_CORNER_COLOR_COUNT);
 
     CHECK(level_validation::sceneError(scene::Error::kTooManyEntities) == ARX_LEVEL_TOO_MANY_ENTITIES);
+    CHECK(level_validation::sceneError(scene::Error::kBadEntityName) == ARX_LEVEL_BAD_ENTITY_NAME);
     CHECK(level_validation::sceneError(scene::Error::kDuplicateEntityName) == ARX_LEVEL_DUPLICATE_ENTITY_NAME);
     CHECK(level_validation::sceneError(scene::Error::kTooManyFogs) == ARX_LEVEL_TOO_MANY_FOGS);
+    CHECK(level_validation::sceneError(scene::Error::kBadFogName) == ARX_LEVEL_BAD_FOG_NAME);
+    CHECK(level_validation::sceneError(scene::Error::kDuplicateFogName) == ARX_LEVEL_DUPLICATE_FOG_NAME);
     CHECK(level_validation::sceneError(scene::Error::kBadFogRotation) == ARX_LEVEL_BAD_FOG_ROTATION);
     CHECK(level_validation::sceneError(scene::Error::kBadFogColor) == ARX_LEVEL_BAD_FOG_COLOR);
     CHECK(level_validation::sceneError(scene::Error::kTooManyZones) == ARX_LEVEL_TOO_MANY_ZONES);
@@ -122,7 +131,7 @@ TEST_SUITE("Level validation cache") {
     LevelValidationState state;
     REQUIRE(validateLevelModules(modules, state) == ARX_OK);
 
-    modules.geometry.textures.push_back({""});
+    modules.textures.textures.push_back({""});
     modules.geometry.faces[0].texture = 0;
     level_validation::invalidate(state, LevelValidation::kTextures);
     CHECK_FALSE(level_validation::has(state, LevelValidation::kTextures));
@@ -138,7 +147,7 @@ TEST_SUITE("Level validation cache") {
     CHECK_FALSE(level_validation::has(state, LevelValidation::kTextures));
     CHECK_FALSE(level_validation::has(state, LevelValidation::kFaces));
 
-    modules.geometry.textures[0].path = "graph/tex.bmp";
+    modules.textures.textures[0].path = "graph/tex.bmp";
     CHECK(level_validation::faces(modules, state) == ARX_OK);
     CHECK(level_validation::has(state, LevelValidation::kTextures | LevelValidation::kFaces));
     CHECK_FALSE(level_validation::has(state, LevelValidation::kFaceRooms));

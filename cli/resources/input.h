@@ -8,6 +8,7 @@
 #include "formats/classification.h"
 
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace cli {
@@ -15,8 +16,9 @@ namespace cli {
 class IoService;
 
 bool appendClassifiedInput(std::string path, PathLocation location, std::vector<std::uint8_t> buffer,
-                           std::size_t positional_index, ArxResourceKind resource_kind,
+                           std::size_t positional_index, ArxResourceKind resource_kind, ResourceLayout layout,
                            std::vector<ClassifiedPath>& out);
+bool readRequiredResource(IoService& io, std::string_view path, std::vector<std::uint8_t>& out);
 bool loadClassifiedInputs(std::span<const char* const> arguments, IoService& io, std::vector<ClassifiedPath>& out);
 
 }  // namespace cli

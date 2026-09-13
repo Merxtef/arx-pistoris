@@ -3,7 +3,7 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/arx_math.h"
+#include "arx_pistoris/base/math.h"
 
 #include "modules/geometry.h"
 
@@ -78,6 +78,10 @@ TEST_SUITE("geometry::triangle") {
 
   TEST_CASE("Detects degenerate triangles") {
     CHECK_FALSE(geometry::degenerateTriangle({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}));
+    CHECK_FALSE(geometry::degenerateTriangle({0.0f, 0.0f, 0.0f}, {1.0e-4f, 0.0f, 0.0f}, {0.0f, 1.0e-4f, 0.0f}));
+    CHECK_FALSE(geometry::degenerateTriangle({0.0f, 0.0f, 0.0f}, {1.0e4f, 0.0f, 0.0f}, {0.0f, 1.0e4f, 0.0f}));
     CHECK(geometry::degenerateTriangle({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}));
+    CHECK(geometry::degenerateTriangle({0.0f, 0.0f, 0.0f}, {1.0e-4f, 0.0f, 0.0f}, {2.0e-4f, 0.0f, 0.0f}));
+    CHECK(geometry::degenerateTriangle({0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {2.0f, 1.0e-7f, 0.0f}));
   }
 }

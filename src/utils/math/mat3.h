@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 namespace pistoris {
 

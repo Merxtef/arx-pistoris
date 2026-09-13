@@ -11,7 +11,8 @@
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "ARX_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {
@@ -23,7 +24,8 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
-        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded"
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "ARX_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {
@@ -37,7 +39,8 @@
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
-        "ARX_SANITIZERS": "ON"
+        "ARX_SANITIZERS": "ON",
+        "ARX_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {
@@ -51,7 +54,8 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
         "ARX_FUZZING": "ON",
-        "ARX_BUILD_INFO_LIVE": "OFF"
+        "ARX_BUILD_INFO_LIVE": "OFF",
+        "ARX_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {
@@ -66,21 +70,39 @@
         "CMAKE_CXX_COMPILER": "clang++",
         "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
         "ARX_COVERAGE": "ON",
-        "ARX_BUILD_INFO_LIVE": "OFF"
+        "ARX_BUILD_INFO_LIVE": "OFF",
+        "ARX_WARNINGS_AS_ERRORS": "ON"
       }
     },
     {
-      "name": "tidy",
-      "displayName": "Clang-Tidy",
+      "name": "tidy-base",
+      "hidden": true,
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build-tidy",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_C_COMPILER": "clang",
         "CMAKE_CXX_COMPILER": "clang++",
-        "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--warnings-as-errors=*",
-        "ARX_BUILD_INFO_LIVE": "OFF"
+        "ARX_BUILD_INFO_LIVE": "OFF",
+        "ARX_WARNINGS_AS_ERRORS": "ON"
+      }
+    },
+    {
+      "name": "tidy",
+      "displayName": "Clang-Tidy Fix",
+      "inherits": "tidy-base",
+      "binaryDir": "${sourceDir}/build-tidy",
+      "cacheVariables": {
+        "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--fix;--format-style=file"
+      }
+    },
+    {
+      "name": "tidy-check",
+      "displayName": "Clang-Tidy Check",
+      "inherits": "tidy-base",
+      "binaryDir": "${sourceDir}/build-tidy-check",
+      "cacheVariables": {
+        "CMAKE_CXX_CLANG_TIDY": "clang-tidy;--warnings-as-errors=*"
       }
     }
   ],
@@ -108,6 +130,10 @@
     {
       "name": "tidy",
       "configurePreset": "tidy"
+    },
+    {
+      "name": "tidy-check",
+      "configurePreset": "tidy-check"
     }
   ],
   "testPresets": [

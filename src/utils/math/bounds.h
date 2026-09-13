@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
 
 #include <algorithm>
 
@@ -32,6 +32,10 @@ inline bool containsInclusive(const ArxRect& bounds, const ArxVector2& point) {
 inline bool containsInclusive(const ArxAabb& bounds, const ArxVector3& point) {
   return point.x >= bounds.min.x && point.x <= bounds.max.x && point.y >= bounds.min.y && point.y <= bounds.max.y &&
          point.z >= bounds.min.z && point.z <= bounds.max.z;
+}
+
+inline bool containsXzInclusive(const ArxAabb& bounds, float x, float z) noexcept {
+  return x >= bounds.min.x && x <= bounds.max.x && z >= bounds.min.z && z <= bounds.max.z;
 }
 
 inline bool overlapsInclusive(const ArxRect& first, const ArxRect& second) {

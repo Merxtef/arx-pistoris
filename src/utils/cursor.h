@@ -4,9 +4,13 @@
 #pragma once
 
 #include <bit>
+#include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <limits>
+#include <new>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -95,53 +99,58 @@ struct WriteCursor {
   template <class T>
   WriteCursor& write(const T& val) noexcept {
     static_assert(std::is_trivially_copyable_v<T>);
-    if (!ok_) return *this;
     const auto* src = reinterpret_cast<const std::uint8_t*>(&val);
-    try {
-      buf_.insert(buf_.end(), src, src + sizeof(T));
-    } catch (const std::bad_alloc&) {
-      fail(sizeof(T));
-    }
-    return *this;
+    return append(src, sizeof(T));
   }
 
   template <class T>
   WriteCursor& writeArray(const std::vector<T>& vals) noexcept {
     static_assert(std::is_trivially_copyable_v<T>);
-    if (!ok_ || vals.empty()) return *this;
-    const auto* src = reinterpret_cast<const std::uint8_t*>(vals.data());
-    try {
-      buf_.insert(buf_.end(), src, src + sizeof(T) * vals.size());
-    } catch (const std::bad_alloc&) {
-      fail(sizeof(T) * vals.size());
-    }
-    return *this;
+    return writeN(vals.data(), vals.size());
   }
 
   template <class T>
   WriteCursor& writeN(const T* data, std::size_t count) noexcept {
     static_assert(std::is_trivially_copyable_v<T>);
     if (!ok_ || count == 0) return *this;
+    assert(data != nullptr);
+    if (count > std::numeric_limits<std::size_t>::max() / sizeof(T))
+      return fail(std::numeric_limits<std::size_t>::max());
     const auto* src = reinterpret_cast<const std::uint8_t*>(data);
-    try {
-      buf_.insert(buf_.end(), src, src + sizeof(T) * count);
-    } catch (const std::bad_alloc&) {
-      fail(sizeof(T) * count);
-    }
-    return *this;
+    return append(src, sizeof(T) * count);
   }
 
   WriteCursor& pad(std::size_t n) noexcept {
     if (!ok_ || n == 0) return *this;
+    if (n > buf_.max_size() - buf_.size()) return fail(n);
     try {
       buf_.insert(buf_.end(), n, 0);
     } catch (const std::bad_alloc&) {
+      fail(n);
+    } catch (const std::length_error&) {
+      fail(n);
+    } catch (...) {
       fail(n);
     }
     return *this;
   }
 
  private:
+  WriteCursor& append(const std::uint8_t* data, std::size_t count) noexcept {
+    if (!ok_ || count == 0) return *this;
+    if (count > buf_.max_size() - buf_.size()) return fail(count);
+    try {
+      buf_.insert(buf_.end(), data, data + count);
+    } catch (const std::bad_alloc&) {
+      fail(count);
+    } catch (const std::length_error&) {
+      fail(count);
+    } catch (...) {
+      fail(count);
+    }
+    return *this;
+  }
+
   WriteCursor& fail(std::size_t needed) noexcept {
     if (ok_) {
       ok_ = false;

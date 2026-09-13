@@ -1,0 +1,271 @@
+{
+  "levels": [
+    {
+      "name": "level9",
+      "selector": "level:9",
+      "glb": { "path": "level/glb/level9/level9.glb", "arx_units_per_glb_unit": 100 },
+      "fts": "mount/game/graph/levels/level9/fast.fts",
+      "llf": "mount/graph/levels/level9/level9.llf",
+      "dlf": "mount/graph/levels/level9/level9.dlf",
+      "regeneration": { "static_lighting": true, "minimap": true }
+    },
+    {
+      "name": "level29",
+      "selector": "level:29",
+      "glb": { "path": "level/glb/level29/level29.glb", "arx_units_per_glb_unit": 100 },
+      "fts": "mount/game/graph/levels/level29/fast.fts",
+      "llf": "mount/graph/levels/level29/level29.llf",
+      "dlf": "mount/graph/levels/level29/level29.dlf",
+      "regeneration": {
+        "navigation": { "prune": true },
+        "room_distances": true,
+        "anchors": { "connect": true, "prune": true },
+        "static_lighting": true,
+        "minimap": true
+      }
+    },
+    {
+      "name": "level30",
+      "selector": "level:30",
+      "glb": { "path": "level/glb/level30/level30.glb", "arx_units_per_glb_unit": 100 },
+      "fts": "mount/game/graph/levels/level30/fast.fts",
+      "llf": "mount/graph/levels/level30/level30.llf",
+      "dlf": "mount/graph/levels/level30/level30.dlf",
+      "regeneration": {
+        "navigation": { "prune": true },
+        "room_distances": true,
+        "anchors": { "connect": true, "prune": true },
+        "static_lighting": true,
+        "minimap": true
+      }
+    },
+    {
+      "name": "level31",
+      "selector": "level:31",
+      "glb": { "path": "level/glb/level31/level31.glb", "arx_units_per_glb_unit": 100 },
+      "fts": "mount/game/graph/levels/level31/fast.fts",
+      "llf": "mount/graph/levels/level31/level31.llf",
+      "dlf": "mount/graph/levels/level31/level31.dlf",
+      "regeneration": {
+        "navigation": { "prune": true },
+        "room_distances": true,
+        "anchors": { "connect": true, "prune": true },
+        "static_lighting": true,
+        "light_ambient": [0.14, 0.12, 0.15],
+        "minimap": true
+      }
+    }
+  ],
+  "models": [
+    {
+      "name": "human_male",
+      "selector": "model:npc:human_male",
+      "ftl": "mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl",
+      "glb": { "path": "model/glb/human_male/human_male.glb", "arx_units_per_glb_unit": 43 }
+    },
+    {
+      "name": "head_2",
+      "selector": "model:npc:human_male:head_2",
+      "ftl": "mount/game/graph/obj3d/interactive/npc/human_male/tweaks/head_2.ftl",
+      "glb": { "path": "model/glb/head_2/head_2.glb", "arx_units_per_glb_unit": 43 }
+    },
+    {
+      "name": "head_3",
+      "selector": "model:npc:human_male:head_3",
+      "ftl": "mount/game/graph/obj3d/interactive/npc/human_male/tweaks/head_3.ftl",
+      "glb": { "path": "model/glb/head_3/head_3.glb", "arx_units_per_glb_unit": 43 }
+    },
+    {
+      "name": "head_4",
+      "selector": "model:npc:human_male:head_4",
+      "ftl": "mount/game/graph/obj3d/interactive/npc/human_male/tweaks/head_4.ftl",
+      "glb": { "path": "model/glb/head_4/head_4.glb", "arx_units_per_glb_unit": 43 }
+    },
+    {
+      "name": "heavy_armor",
+      "selector": "model:npc:human_male:heavy_armor",
+      "ftl": "mount/game/graph/obj3d/interactive/npc/human_male/tweaks/heavy_armor.ftl",
+      "glb": { "path": "model/glb/heavy_armor/heavy_armor.glb", "arx_units_per_glb_unit": 43 }
+    },
+    {
+      "name": "medium_armor",
+      "selector": "model:npc:human_male:medium_armor",
+      "ftl": "mount/game/graph/obj3d/interactive/npc/human_male/tweaks/medium_armor.ftl",
+      "glb": { "path": "model/glb/medium_armor/medium_armor.glb", "arx_units_per_glb_unit": 43 }
+    },
+    {
+      "name": "sword_00",
+      "selector": "model:weapons:sword_00",
+      "ftl": "mount/game/graph/obj3d/interactive/items/weapons/sword_00/sword_00.ftl",
+      "glb": { "path": "model/glb/sword_00/sword_00.glb", "arx_units_per_glb_unit": 10 }
+    },
+    {
+      "name": "sword_01",
+      "selector": "model:weapons:sword_01",
+      "ftl": "mount/game/graph/obj3d/interactive/items/weapons/sword_01/sword_01.ftl",
+      "glb": { "path": "model/glb/sword_01/sword_01.glb", "arx_units_per_glb_unit": 10 }
+    },
+    {
+      "name": "sword_02",
+      "selector": "model:weapons:sword_02",
+      "ftl": "mount/game/graph/obj3d/interactive/items/weapons/sword_02/sword_02.ftl",
+      "glb": { "path": "model/glb/sword_02/sword_02.glb", "arx_units_per_glb_unit": 10 }
+    },
+    {
+      "name": "custom_dagger",
+      "selector": "model:weapons:custom_dagger",
+      "ftl": "mount/game/graph/obj3d/interactive/items/weapons/custom_dagger/custom_dagger.ftl",
+      "obj": "model/obj/custom_dagger/custom_dagger.obj",
+      "regeneration": { "icon_slots": [1, 2] }
+    },
+    {
+      "name": "json_dummy",
+      "selector": "model:fix_inter:json_dummy",
+      "ftl": "mount/game/graph/obj3d/interactive/fix_inter/json_dummy/json_dummy.ftl",
+      "glb": { "path": "model/glb/json_dummy/json_dummy.glb", "arx_units_per_glb_unit": 10 }
+    }
+  ],
+  "animations": [
+    { "name": "human_male_cast_dual_wield_melee", "selector": "anim:npc:human_male_cast_dual_wield_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_dual_wield_melee.tea" },
+    { "name": "human_male_cast_dual_wield_melee_2", "selector": "anim:npc:human_male_cast_dual_wield_melee_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_dual_wield_melee_2.tea" },
+    { "name": "human_male_cast_dual_wield_melee_3", "selector": "anim:npc:human_male_cast_dual_wield_melee_3", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_dual_wield_melee_3.tea" },
+    { "name": "human_male_cast_dual_wield_melee_4", "selector": "anim:npc:human_male_cast_dual_wield_melee_4", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_dual_wield_melee_4.tea" },
+    { "name": "human_male_cast_main_hand_melee", "selector": "anim:npc:human_male_cast_main_hand_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_main_hand_melee.tea" },
+    { "name": "human_male_cast_main_hand_melee_2", "selector": "anim:npc:human_male_cast_main_hand_melee_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_main_hand_melee_2.tea" },
+    { "name": "human_male_cast_main_hand_melee_3", "selector": "anim:npc:human_male_cast_main_hand_melee_3", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_main_hand_melee_3.tea" },
+    { "name": "human_male_cast_main_hand_wand", "selector": "anim:npc:human_male_cast_main_hand_wand", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_main_hand_wand.tea" },
+    { "name": "human_male_cast_off_hand_shield", "selector": "anim:npc:human_male_cast_off_hand_shield", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_off_hand_shield.tea" },
+    { "name": "human_male_cast_two_handed_bow", "selector": "anim:npc:human_male_cast_two_handed_bow", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_bow.tea" },
+    { "name": "human_male_cast_two_handed_bow_2", "selector": "anim:npc:human_male_cast_two_handed_bow_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_bow_2.tea" },
+    { "name": "human_male_cast_two_handed_crossbow", "selector": "anim:npc:human_male_cast_two_handed_crossbow", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_crossbow.tea" },
+    { "name": "human_male_cast_two_handed_melee", "selector": "anim:npc:human_male_cast_two_handed_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_melee.tea" },
+    { "name": "human_male_cast_two_handed_melee_2", "selector": "anim:npc:human_male_cast_two_handed_melee_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_melee_2.tea" },
+    { "name": "human_male_cast_two_handed_melee_3", "selector": "anim:npc:human_male_cast_two_handed_melee_3", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_melee_3.tea" },
+    { "name": "human_male_cast_two_handed_melee_4", "selector": "anim:npc:human_male_cast_two_handed_melee_4", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_melee_4.tea" },
+    { "name": "human_male_cast_two_handed_melee_5", "selector": "anim:npc:human_male_cast_two_handed_melee_5", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_melee_5.tea" },
+    { "name": "human_male_cast_two_handed_staff", "selector": "anim:npc:human_male_cast_two_handed_staff", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_two_handed_staff.tea" },
+    { "name": "human_male_cast_unarmed_magic", "selector": "anim:npc:human_male_cast_unarmed_magic", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_unarmed_magic.tea" },
+    { "name": "human_male_cast_unarmed_magic_2", "selector": "anim:npc:human_male_cast_unarmed_magic_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_cast_unarmed_magic_2.tea" },
+    { "name": "human_male_channel_dual_wield_melee", "selector": "anim:npc:human_male_channel_dual_wield_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_dual_wield_melee.tea" },
+    { "name": "human_male_channel_main_hand_melee", "selector": "anim:npc:human_male_channel_main_hand_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_main_hand_melee.tea" },
+    { "name": "human_male_channel_main_hand_wand", "selector": "anim:npc:human_male_channel_main_hand_wand", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_main_hand_wand.tea" },
+    { "name": "human_male_channel_two_handed_bow", "selector": "anim:npc:human_male_channel_two_handed_bow", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_two_handed_bow.tea" },
+    { "name": "human_male_channel_two_handed_bow_2", "selector": "anim:npc:human_male_channel_two_handed_bow_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_two_handed_bow_2.tea" },
+    { "name": "human_male_channel_two_handed_crossbow", "selector": "anim:npc:human_male_channel_two_handed_crossbow", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_two_handed_crossbow.tea" },
+    { "name": "human_male_channel_two_handed_melee", "selector": "anim:npc:human_male_channel_two_handed_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_two_handed_melee.tea" },
+    { "name": "human_male_channel_two_handed_staff", "selector": "anim:npc:human_male_channel_two_handed_staff", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_two_handed_staff.tea" },
+    { "name": "human_male_channel_unarmed_magic", "selector": "anim:npc:human_male_channel_unarmed_magic", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_channel_unarmed_magic.tea" },
+    { "name": "human_male_death", "selector": "anim:npc:human_male_death", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_death.tea" },
+    { "name": "human_male_drink_potion", "selector": "anim:npc:human_male_drink_potion", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_drink_potion.tea" },
+    { "name": "human_male_end_unarmed_magic", "selector": "anim:npc:human_male_end_unarmed_magic", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_end_unarmed_magic.tea" },
+    { "name": "human_male_gathering", "selector": "anim:npc:human_male_gathering", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_gathering.tea" },
+    { "name": "human_male_idle", "selector": "anim:npc:human_male_idle", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle.tea" },
+    { "name": "human_male_idle_combat_dual_wield_melee", "selector": "anim:npc:human_male_idle_combat_dual_wield_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_dual_wield_melee.tea" },
+    { "name": "human_male_idle_combat_main_hand_melee", "selector": "anim:npc:human_male_idle_combat_main_hand_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_main_hand_melee.tea" },
+    { "name": "human_male_idle_combat_main_hand_wand", "selector": "anim:npc:human_male_idle_combat_main_hand_wand", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_main_hand_wand.tea" },
+    { "name": "human_male_idle_combat_two_handed_bow", "selector": "anim:npc:human_male_idle_combat_two_handed_bow", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_two_handed_bow.tea" },
+    { "name": "human_male_idle_combat_two_handed_crossbow", "selector": "anim:npc:human_male_idle_combat_two_handed_crossbow", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_two_handed_crossbow.tea" },
+    { "name": "human_male_idle_combat_two_handed_melee", "selector": "anim:npc:human_male_idle_combat_two_handed_melee", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_two_handed_melee.tea" },
+    { "name": "human_male_idle_combat_two_handed_staff", "selector": "anim:npc:human_male_idle_combat_two_handed_staff", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_two_handed_staff.tea" },
+    { "name": "human_male_idle_combat_unarmed", "selector": "anim:npc:human_male_idle_combat_unarmed", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_idle_combat_unarmed.tea" },
+    { "name": "human_male_jump", "selector": "anim:npc:human_male_jump", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_jump.tea" },
+    { "name": "human_male_power_up", "selector": "anim:npc:human_male_power_up", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_power_up.tea" },
+    { "name": "human_male_power_up_2", "selector": "anim:npc:human_male_power_up_2", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_power_up_2.tea" },
+    { "name": "human_male_power_up_3", "selector": "anim:npc:human_male_power_up_3", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_power_up_3.tea" },
+    { "name": "human_male_pray", "selector": "anim:npc:human_male_pray", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_pray.tea" },
+    { "name": "human_male_run", "selector": "anim:npc:human_male_run", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_run.tea" },
+    { "name": "human_male_start_unarmed_magic", "selector": "anim:npc:human_male_start_unarmed_magic", "model": "human_male", "tea": "mount/graph/obj3d/anims/npc/human_male_start_unarmed_magic.tea" },
+    { "name": "json_dice", "selector": "anim:fix_inter:json_dice", "model": "json_dummy", "tea": "mount/graph/obj3d/anims/fix_inter/json_dice.tea" }
+  ],
+  "ambiances": [
+    {
+      "name": "dark",
+      "selector": "ambiance:dark",
+      "reference_model": "human_male",
+      "amb": "mount/sfx/ambiance/dark.amb",
+      "glb": { "path": "ambiance/glb/dark/dark.glb", "arx_units_per_glb_unit": 10 }
+    },
+    {
+      "name": "explore",
+      "selector": "ambiance:explore",
+      "reference_model": "human_male",
+      "amb": "mount/sfx/ambiance/explore.amb",
+      "glb": { "path": "ambiance/glb/explore/explore.glb", "arx_units_per_glb_unit": 10 }
+    }
+  ],
+  "native_sidecars": {
+    "images": [
+      "mount/graph/levels/level29/loading.png",
+      "mount/graph/levels/level29/map.png",
+      "mount/graph/levels/level30/loading.png",
+      "mount/graph/levels/level30/map.png",
+      "mount/graph/levels/level31/loading.png",
+      "mount/graph/levels/level31/map.png",
+      "mount/graph/levels/level9/loading.png",
+      "mount/graph/levels/level9/map.png",
+      "mount/graph/obj3d/interactive/items/weapons/custom_dagger/custom_dagger[icon].png",
+      "mount/graph/obj3d/interactive/items/weapons/sword_00/sword_00[icon].png",
+      "mount/graph/obj3d/interactive/items/weapons/sword_01/sword_01[icon].png",
+      "mount/graph/obj3d/interactive/items/weapons/sword_02/sword_02[icon].png",
+      "mount/graph/obj3d/textures/black.png",
+      "mount/graph/obj3d/textures/custom_dagger_texture.png",
+      "mount/graph/obj3d/textures/dungeon_texture_1.png",
+      "mount/graph/obj3d/textures/dungeon_texture_2.png",
+      "mount/graph/obj3d/textures/dungeon_texture.png",
+      "mount/graph/obj3d/textures/gore.png",
+      "mount/graph/obj3d/textures/json_model.png",
+      "mount/graph/obj3d/textures/json_prison.png",
+      "mount/graph/obj3d/textures/sword00_00.png",
+      "mount/graph/obj3d/textures/sword01_00.png",
+      "mount/graph/obj3d/textures/sword02_00.png",
+      "mount/graph/obj3d/textures/tex_human_female_heavy_armor.png",
+      "mount/graph/obj3d/textures/tex_human_female_heavy_gloves.png",
+      "mount/graph/obj3d/textures/tex_human_female_new_heavy_helmet.png",
+      "mount/graph/obj3d/textures/tex_human_female_new_medium_boots.png",
+      "mount/graph/obj3d/textures/tex_human_female_new_medium_gloves.png",
+      "mount/graph/obj3d/textures/tex_human_female_new_medium_helmet.png",
+      "mount/graph/obj3d/textures/tex_human_male_body_1.png",
+      "mount/graph/obj3d/textures/tex_human_male_feet_1.png",
+      "mount/graph/obj3d/textures/tex_human_male_hair_1.png",
+      "mount/graph/obj3d/textures/tex_human_male_hair_3.png",
+      "mount/graph/obj3d/textures/tex_human_male_hair_4.png",
+      "mount/graph/obj3d/textures/tex_human_male_hair_5.png",
+      "mount/graph/obj3d/textures/tex_human_male_hands_1.png",
+      "mount/graph/obj3d/textures/tex_human_male_head_2.png",
+      "mount/graph/obj3d/textures/tex_human_male_head_3.png",
+      "mount/graph/obj3d/textures/tex_human_male_head_4.png",
+      "mount/graph/obj3d/textures/tex_human_male_head_5.png",
+      "mount/graph/obj3d/textures/tex_human_male_medium_armor.png",
+      "mount/graph/obj3d/textures/tex_human_male_new_heavy_boots.png"
+    ],
+    "audio": [
+      "mount/sfx/ambiance/door_open_01.wav",
+      "mount/sfx/ambiance/exploration_0.wav",
+      "mount/sfx/ambiance/keys_01.wav",
+      "mount/sfx/ambiance/keys_02.wav",
+      "mount/sfx/ambiance/lock_open_01.wav",
+      "mount/sfx/ambiance/metal_close_01.wav",
+      "mount/sfx/ambiance/metal_sheet_01.wav",
+      "mount/sfx/ambiance/metal_sheet_02.wav",
+      "mount/sfx/ambiance/metal_sheet_03.wav",
+      "mount/sfx/ambiance/metal_sheet_04.wav",
+      "mount/sfx/ambiance/qubodup-yd-darkshrineloop-opengameart.wav",
+      "mount/sfx/misc_04.wav",
+      "mount/sfx/misc_08.wav"
+    ]
+  },
+  "native_aliases": [
+    {
+      "source": "mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl",
+      "aliases": ["mount/game/graph/obj3d/interactive/npc/human_male/tweaks/base.ftl"]
+    }
+  ],
+  "json": [
+    { "format": "ftl", "path": "json/json_dummy.ftl.json" },
+    { "format": "tea", "path": "json/json_dice.tea.json" },
+    { "format": "fts", "path": "json/level9.fts.json" },
+    { "format": "dlf", "path": "json/level9.dlf.json" },
+    { "format": "llf", "path": "json/level9.llf.json" },
+    { "format": "amb", "path": "json/explore.amb.json" }
+  ]
+}

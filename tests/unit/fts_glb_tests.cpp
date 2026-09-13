@@ -3,13 +3,14 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/debug/level.hpp"
-#include "arx_pistoris/indices.h"
+#include "arx_pistoris/glb.hpp"
+#include "arx_pistoris/level/types.h"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/pistoris.hpp"
 
-#include "arx/conversion/level/api.h"
 #include "external/glb/accessor.h"
 #include "external/glb/container.h"
 #include "external/glb/level/api.h"
@@ -18,17 +19,20 @@
 #include "helpers.h"
 #include "image_helpers.h"
 #include "level/data.h"
-#include "level/level.h"
+#include "level/native/api.h"
+#include "level/validation.h"
 #include "level_add_helpers.h"
 #include "modules/geometry.h"
 #include "modules/lights.h"
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
+#include "modules/textures.h"
 #include "nlohmann/json.hpp"
 #include "stb/stb_image_write.h"
+#include "utils/encoded_image.h"
 #include "utils/log.h"
-#include "utils/math/geometry.h"
+#include "utils/math/geometry_algorithms.h"
 #include "utils/math/quat.h"
 
 #include <algorithm>
@@ -41,6 +45,7 @@
 #include <limits>
 #include <numeric>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -186,7 +191,25 @@ void addDefaultRoom(pistoris::LevelModules& level) { level.rooms.definitions.pus
 void addPortalRooms(pistoris::LevelModules& level) { level.rooms.definitions = {{"room_1"}, {"room_2"}}; }
 
 void setUsablePlayerSpawn(pistoris::LevelModules& level, pistoris::PlayerSpawn player_spawn) {
-  REQUIRE(pistoris::scene::setPlayerSpawn(level.scene, player_spawn) == pistoris::scene::Error::kNone);
+  REQUIRE(pistoris::scene::validatePlayerSpawn(player_spawn) == pistoris::scene::Error::kNone);
+  pistoris::scene::setPlayerSpawn(level.scene, player_spawn);
+}
+
+void checkSameRotation(const pistoris::ArxQuat& actual, const pistoris::ArxQuat& expected) {
+  const float dot = actual.w * expected.w + actual.x * expected.x + actual.y * expected.y + actual.z * expected.z;
+  CHECK(std::abs(dot) == doctest::Approx(1.0f).epsilon(1.0e-5));
+}
+
+pistoris::ArxQuat nonNpcEntityRotation(pistoris::ArxAngle angle) {
+  angle.yaw = 270.0f - angle.yaw;
+  return pistoris::math::angleToQuat(angle);
+}
+
+pistoris::ArxQuat npcEntityRotation(pistoris::ArxAngle angle) {
+  angle.yaw = 180.0f - angle.yaw;
+  return pistoris::math::axisAngle(0.0f, 0.0f, 1.0f, angle.pitch * pistoris::math::kRadiansPerDegree) *
+         pistoris::math::axisAngle(0.0f, 1.0f, 0.0f, angle.yaw * pistoris::math::kRadiansPerDegree) *
+         pistoris::math::axisAngle(1.0f, 0.0f, 0.0f, angle.roll * pistoris::math::kRadiansPerDegree);
 }
 
 void connectPortal(pistoris::Portal& portal, std::string name) {
@@ -221,12 +244,12 @@ const pistoris::ArxColor3& bakedColor(const pistoris::LevelModules& level, std::
 
 ArxReturnCode buildLevelModules(pistoris::LevelModules& out, const pistoris::fts::Data& fts,
                                 const pistoris::llf::Data* llf = nullptr, const pistoris::dlf::Data* dlf = nullptr) {
-  return pistoris::arx_level_conversion::buildLevel({fts, llf, dlf}, out);
+  return pistoris::level_native::buildLevel({fts, llf, dlf}, out);
 }
 
 ArxReturnCode buildAndWeldLevel(pistoris::Level& out, const pistoris::fts::Data& fts,
                                 const pistoris::Level::VertexWeldOptions& options = {}) {
-  ArxReturnCode rc = pistoris::Level::fromNative(out, fts);
+  ArxReturnCode rc = pistoris::Level::importNative(out, fts);
   return rc == ARX_OK ? out.weldVertices(options) : rc;
 }
 
@@ -267,9 +290,9 @@ ArxReturnCode importLevelGlb(std::span<const std::uint8_t> glb, pistoris::LevelM
 
 ArxReturnCode importLevelGlbWithOptions(std::span<const std::uint8_t> glb,
                                         const pistoris::Level::GlbImportOptions& options, pistoris::LevelModules& out,
-                                        pistoris::Level::GlbImportInfo* info = nullptr) {
+                                        ArxLevelGlbImportInfo* info = nullptr) {
   pistoris::LevelModules tmp;
-  pistoris::Level::GlbImportInfo import_info;
+  ArxLevelGlbImportInfo import_info{};
   ArxReturnCode rc = pistoris::importLevelFromGlb(glb, tmp, options, nullptr, &import_info);
   if (rc != ARX_OK) return rc;
   rc = validateModules(tmp);
@@ -280,8 +303,38 @@ ArxReturnCode importLevelGlbWithOptions(std::span<const std::uint8_t> glb,
   return rc;
 }
 
-void addLevelFace(pistoris::LevelModules& level, pistoris::Face face, std::uint32_t room = 0) {
+struct TestCorner {
+  pistoris::VertexIndex vertex = 0;
+  pistoris::ArxVector3 normal = {};
+  float u = 0.0f;
+  float v = 0.0f;
+};
+
+struct TestFace {
+  std::array<TestCorner, 3> corners;
+  pistoris::TextureIndex texture = pistoris::kNoTexture;
+  pistoris::FaceType flags = 0;
+  float transval = 0.0f;
+};
+
+void addGeometryFace(pistoris::LevelModules& level, const TestFace& source) {
+  pistoris::Face face;
+  for (std::size_t corner = 0; corner < source.corners.size(); ++corner) {
+    face.corners[corner] = {
+        source.corners[corner].vertex,
+        source.corners[corner].normal,
+        source.corners[corner].u,
+        source.corners[corner].v,
+    };
+  }
+  face.texture = source.texture;
+  face.flags = source.flags;
+  face.transval = source.transval;
   level.geometry.faces.push_back(face);
+}
+
+void addLevelFace(pistoris::LevelModules& level, const TestFace& source, std::uint32_t room = 0) {
+  addGeometryFace(level, source);
   level.rooms.face_rooms.push_back(room);
 }
 
@@ -669,7 +722,7 @@ pistoris::ArxVector3 normalAtDegrees(float degrees, float scale = 1.0f) {
 pistoris::LevelModules makeNormalFan(std::span<const pistoris::ArxVector3> normals) {
   pistoris::LevelModules level;
   addDefaultRoom(level);
-  level.geometry.textures = {"graph/test.bmp"};
+  level.textures.textures = {"graph/test"};
   level.geometry.vertices.push_back({{0.0f, 0.0f, 0.0f}});
   for (std::size_t i = 0; i < normals.size(); ++i) {
     std::uint32_t a = static_cast<std::uint32_t>(level.geometry.vertices.size());
@@ -685,7 +738,7 @@ pistoris::LevelModules makeNormalFan(std::span<const pistoris::ArxVector3> norma
 pistoris::LevelModules makeSimpleLevel() {
   pistoris::LevelModules level;
   addDefaultRoom(level);
-  level.geometry.textures = {"graph/test.bmp"};
+  level.textures.textures = {"graph/test"};
   level.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
   pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
   addLevelFace(level, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
@@ -702,7 +755,7 @@ ArxReturnCode exportRenderSplitsDebugGlb(const pistoris::LevelModules& src, floa
   test::MeshSnapshot mesh;
   mesh.vertices = src.geometry.vertices;
   mesh.faces = src.geometry.faces;
-  mesh.textures = src.geometry.textures;
+  mesh.textures = src.textures.textures;
   mesh.face_rooms = src.rooms.face_rooms;
   mesh.corner_colors = src.lighting.corner_colors;
   ArxReturnCode rc = test::replaceMesh(level, mesh);
@@ -772,8 +825,7 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     CHECK(bundle.dlf.scene_path == "graph/levels/output");
     CHECK(bundle.fts.scene.sizex == 160);
@@ -830,8 +882,8 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = "", .reconstruct_quads = false}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
+                level, {.level_name = "output", .reconstruct_quads = false}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.cells[0].polygons.size() == 2);
     REQUIRE(bundle.fts.cells[1].polygons.size() == 1);
@@ -845,7 +897,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelNativeBundleBakePacksCompatibleNonplanarFaces") {
     pistoris::LevelModules level;
     addDefaultRoom(level);
-    level.geometry.textures = {"graph/test.bmp"};
+    level.textures.textures = {"graph/test.bmp"};
     level.geometry.vertices = {
         {{0.0f, 0.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 10.0f}}, {{10.0f, -5.0f, 10.0f}}};
     const pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
@@ -862,8 +914,7 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.cells[0].polygons.size() == 1);
     const pistoris::fts::Poly& poly = bundle.fts.cells[0].polygons[0];
@@ -894,7 +945,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelNativeBundleBakeKeepsFacesSeparateWhenSharedAttributesDiffer") {
     pistoris::LevelModules level;
     addDefaultRoom(level);
-    level.geometry.textures = {"graph/test.bmp"};
+    level.textures.textures = {"graph/test.bmp"};
     level.geometry.vertices = {
         {{0.0f, 0.0f, 0.0f}}, {{10.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 10.0f}}, {{10.0f, 0.0f, 10.0f}}};
     const pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
@@ -902,8 +953,7 @@ TEST_SUITE("FtsGlb") {
     addLevelFace(level, {{{{3, normal, 1.0f, 1.0f}, {2, normal, 0.25f, 1.0f}, {1, normal, 1.0f, 0.0f}}}, 0, 0, 0.0f});
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.cells[0].polygons.size() == 2);
     CHECK((bundle.fts.cells[0].polygons[0].type & pistoris::kFaceBitQuad) == 0);
@@ -914,7 +964,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelNativeBundleBakeDoesNotPackCoincidentUnsharedEdges") {
     pistoris::LevelModules level;
     addDefaultRoom(level);
-    level.geometry.textures = {"graph/test.bmp"};
+    level.textures.textures = {"graph/test.bmp"};
     level.geometry.vertices = {
         {{0.0f, 0.0f, 0.0f}},
         {{10.0f, 0.0f, 0.0f}},
@@ -928,8 +978,7 @@ TEST_SUITE("FtsGlb") {
     addLevelFace(level, {{{{3, normal, 1.0f, 1.0f}, {4, normal, 0.0f, 1.0f}, {5, normal, 1.0f, 0.0f}}}, 0, 0, 0.0f});
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.cells[0].polygons.size() == 2);
     CHECK((bundle.fts.cells[0].polygons[0].type & pistoris::kFaceBitQuad) == 0);
@@ -945,8 +994,7 @@ TEST_SUITE("FtsGlb") {
     level.rooms.distances = {{.distance = 123.0f, .low_room_portal = 0, .high_room_portal = 1}};
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.room_distances.size() == 9);
     const pistoris::fts::RoomDistData& forward = bundle.fts.room_distances[1 * 3 + 2];
@@ -967,8 +1015,7 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     CHECK(logs.contains("room-distance data missing or incomplete"));
     CHECK(logs.contains("writing default -1 distances for 1 room pair(s)"));
@@ -982,8 +1029,7 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     CHECK(logs.contains("room-distance data contains no positive real-room distances"));
     CHECK(logs.contains("writing non-positive fallbacks"));
@@ -1003,8 +1049,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::NativeLevelBundle bundle;
     LogCapture logs;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     CHECK(bundle.fts.scene.num_rooms == 2);
     REQUIRE(bundle.fts.rooms.size() == 3);
@@ -1031,8 +1076,7 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules level = makeSimpleLevel();
     pistoris::NativeLevelBundle bundle;
 
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     CHECK(bundle.fts.scene.playerpos.x == doctest::Approx(0.0f));
     CHECK(bundle.dlf.player_spawn.position.x == doctest::Approx(0.0f));
     CHECK(bundle.dlf.player_spawn.angle.yaw == doctest::Approx(0.0f));
@@ -1048,8 +1092,8 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::NativeLevelBundle bundle;
     bundle.dlf.scene_path = "unchanged";
-    CHECK(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-              level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_DLF_BAD_ZONE_HEIGHT);
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) ==
+          ARX_DLF_BAD_ZONE_HEIGHT);
     CHECK(bundle.dlf.scene_path == "unchanged");
   }
 
@@ -1059,13 +1103,13 @@ TEST_SUITE("FtsGlb") {
     bundle.dlf.scene_path = "unchanged";
 
     const std::string embedded_nul("bad\0name", 8);
-    CHECK(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-              level, {.level_name = embedded_nul, .texture_folder = ""}, bundle) == ARX_DLF_BAD_SCENE_PATH);
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = embedded_nul}, bundle) ==
+          ARX_DLF_BAD_SCENE_PATH);
     CHECK(bundle.dlf.scene_path == "unchanged");
 
     const std::string long_name(512, 'x');
-    CHECK(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-              level, {.level_name = long_name, .texture_folder = ""}, bundle) == ARX_DLF_BAD_SCENE_PATH);
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = long_name}, bundle) ==
+          ARX_DLF_BAD_SCENE_PATH);
     CHECK(bundle.dlf.scene_path == "unchanged");
   }
 
@@ -1078,41 +1122,21 @@ TEST_SUITE("FtsGlb") {
     level.scene.zones.push_back(std::move(zone));
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.dlf.zones.size() == 1);
     CHECK(bundle.dlf.zones[0].height == 3);
   }
 
-  TEST_CASE("LevelNativeBundleBakeReportsDiscardedClippedFragmentsAndFaces") {
-    pistoris::LevelModules level = makeSimpleLevel();
-    const pistoris::VertexIndex first = static_cast<pistoris::VertexIndex>(level.geometry.vertices.size());
-    level.geometry.vertices.push_back({{0.0f, 0.0f, 0.0f}});
-    level.geometry.vertices.push_back({{16000.0f, 0.0f, 0.0f}});
-    level.geometry.vertices.push_back({{0.0f, 0.0f, 1.0e-8f}});
-    pistoris::Face thin = level.geometry.faces.front();
-    for (std::size_t i = 0; i < 3; ++i) thin.corners[i].vertex = first + static_cast<std::uint32_t>(i);
-    level.geometry.faces.push_back(thin);
-    level.rooms.face_rooms.push_back(0);
-
-    LogCapture logs;
-    pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
-
-    CHECK(logs.contains("clipped polygon fragment(s) with non-finite or minimum area discarded"));
-    CHECK(logs.contains("1 source face(s) produced no output polygons after clipping"));
-  }
-
   TEST_CASE("LevelNativeBundleBakeDoesNotEmitFragmentsRejectedByNativeImport") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.vertices = {{{99.999985f, 0.0f, 0.0f}}, {{100.000015f, 0.0f, 0.0f}}, {{100.000015f, 0.0f, 10.0f}}};
+    const float left = std::nextafter(100.0f, 0.0f);
+    const float right = std::nextafter(100.0f, std::numeric_limits<float>::infinity());
+    level.geometry.vertices = {{{left, 0.0f, 0.0f}}, {{right, 0.0f, 0.0f}}, {{right, 0.0f, 10.0f}}};
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
-    CHECK(logs.contains("clipped polygon fragment(s) with non-finite or minimum area discarded"));
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
+    CHECK(logs.contains("clipped polygon fragment(s) with non-finite or degenerate geometry discarded"));
     REQUIRE(bundle.fts.scene.num_polys > 0);
     for (const pistoris::fts::Cell& cell : bundle.fts.cells) {
       for (const pistoris::fts::Poly& poly : cell.polygons) {
@@ -1129,19 +1153,16 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelNativeBundleBakeRebasesTextureFilesAndUsesExtensionlessReferences") {
     pistoris::LevelModules level = makeSimpleLevel();
     level.scene.player_spawn = pistoris::PlayerSpawn{{0.0f, 0.0f, 0.0f}, {}};
-    level.geometry.textures = {"source/wall.jpg"};
-    level.geometry.textures[0].encoded_image = makeTestBmp();
+    level.textures.textures = {"source/wall"};
+    level.textures.textures[0].encoded_image = makeTestBmp();
+    REQUIRE(pistoris::textures::rebasePaths(level.textures, "GRAPH\\OBJ3D\\TEXTURES") ==
+            pistoris::textures::Error::kNone);
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level,
-                {.level_name = "output",
-                 .texture_folder = "GRAPH\\OBJ3D\\TEXTURES",
-                 .texture_path_mode = pistoris::NativeTexturePathMode::kRebase},
-                bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.textures.contains(1));
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/wall");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/wall.");
     REQUIRE(bundle.texture_files.size() == 1);
     CHECK(bundle.texture_files[0].source_texture == 0);
     CHECK(bundle.texture_files[0].resource_path == "graph/obj3d/textures/wall.bmp");
@@ -1150,70 +1171,66 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("LevelNativeBundleBakeCanSkipTextureFilesWithoutDroppingReferences") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"source/my??wall.jpg"};
-    level.geometry.textures[0].encoded_image = makeTestBmp();
+    level.textures.textures = {"source/my_wall"};
+    level.textures.textures[0].encoded_image = makeTestBmp();
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = "", .include_texture_files = false}, bundle) ==
-            ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
+                level, {.level_name = "output", .textures = {.include_files = false}}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.textures.contains(1));
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "source/my_wall");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "source/my_wall.");
     CHECK(bundle.texture_files.empty());
   }
 
   TEST_CASE("LevelNativeBundleBakeRescalesNpotTextureFilesAndReportsTheTotal") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"source/wall.bmp", "source/floor.tga", "source/pot.bmp"};
+    level.textures.textures = {"source/wall", "source/floor", "source/pot"};
     const std::vector<std::uint8_t> npot = makeTestNpotBmp();
-    level.geometry.textures[0].encoded_image = npot;
-    level.geometry.textures[1].encoded_image = npot;
-    level.geometry.textures[2].encoded_image = makeTestBmp();
+    level.textures.textures[0].encoded_image = npot;
+    level.textures.textures[1].encoded_image = npot;
+    level.textures.textures[2].encoded_image = makeTestBmp();
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.texture_files.size() == 3);
     CHECK(bundle.texture_files[0].resource_path == "source/wall.png");
     CHECK(bundle.texture_files[1].resource_path == "source/floor.png");
     CHECK(bundle.texture_files[2].resource_path == "source/pot.bmp");
     CHECK(bundle.texture_files[2].encoded_image == makeTestBmp());
-    pistoris::geometry::ImageInfo info;
-    REQUIRE(pistoris::geometry::inspectImage(bundle.texture_files[0].encoded_image, &info) ==
-            pistoris::geometry::ImageError::kNone);
-    CHECK(info.format == pistoris::geometry::ImageFormat::kPng);
+    pistoris::image::Info info;
+    REQUIRE(pistoris::image::inspect(bundle.texture_files[0].encoded_image, &info) == pistoris::image::Error::kNone);
+    CHECK(info.format == pistoris::image::Format::kPng);
     CHECK(info.width == 4);
     CHECK(info.height == 2);
-    CHECK(level.geometry.textures[0].encoded_image == npot);
-    CHECK(level.geometry.textures[1].encoded_image == npot);
+    CHECK(level.textures.textures[0].encoded_image == npot);
+    CHECK(level.textures.textures[1].encoded_image == npot);
     CHECK(logs.contains("rescaled 2 non-power-of-two texture image(s)"));
   }
 
-  TEST_CASE("LevelNativeBundleBakePreservesTextureDirectoriesAndDisambiguatesExtensionlessNames") {
+  TEST_CASE("LevelNativeBundleBakePreservesTextureDirectoriesAndInnerDots") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"custom/wall.jpg", "custom/wall.png", "custom/wall_1.tga"};
-    level.geometry.textures[0].encoded_image = makeTestBmp();
-    level.geometry.textures[1].encoded_image = makeTestTga();
+    level.textures.textures = {"custom/wall.jpg", "custom/wall.png", "custom/wall_1"};
+    level.textures.textures[0].encoded_image = makeTestBmp();
+    level.textures.textures[1].encoded_image = makeTestTga();
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 3);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall");
-    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall_2");
-    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_1");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall.jpg.");
+    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall.png.");
+    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_1.");
     REQUIRE(bundle.texture_files.size() == 2);
-    CHECK(bundle.texture_files[0].resource_path == "custom/wall.bmp");
-    CHECK(bundle.texture_files[1].resource_path == "custom/wall_2.tga");
+    CHECK(bundle.texture_files[0].resource_path == "custom/wall.jpg.bmp");
+    CHECK(bundle.texture_files[1].resource_path == "custom/wall.png.tga");
   }
 
   TEST_CASE("LevelNativeBundleBakeShardsOversizedRoomTextureBatches") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"custom/wall.bmp", "custom/wall_1.bmp"};
-    level.geometry.textures[0].encoded_image = makeTestBmp();
+    level.textures.textures = {"custom/wall", "custom/wall_1"};
+    level.textures.textures[0].encoded_image = makeTestBmp();
     const pistoris::Face face = level.geometry.faces.front();
     constexpr std::size_t kBaseTriangles = pistoris::kFtsMaxRoomTextureVertices / 3U;
     level.geometry.faces.assign(kBaseTriangles + 1U, face);
@@ -1221,13 +1238,13 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = "", .reconstruct_quads = false}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
+                level, {.level_name = "output", .reconstruct_quads = false}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.textures.size() == 3);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall");
-    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall_1");
-    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_2");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall.");
+    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall_1.");
+    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_2.");
     std::size_t base_polygons = 0;
     std::size_t shard_polygons = 0;
     for (const pistoris::fts::EpData& reference : bundle.fts.rooms[1].polygons) {
@@ -1250,94 +1267,100 @@ TEST_SUITE("FtsGlb") {
     CHECK(logs.contains("provide a copy of the original image under every shard resource name"));
 
     pistoris::NativeLevelBundle references_only;
-    REQUIRE(
-        pistoris::arx_level_conversion::bakeNativeLevelBundle(
-            level,
-            {.level_name = "output", .texture_folder = "", .reconstruct_quads = false, .include_texture_files = false},
-            references_only) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
+                level,
+                {.level_name = "output", .textures = {.include_files = false}, .reconstruct_quads = false},
+                references_only) == ARX_OK);
     CHECK(references_only.texture_files.empty());
     REQUIRE(references_only.fts.textures.size() == 3);
-    CHECK(std::string(references_only.fts.textures.at(3).fic) == "custom/wall_2");
+    CHECK(std::string(references_only.fts.textures.at(3).fic) == "custom/wall_2.");
   }
 
-  TEST_CASE("LevelNativeBundleBakeSanitizesEmittedTextureFilesBeforeDisambiguation") {
+  TEST_CASE("TextureRebaseSanitizesNamesAndResolvesIdentityCollisions") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"custom/CON.png", "custom/my??tex.png", "custom/my_tex.png", "custom/my_tex_1.png"};
-    level.geometry.textures[0].encoded_image = makeTestBmp();
-    level.geometry.textures[1].encoded_image = makeTestTga();
+    level.textures.textures = {"source/CON", "source/my??tex", "source/my_tex", "source/my_tex_1"};
+    level.textures.textures[0].encoded_image = makeTestBmp();
+    level.textures.textures[1].encoded_image = makeTestTga();
 
-    LogCapture logs;
+    pistoris::textures::PathRebaseInfo info;
+    REQUIRE(pistoris::textures::rebasePaths(level.textures, "custom", &info) == pistoris::textures::Error::kNone);
+    CHECK(info.repairs.size() == 2);
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 4);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/CON_1");
-    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/my_tex");
-    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/my_tex_2");
-    CHECK(std::string(bundle.fts.textures.at(4).fic) == "custom/my_tex_1");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/con-.");
+    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/my--tex.");
+    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/my_tex.");
+    CHECK(std::string(bundle.fts.textures.at(4).fic) == "custom/my_tex_1.");
     REQUIRE(bundle.texture_files.size() == 2);
-    CHECK(bundle.texture_files[0].resource_path == "custom/CON_1.bmp");
-    CHECK(bundle.texture_files[1].resource_path == "custom/my_tex.tga");
-    CHECK(logs.contains("sanitized 2 native texture path(s)"));
+    CHECK(bundle.texture_files[0].resource_path == "custom/con-.bmp");
+    CHECK(bundle.texture_files[1].resource_path == "custom/my--tex.tga");
   }
 
   TEST_CASE("LevelNativeBundleBakeRejectsUnsafeUnresolvedTexturePaths") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"custom/CON.png"};
+    level.textures.textures = {"custom/con"};
 
     pistoris::NativeLevelBundle bundle;
-    CHECK(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-              level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_FTS_BAD_TEXTURE_PATH);
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) ==
+          ARX_LEVEL_BAD_TEXTURE_PATH);
 
-    level.geometry.textures[0].path = R"(C:\textures\wall.bmp)";
-    level.geometry.textures[0].encoded_image = makeTestBmp();
-    CHECK(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-              level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_FTS_BAD_TEXTURE_PATH);
+    level.textures.textures[0].path = R"(C:\textures\wall)";
+    level.textures.textures[0].encoded_image = makeTestBmp();
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) ==
+          ARX_LEVEL_BAD_TEXTURE_PATH);
   }
 
-  TEST_CASE("LevelNativeBundleBakePreservesPortableNativeTexturePunctuation") {
+  TEST_CASE("LevelNativeBundleBakePreservesTexturePunctuation") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"GRAPH/OBJ3D/TEXTURES/L1_[ICE] (ROCK)&WALL.BMP"};
+    level.textures.textures = {"graph/obj3d/textures/l1_[ice] (rock)&wall"};
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_[ice] (rock)&wall.");
+  }
+
+  TEST_CASE("LevelNativeBundleBakeAppliesTheFtsExtensionlessTextureLimit") {
+    pistoris::LevelModules level = makeSimpleLevel();
+    const std::string resource_name = std::string(13, 'd') + "/" + std::string(240, 'a');
+    level.textures.textures = {resource_name};
+
+    pistoris::NativeLevelBundle bundle;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "GRAPH/OBJ3D/TEXTURES/L1_[ICE] (ROCK)&WALL");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == resource_name + '.');
+
+    level.textures.textures[0].path.insert(level.textures.textures[0].path.find('/'), 1, 'd');
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) ==
+          ARX_FTS_BAD_TEXTURE_PATH);
   }
 
   TEST_CASE("LevelNativeBundleBakePreservesSquareBracketsInEmittedTextureFiles") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"graph/obj3d/textures/l1_wall_[metal].bmp"};
-    level.geometry.textures[0].encoded_image = makeTestBmp();
+    level.textures.textures = {"graph/obj3d/textures/l1_wall_[metal]"};
+    level.textures.textures[0].encoded_image = makeTestBmp();
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_wall_[metal]");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_wall_[metal].");
     REQUIRE(bundle.texture_files.size() == 1);
     CHECK(bundle.texture_files[0].resource_path == "graph/obj3d/textures/l1_wall_[metal].bmp");
   }
 
-  TEST_CASE("LevelNativeBundleBakeRestoresKnownGameTexturePathsOnlyAtTheirCanonicalLocation") {
+  TEST_CASE("LevelNativeBundleBakePreservesRepeatedUnderscoresInTexturePaths") {
     pistoris::LevelModules level = makeSimpleLevel();
-    level.geometry.textures = {"graph/obj3d/textures/l4_dwarf_[stone]_wall01.bmp"};
+    level.textures.textures = {"graph/obj3d/textures/l4_dwarf_[stone]__wall01"};
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l4_dwarf_[stone]__wall01");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l4_dwarf_[stone]__wall01.");
 
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level,
-                {.level_name = "output",
-                 .texture_folder = "custom/textures",
-                 .texture_path_mode = pistoris::NativeTexturePathMode::kRebase},
-                bundle) == ARX_OK);
+    REQUIRE(pistoris::textures::rebasePaths(level.textures, "custom/textures") == pistoris::textures::Error::kNone);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/textures/l4_dwarf_[stone]_wall01");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/textures/l4_dwarf_[stone]__wall01.");
   }
 
   TEST_CASE("LevelNativeBundleBakePreservesLightingAndDlfModules") {
@@ -1389,8 +1412,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::NativeLevelBundle bundle;
     LogCapture logs;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.llf.colors.size() == 3);
     CHECK(bundle.llf.colors[0].r == doctest::Approx(1.0f));
@@ -1441,11 +1463,9 @@ TEST_SUITE("FtsGlb") {
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
     level.geometry.faces.clear();
     level.rooms.face_rooms.clear();
-    level.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(level, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     level.rooms.face_rooms.push_back(0);
-    level.geometry.faces.push_back(
-        {{{{3, normal, 0.0f, 0.0f}, {4, normal, 1.0f, 0.0f}, {5, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(level, {{{{3, normal, 0.0f, 0.0f}, {4, normal, 1.0f, 0.0f}, {5, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     level.rooms.face_rooms.push_back(0);
     level.lighting.corner_colors = {{1.0f, 0.0f, 0.0f},
                                     {1.0f, 0.0f, 0.0f},
@@ -1455,8 +1475,7 @@ TEST_SUITE("FtsGlb") {
                                     {0.0f, 1.0f, 0.0f}};
 
     pistoris::NativeLevelBundle bundle;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.cells[0].polygons.size() == 1);
     REQUIRE(bundle.fts.cells[1].polygons.size() == 1);
@@ -1479,8 +1498,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::NativeLevelBundle bundle;
     LogCapture logs;
-    REQUIRE(pistoris::arx_level_conversion::bakeNativeLevelBundle(
-                level, {.level_name = "output", .texture_folder = ""}, bundle) == ARX_OK);
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     CHECK(!logs.contains("pruned"));
     REQUIRE(bundle.fts.anchors.size() == 3);
@@ -1520,9 +1538,12 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(buildLevelModules(level, makeTriangleFtsScene()) == ARX_OK);
 
     REQUIRE(level.geometry.faces.size() == 1);
+    REQUIRE(level.textures.textures.size() == 1);
+    CHECK(level.textures.textures[0].path == "graph/levels/test");
+    CHECK(level.textures.textures[0].external_image_extension == ".bmp");
     CHECK(level.lighting.corner_colors.empty());
     CHECK(level.lighting.lights.empty());
-    CHECK(level.scene.player_spawn_is_fallback);
+    CHECK_FALSE(level.scene.player_spawn.has_value());
   }
 
   TEST_CASE("FtsToLevelUsesDedicatedNormalRepairTolerance") {
@@ -1702,18 +1723,19 @@ TEST_SUITE("FtsGlb") {
     pistoris::dlf::Path path;
     path.name = "guard";
     path.position = {2.0f, 3.0f, 4.0f};
-    path.nodes = {{{0.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kStandard, 0},
-                  {{1.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kBezier, 100}};
+    path.nodes = {{{0.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kBezier, 0},
+                  {{1.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kControlPoint, 100},
+                  {{2.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kStandard, 200}};
     dlf.paths.push_back(path);
 
     LogCapture logs;
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, src, nullptr, &dlf) == ARX_OK);
 
-    CHECK(level.scene.player_spawn.position.x == 11.0f);
-    CHECK(level.scene.player_spawn.position.y == 22.0f);
-    CHECK(level.scene.player_spawn.position.z == 33.0f);
-    CHECK_FALSE(level.scene.player_spawn_is_fallback);
+    REQUIRE(level.scene.player_spawn.has_value());
+    CHECK(level.scene.player_spawn.value().position.x == 11.0f);
+    CHECK(level.scene.player_spawn.value().position.y == 22.0f);
+    CHECK(level.scene.player_spawn.value().position.z == 33.0f);
     REQUIRE(level.scene.entities.size() == 4);
     CHECK(level.scene.entities[0].ident == 7);
     CHECK(level.scene.entities[0].position.x == 14.0f);
@@ -1732,7 +1754,37 @@ TEST_SUITE("FtsGlb") {
     CHECK(level.scene.paths[0].position.x == 12.0f);
     CHECK(level.scene.paths[0].position.y == 23.0f);
     CHECK(level.scene.paths[0].position.z == 34.0f);
+    REQUIRE(level.scene.paths[0].nodes.size() == 3);
+    CHECK(level.scene.paths[0].nodes[0].type == pistoris::PathNodeType::kBezier);
+    CHECK(level.scene.paths[0].nodes[1].type == pistoris::PathNodeType::kStandard);
+    CHECK(level.scene.paths[0].nodes[2].type == pistoris::PathNodeType::kStandard);
     CHECK(logs.contains("1 consecutive zone point(s) collapsed"));
+  }
+
+  TEST_CASE("NativeLevelConvertsEntityAnglesToRenderedRotations") {
+    pistoris::dlf::Data dlf;
+    dlf.scene_path = "graph/levels/level1";
+    dlf.entities.push_back({"graph/obj3d/interactive/fix_inter/door/door", 1, {}, {12.0f, 40.0f, -18.0f}});
+    dlf.entities.push_back({"graph/obj3d/interactive/npc/human_base/human_base", 2, {}, {25.0f, 70.0f, 15.0f}});
+    dlf.entities.push_back({"graph/obj3d/interactive/items/npc_token/npc_token", 3, {}, {8.0f, 95.0f, 3.0f}});
+    dlf.entities.push_back({"graph/obj3d/interactive/npc/goblin_base/goblin_base", 4, {}, {35.0f, 90.0f, -12.0f}});
+
+    pistoris::LevelModules level;
+    REQUIRE(buildLevelModules(level, makeTriangleFtsScene(), nullptr, &dlf) == ARX_OK);
+    REQUIRE(level.scene.entities.size() == 4);
+
+    checkSameRotation(level.scene.entities[0].rotation, nonNpcEntityRotation(dlf.entities[0].angle));
+    checkSameRotation(level.scene.entities[1].rotation, npcEntityRotation(dlf.entities[1].angle));
+    checkSameRotation(level.scene.entities[2].rotation, nonNpcEntityRotation(dlf.entities[2].angle));
+    checkSameRotation(level.scene.entities[3].rotation, npcEntityRotation(dlf.entities[3].angle));
+
+    pistoris::NativeLevelBundle baked;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, baked) == ARX_OK);
+    REQUIRE(baked.dlf.entities.size() == 4);
+    checkSameRotation(level.scene.entities[0].rotation, nonNpcEntityRotation(baked.dlf.entities[0].angle));
+    checkSameRotation(level.scene.entities[1].rotation, npcEntityRotation(baked.dlf.entities[1].angle));
+    checkSameRotation(level.scene.entities[2].rotation, nonNpcEntityRotation(baked.dlf.entities[2].angle));
+    checkSameRotation(level.scene.entities[3].rotation, npcEntityRotation(baked.dlf.entities[3].angle));
   }
 
   TEST_CASE("NativeLevelRepairsDuplicatePathNames") {
@@ -1752,10 +1804,10 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, makeTriangleFtsScene(), nullptr, &dlf) == ARX_OK);
     REQUIRE(level.scene.paths.size() == 3);
-    CHECK(level.scene.paths[0].name == "patrol_");
+    CHECK(level.scene.paths[0].name == "patrol");
     CHECK(level.scene.paths[1].name == "patrol_1");
     CHECK(level.scene.paths[2].name == "patrol_2");
-    CHECK(logs.contains("1 duplicate path name(s) renamed"));
+    CHECK(logs.contains("2 path name(s) repaired"));
   }
 
   TEST_CASE("NativeLevelPreservesNoneZoneAmbiance") {
@@ -1784,6 +1836,47 @@ TEST_SUITE("FtsGlb") {
     CHECK(level.scene.zones[0].ambiance->name == "none");
     CHECK_FALSE(level.scene.zones[1].ambiance.has_value());
     CHECK(logs.contains("1 empty zone ambiance override(s) ignored"));
+
+    pistoris::NativeLevelBundle baked;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, baked) == ARX_OK);
+    REQUIRE(baked.dlf.zones[0].ambiance.has_value());
+    CHECK(baked.dlf.zones[0].ambiance->name == "none");
+  }
+
+  TEST_CASE("NativeLevelPreservesDottedZoneAmbianceNames") {
+    pistoris::dlf::Data dlf;
+    dlf.scene_path = "graph/levels/level1";
+    auto add_zone = [&](std::string name, std::string ambiance) {
+      pistoris::dlf::Zone zone;
+      zone.name = std::move(name);
+      zone.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}};
+      zone.height = 5;
+      zone.ambiance = pistoris::dlf::ZoneAmbiance{std::move(ambiance), 100.0f};
+      dlf.zones.push_back(std::move(zone));
+    };
+    add_zone("protected", "cave/water.v2.");
+    add_zone("explicit", "cave/water.v2.amb");
+    add_zone("unprotected", "cave/water.v2");
+
+    pistoris::LevelModules level;
+    REQUIRE(buildLevelModules(level, makeTriangleFtsScene(), nullptr, &dlf) == ARX_OK);
+    REQUIRE(level.scene.zones.size() == 3);
+    REQUIRE(level.scene.zones[0].ambiance.has_value());
+    REQUIRE(level.scene.zones[1].ambiance.has_value());
+    REQUIRE(level.scene.zones[2].ambiance.has_value());
+    CHECK(level.scene.zones[0].ambiance->name == "cave/water.v2");
+    CHECK(level.scene.zones[1].ambiance->name == "cave/water.v2");
+    CHECK(level.scene.zones[2].ambiance->name == "cave/water");
+
+    pistoris::NativeLevelBundle baked;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, baked) == ARX_OK);
+    REQUIRE(baked.dlf.zones.size() == 3);
+    REQUIRE(baked.dlf.zones[0].ambiance.has_value());
+    REQUIRE(baked.dlf.zones[1].ambiance.has_value());
+    REQUIRE(baked.dlf.zones[2].ambiance.has_value());
+    CHECK(baked.dlf.zones[0].ambiance->name == "cave/water.v2.");
+    CHECK(baked.dlf.zones[1].ambiance->name == "cave/water.v2.");
+    CHECK(baked.dlf.zones[2].ambiance->name == "cave/water.");
   }
 
   TEST_CASE("NativeLevelMapsTheSewerCompatibilityPathToAnInfiniteZone") {
@@ -2190,21 +2283,21 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, src) == ARX_OK);
 
-    REQUIRE(level.geometry.textures.size() == 1);
+    REQUIRE(level.textures.textures.size() == 1);
     CHECK(level.geometry.faces[0].texture == 0);
-    CHECK(level.geometry.textures[0] == "graph/levels/test.bmp");
+    CHECK(level.textures.textures[0] == "graph/levels/test");
   }
 
-  TEST_CASE("FtsToLevelMapsKnownGameTexturePathsToLibraryAliases") {
+  TEST_CASE("FtsToLevelPreservesRepeatedUnderscoresInTexturePaths") {
     pistoris::fts::Data src = makeTriangleFtsScene();
     auto& texture = src.textures.at(24275104);
-    std::snprintf(texture.fic, sizeof(texture.fic), R"(GRAPH\OBJ3D\TEXTURES\NPC_HUMAN__BASE_HERO_HEAD.BMP)");
+    std::snprintf(texture.fic, sizeof(texture.fic), R"(GRAPH\TEXTURES\STONE__MOSS.BMP)");
 
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, src) == ARX_OK);
 
-    REQUIRE(level.geometry.textures.size() == 1);
-    CHECK(level.geometry.textures[0] == "graph/obj3d/textures/npc_human_base_hero_head_1.BMP");
+    REQUIRE(level.textures.textures.size() == 1);
+    CHECK(level.textures.textures[0] == "graph/textures/stone__moss");
   }
 
   TEST_CASE("FtsToLevelTreatsEmptyTexturePathsAsNoTexture") {
@@ -2218,8 +2311,8 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, src) == ARX_OK);
 
-    REQUIRE(level.geometry.textures.size() == 1);
-    CHECK(level.geometry.textures[0] == "graph/levels/real.bmp");
+    REQUIRE(level.textures.textures.size() == 1);
+    CHECK(level.textures.textures[0] == "graph/levels/real");
     REQUIRE(level.geometry.faces.size() == 2);
     CHECK(level.geometry.faces[0].texture == pistoris::kNoTexture);
     CHECK(level.geometry.faces[1].texture == 0);
@@ -2628,7 +2721,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::Level::GlbImportOptions import_options;
     import_options.arx_offset = export_options.arx_offset;
-    pistoris::Level::GlbImportInfo info;
+    ArxLevelGlbImportInfo info{};
     pistoris::LevelModules dst;
     LogCapture logs;
     REQUIRE(importLevelGlbWithOptions(glb, import_options, dst, &info) == ARX_OK);
@@ -2652,8 +2745,10 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.lighting.lights[0].fallstart == doctest::Approx(3.0f));
     CHECK(dst.lighting.lights[0].fallend == doctest::Approx(10.0f));
     CHECK(dst.lighting.lights[0].effect_radius == doctest::Approx(4.0f));
-    CHECK(dst.scene.player_spawn.position.z == doctest::Approx(6.0f));
-    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.rotation).yaw == doctest::Approx(20.0f).epsilon(1.0e-4));
+    REQUIRE(dst.scene.player_spawn.has_value());
+    CHECK(dst.scene.player_spawn.value().position.z == doctest::Approx(6.0f));
+    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.value().rotation).yaw ==
+          doctest::Approx(20.0f).epsilon(1.0e-4));
     REQUIRE(dst.scene.entities.size() == 1);
     CHECK(dst.scene.entities[0].position.x == doctest::Approx(7.0f));
     CHECK(pistoris::math::quatToAngle(dst.scene.entities[0].rotation).yaw == doctest::Approx(15.0f).epsilon(1.0e-4));
@@ -2683,7 +2778,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbCoordinateUnitRangeIsInclusive") {
     pistoris::LevelModules src = makeSimpleLevel();
     std::vector<std::uint8_t> glb;
-    for (float units : {pistoris::kMinArxUnitsPerGlbUnit, pistoris::kMaxArxUnitsPerGlbUnit}) {
+    for (float units : {pistoris::glb::kMinArxUnitsPerUnit, pistoris::glb::kMaxArxUnitsPerUnit}) {
       pistoris::Level::GlbExportOptions export_options;
       export_options.arx_units_per_glb_unit = units;
       REQUIRE(exportLevelGlbWithOptions(src, export_options, glb) == ARX_OK);
@@ -2698,10 +2793,10 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::Level::GlbExportOptions export_options;
     export_options.arx_units_per_glb_unit =
-        std::nextafter(pistoris::kMinArxUnitsPerGlbUnit, -std::numeric_limits<float>::infinity());
+        std::nextafter(pistoris::glb::kMinArxUnitsPerUnit, -std::numeric_limits<float>::infinity());
     CHECK(exportLevelGlbWithOptions(src, export_options, glb) == ARX_INVALID_OPTIONS);
     export_options.arx_units_per_glb_unit =
-        std::nextafter(pistoris::kMaxArxUnitsPerGlbUnit, std::numeric_limits<float>::infinity());
+        std::nextafter(pistoris::glb::kMaxArxUnitsPerUnit, std::numeric_limits<float>::infinity());
     CHECK(exportLevelGlbWithOptions(src, export_options, glb) == ARX_INVALID_OPTIONS);
 
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
@@ -2725,7 +2820,7 @@ TEST_SUITE("FtsGlb") {
     parsed.gltf["nodes"][spawn_index]["translation"][0] = std::numeric_limits<float>::max();
 
     pistoris::Level::GlbImportOptions import_options;
-    import_options.arx_units_per_glb_unit = pistoris::kMaxArxUnitsPerGlbUnit;
+    import_options.arx_units_per_glb_unit = pistoris::glb::kMaxArxUnitsPerUnit;
     import_options.arx_offset = pistoris::ArxVector3{};
     pistoris::LevelModules dst;
     CHECK(importLevelGlbWithOptions(writeTestGlb(std::move(parsed)), import_options, dst) == ARX_GLB_BAD_FORMAT);
@@ -2736,7 +2831,7 @@ TEST_SUITE("FtsGlb") {
                                   {},
                                   "overflow_entity"});
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
-    import_options.arx_units_per_glb_unit = pistoris::kMinArxUnitsPerGlbUnit;
+    import_options.arx_units_per_glb_unit = pistoris::glb::kMinArxUnitsPerUnit;
     import_options.arx_offset = pistoris::ArxVector3{std::numeric_limits<float>::max(), 0.0f, 0.0f};
     CHECK(importLevelGlbWithOptions(glb, import_options, dst) == ARX_INVALID_OPTIONS);
   }
@@ -2757,7 +2852,7 @@ TEST_SUITE("FtsGlb") {
     src.scene.zones.push_back(finite);
 
     pistoris::Level::GlbExportOptions export_options;
-    export_options.arx_units_per_glb_unit = pistoris::kMaxArxUnitsPerGlbUnit;
+    export_options.arx_units_per_glb_unit = pistoris::glb::kMaxArxUnitsPerUnit;
     export_options.arx_offset = {100.0f, -200.0f, 300.0f};
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlbWithOptions(src, export_options, glb) == ARX_OK);
@@ -2784,7 +2879,7 @@ TEST_SUITE("FtsGlb") {
     parsed.gltf["nodes"][room_parent_index]["translation"][0] = -0.7f;
 
     pistoris::Level::GlbImportOptions options;
-    pistoris::Level::GlbImportInfo info;
+    ArxLevelGlbImportInfo info{};
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlbWithOptions(writeTestGlb(parsed), options, dst, &info) == ARX_OK);
     CHECK(info.applied_arx_offset.x == doctest::Approx(200.0f));
@@ -2885,7 +2980,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelDebugGlbUsesTheConfiguredCoordinateConversion") {
     pistoris::Level level;
     pistoris::fts::Data fts = makeTriangleFtsScene();
-    REQUIRE(pistoris::Level::fromNative(level, fts) == ARX_OK);
+    REQUIRE(pistoris::Level::importNative(level, fts) == ARX_OK);
 
     pistoris::Level::GlbExportOptions options;
     options.arx_units_per_glb_unit = 50.0f;
@@ -2905,14 +3000,15 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbRoundtripPreservesPortalAndAnchorNamesAndDimensions") {
     pistoris::LevelModules src;
     addPortalRooms(src);
-    src.geometry.textures.push_back("graph/test.bmp");
+    src.textures.textures.push_back("graph/test.bmp");
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
-                                  0,
-                                  pistoris::kFaceBitStone,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     0,
+                     pistoris::kFaceBitStone,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
     addSecondRoomTriangle(src);
     pistoris::Portal portal;
@@ -2930,7 +3026,7 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     std::string text(reinterpret_cast<const char*>(glb.data()), glb.size());
     CHECK(text.find("\"indices\"") != std::string::npos);
-    CHECK(text.find("arx_anchor_links") == std::string::npos);
+    CHECK(text.find("arx_pistoris_anchor") != std::string::npos);
     CHECK(text.find("arx_portal__room_1__room_2__hallway") != std::string::npos);
     CHECK(text.find("arx_anchor__RADIUS_4__HEIGHT_5__BLOCKED__navigation_start") != std::string::npos);
     CHECK(text.find("__HEIGHT_5") != std::string::npos);
@@ -2979,11 +3075,58 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
     REQUIRE(dst.rooms.portals.size() == 1);
     REQUIRE(dst.navigation.anchors.size() == 2);
-    CHECK(dst.rooms.portals[0].name == "hallway.001");
-    CHECK(dst.navigation.anchors[0].name == "navigation_start.001");
+    CHECK(dst.rooms.portals[0].name == "hallway-001");
+    CHECK(dst.navigation.anchors[0].name == "navigation_start-001");
     CHECK(dst.navigation.anchors[0].radius == 4.0f);
     CHECK(dst.navigation.anchors[0].height == -5.0f);
     CHECK(dst.navigation.anchors[0].flags == pistoris::kAnchorFlagBlocked);
+  }
+
+  TEST_CASE("LevelGlbImportNormalizesRoomReferencesAndRejectsNormalizedCollisions") {
+    pistoris::LevelModules src;
+    addPortalRooms(src);
+    src.textures.textures.push_back("graph/test.bmp");
+    src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     0,
+                     0,
+                     0.0f});
+    src.rooms.face_rooms.push_back(0);
+    addSecondRoomTriangle(src);
+    pistoris::Portal portal;
+    connectPortal(portal, "hallway");
+    portal.vertices = {{{0.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 0.0f}}};
+    src.rooms.portals.push_back(portal);
+
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t room_1 = testNodeIndex(parsed, "arx_room__room_1");
+    const std::size_t room_2 = testNodeIndex(parsed, "arx_room__room_2");
+    const std::size_t portal_node = testNodeIndex(parsed, "arx_portal__room_1__room_2__hallway");
+    REQUIRE(room_1 < parsed.gltf["nodes"].size());
+    REQUIRE(room_2 < parsed.gltf["nodes"].size());
+    REQUIRE(portal_node < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][room_1]["name"] = "arx_room__east hall";
+    parsed.gltf["nodes"][room_2]["name"] = "arx_room__west-hall";
+    parsed.gltf["nodes"][portal_node]["name"] = "arx_portal__east hall__west-hall__hallway";
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
+    REQUIRE(dst.rooms.definitions.size() == 2);
+    CHECK(dst.rooms.definitions[0].name == "east-hall");
+    CHECK(dst.rooms.definitions[1].name == "west-hall");
+    REQUIRE(dst.rooms.portals.size() == 1);
+    CHECK(dst.rooms.portals[0].room_1 == 0);
+    CHECK(dst.rooms.portals[0].room_2 == 1);
+
+    parsed = parseTestGlb(glb);
+    parsed.gltf["nodes"][room_1]["name"] = "arx_room__east hall";
+    parsed.gltf["nodes"][room_2]["name"] = "arx_room__east@hall";
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_ROOM);
   }
 
   TEST_CASE("LevelAnchorConnectionGenerationIsExplicit") {
@@ -3015,6 +3158,113 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.navigation.connections.empty());
   }
 
+  TEST_CASE("LevelGlbRoundtripPreservesAnchorConnectionsAsOpaqueMetadata") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "first"});
+    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "second"});
+    src.navigation.anchors.push_back({{0.50f, 0.0f, 0.75f}, 10.0f, -20.0f, 0, "third"});
+    src.navigation.connections = {{0, 1}, {0, 2}};
+
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t first = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__first");
+    const std::size_t second = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__second");
+    const std::size_t third = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__third");
+    REQUIRE(first < parsed.gltf["nodes"].size());
+    REQUIRE(second < parsed.gltf["nodes"].size());
+    REQUIRE(third < parsed.gltf["nodes"].size());
+    CHECK(parsed.gltf["nodes"][first]["extras"]["arx_pistoris_anchor"]["id"] == 0);
+    CHECK(parsed.gltf["nodes"][first]["extras"]["arx_pistoris_anchor"]["links"] == nlohmann::json::array({1, 2}));
+    CHECK(parsed.gltf["nodes"][second]["extras"]["arx_pistoris_anchor"]["id"] == 1);
+    CHECK(parsed.gltf["nodes"][second]["extras"]["arx_pistoris_anchor"]["links"].empty());
+    CHECK(parsed.gltf["nodes"][third]["extras"]["arx_pistoris_anchor"]["id"] == 2);
+    CHECK(parsed.gltf["nodes"][third]["extras"]["arx_pistoris_anchor"]["links"].empty());
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
+    REQUIRE(dst.navigation.connections.size() == 2);
+    CHECK(dst.navigation.connections[0].first == 0);
+    CHECK(dst.navigation.connections[0].second == 1);
+    CHECK(dst.navigation.connections[1].first == 0);
+    CHECK(dst.navigation.connections[1].second == 2);
+
+    parsed.gltf["nodes"][first]["extras"]["arx_pistoris_anchor"] = {{"id", 30}, {"links", {20, 10, 999, 30}}};
+    parsed.gltf["nodes"][second]["extras"]["arx_pistoris_anchor"] = {{"id", 20}, {"links", {30}}};
+    parsed.gltf["nodes"][third]["extras"]["arx_pistoris_anchor"] = {{"id", 10}, {"links", nlohmann::json::array()}};
+    LogCapture logs;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.navigation.connections.size() == 2);
+    CHECK(dst.navigation.connections[0].first == 0);
+    CHECK(dst.navigation.connections[0].second == 1);
+    CHECK(dst.navigation.connections[1].first == 0);
+    CHECK(dst.navigation.connections[1].second == 2);
+    CHECK(
+        logs.contains("1 dangling connection declaration(s) discarded; "
+                      "1 self-referencing connection declaration(s) discarded"));
+  }
+
+  TEST_CASE("LevelGlbAnchorConnectionMetadataToleratesRemovedAnchors") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "first"});
+    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "removed"});
+    src.navigation.anchors.push_back({{0.50f, 0.0f, 0.75f}, 10.0f, -20.0f, 0, "third"});
+    src.navigation.connections = {{0, 1}, {0, 2}};
+
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t removed = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__removed");
+    const std::size_t parent = testNodeIndex(parsed, "anchors_parent");
+    REQUIRE(removed < parsed.gltf["nodes"].size());
+    REQUIRE(parent < parsed.gltf["nodes"].size());
+    nlohmann::json& children = parsed.gltf["nodes"][parent]["children"];
+    children.erase(std::remove(children.begin(), children.end(), removed), children.end());
+
+    LogCapture logs;
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.navigation.anchors.size() == 2);
+    REQUIRE(dst.navigation.connections.size() == 1);
+    CHECK(dst.navigation.connections[0].first == 0);
+    CHECK(dst.navigation.connections[0].second == 1);
+    CHECK(logs.contains("1 dangling connection declaration(s) discarded"));
+  }
+
+  TEST_CASE("LevelGlbAnchorConnectionMetadataDiscardsAmbiguousAndMalformedDeclarations") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "first"});
+    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "second"});
+    src.navigation.anchors.push_back({{0.50f, 0.0f, 0.75f}, 10.0f, -20.0f, 0, "third"});
+    src.navigation.anchors.push_back({{0.50f, 0.0f, 0.50f}, 10.0f, -20.0f, 0, "malformed"});
+    src.navigation.connections = {{0, 1}, {0, 2}};
+
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t first = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__first");
+    const std::size_t second = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__second");
+    const std::size_t third = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__third");
+    const std::size_t malformed = testNodeIndex(parsed, "arx_anchor__RADIUS_10__HEIGHT_20__malformed");
+    REQUIRE(first < parsed.gltf["nodes"].size());
+    REQUIRE(second < parsed.gltf["nodes"].size());
+    REQUIRE(third < parsed.gltf["nodes"].size());
+    REQUIRE(malformed < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][first]["extras"]["arx_pistoris_anchor"] = {{"id", 4}, {"links", {5, "bad"}}};
+    parsed.gltf["nodes"][second]["extras"]["arx_pistoris_anchor"] = {{"id", 5}, {"links", {4}}};
+    parsed.gltf["nodes"][third]["extras"]["arx_pistoris_anchor"] = {{"id", 5}, {"links", nlohmann::json::array()}};
+    parsed.gltf["nodes"][malformed]["extras"]["arx_pistoris_anchor"] = {{"id", 6.5},
+                                                                        {"links", nlohmann::json::array()}};
+
+    LogCapture logs;
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    CHECK(dst.navigation.connections.empty());
+    CHECK(
+        logs.contains("1 malformed record(s) discarded; 1 malformed link(s) discarded; 1 ambiguous ID(s); "
+                      "2 ambiguous connection declaration(s) discarded"));
+  }
+
   TEST_CASE("LevelGlbImportDoesNotLinkBlockedAnchors") {
     pistoris::LevelModules src = makeSimpleLevel();
     pistoris::ArxVector3 wall_normal{-1.0f, 0.0f, 0.0f};
@@ -3023,19 +3273,21 @@ TEST_SUITE("FtsGlb") {
     src.geometry.vertices.push_back({{0.5f, -100.0f, 0.0f}});
     src.geometry.vertices.push_back({{0.5f, 0.0f, 2.0f}});
     src.geometry.vertices.push_back({{0.5f, -100.0f, 2.0f}});
-    src.geometry.faces.push_back({{{{base + 0, wall_normal, 0.0f, 0.0f},
-                                    {base + 1, wall_normal, 0.0f, 0.0f},
-                                    {base + 2, wall_normal, 0.0f, 0.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{base + 0, wall_normal, 0.0f, 0.0f},
+                       {base + 1, wall_normal, 0.0f, 0.0f},
+                       {base + 2, wall_normal, 0.0f, 0.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back({{{{base + 2, wall_normal, 0.0f, 0.0f},
-                                    {base + 1, wall_normal, 0.0f, 0.0f},
-                                    {base + 3, wall_normal, 0.0f, 0.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{base + 2, wall_normal, 0.0f, 0.0f},
+                       {base + 1, wall_normal, 0.0f, 0.0f},
+                       {base + 3, wall_normal, 0.0f, 0.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
     src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, {}});
     src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, {}});
@@ -3059,11 +3311,9 @@ TEST_SUITE("FtsGlb") {
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
     level.geometry.faces.clear();
     level.rooms.face_rooms.clear();
-    level.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 1.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(level, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 1.0f, 1.0f}}}, 0, 0, 0.0f});
     level.rooms.face_rooms.push_back(0);
-    level.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {2, normal, 1.0f, 1.0f}, {3, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(level, {{{{0, normal, 0.0f, 0.0f}, {2, normal, 1.0f, 1.0f}, {3, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     level.rooms.face_rooms.push_back(0);
     level.navigation.surface = pistoris::NavSurface{
         {{{0.0f, 0.0f, 0.0f}}, {{200.0f, 0.0f, 0.0f}}, {{200.0f, 0.0f, 200.0f}}, {{0.0f, 0.0f, 200.0f}}},
@@ -3073,7 +3323,8 @@ TEST_SUITE("FtsGlb") {
     level.navigation.connections.push_back({0, 0});
 
     pistoris::GeometryDerived derived;
-    REQUIRE(pistoris::geometry::validate(level.geometry, &derived) == pistoris::geometry::Error::kNone);
+    REQUIRE(pistoris::geometry::validate(level.geometry, level.textures.textures.size(), &derived) ==
+            pistoris::geometry::Error::kNone);
     std::vector<pistoris::Anchor> anchors;
     REQUIRE(pistoris::navigation::generateAnchors(anchors,
                                                   level.geometry,
@@ -3162,9 +3413,10 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules src;
     addPortalRooms(src);
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{4.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 4.0f}}};
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}}});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}}});
     src.rooms.face_rooms.push_back(0);
     addSecondRoomTriangle(src);
     pistoris::Portal quad;
@@ -3233,14 +3485,15 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbRoundtripPreservesTrianglePortalShape") {
     pistoris::LevelModules src;
     addPortalRooms(src);
-    src.geometry.textures.push_back("graph/test.bmp");
+    src.textures.textures.push_back("graph/test.bmp");
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
     addSecondRoomTriangle(src);
     pistoris::Portal portal;
@@ -3259,7 +3512,7 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.rooms.portals[0].shape == pistoris::PortalShape::kTriangle);
   }
 
-  TEST_CASE("LevelGlbPlayerSpawnFallbackStateIsSemantic") {
+  TEST_CASE("LevelGlbPlayerSpawnPresenceIsSemantic") {
     pistoris::LevelModules src = makeSimpleLevel();
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
@@ -3268,7 +3521,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
-    CHECK(dst.scene.player_spawn_is_fallback);
+    CHECK_FALSE(dst.scene.player_spawn.has_value());
 
     setUsablePlayerSpawn(src, {});
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
@@ -3276,9 +3529,9 @@ TEST_SUITE("FtsGlb") {
     CHECK(testNodeIndex(parsed, "arx_player_spawn__spawn") < parsed.gltf["nodes"].size());
 
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
-    CHECK_FALSE(dst.scene.player_spawn_is_fallback);
-    CHECK(dst.scene.player_spawn.position.x == doctest::Approx(0.0f));
-    CHECK(dst.scene.player_spawn.rotation.w == doctest::Approx(1.0f));
+    REQUIRE(dst.scene.player_spawn.has_value());
+    CHECK(dst.scene.player_spawn.value().position.x == doctest::Approx(0.0f));
+    CHECK(dst.scene.player_spawn.value().rotation.w == doctest::Approx(1.0f));
   }
 
   TEST_CASE("LevelGlbSingletonRootsAcceptShortAndHelperNames") {
@@ -3301,13 +3554,13 @@ TEST_SUITE("FtsGlb") {
     parsed.gltf["nodes"][nav_surface_index]["name"] = "arx_nav_surface";
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    CHECK_FALSE(dst.scene.player_spawn_is_fallback);
+    REQUIRE(dst.scene.player_spawn.has_value());
     REQUIRE(dst.navigation.surface.has_value());
 
     parsed.gltf["nodes"][spawn_index]["name"] = "arx_player_spawn__spawn.001";
     parsed.gltf["nodes"][nav_surface_index]["name"] = "arx_nav_surface__surface.001";
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    CHECK_FALSE(dst.scene.player_spawn_is_fallback);
+    REQUIRE(dst.scene.player_spawn.has_value());
     REQUIRE(dst.navigation.surface.has_value());
 
     parsed.gltf["nodes"][spawn_index]["name"] = "arx_player_spawn__";
@@ -3336,8 +3589,8 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
-    CHECK_FALSE(dst.scene.player_spawn_is_fallback);
-    const pistoris::ArxVector3& selected = dst.scene.player_spawn.position;
+    REQUIRE(dst.scene.player_spawn.has_value());
+    const pistoris::ArxVector3& selected = dst.scene.player_spawn.value().position;
     const bool selected_original = selected.x == doctest::Approx(4.0f) && selected.y == doctest::Approx(5.0f) &&
                                    selected.z == doctest::Approx(6.0f);
     const bool selected_duplicate = selected.x == doctest::Approx(40.0f) && selected.y == doctest::Approx(50.0f) &&
@@ -3374,11 +3627,11 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
-    CHECK(dst.scene.player_spawn.position.x == doctest::Approx(4.0f));
-    CHECK(dst.scene.player_spawn.position.y == doctest::Approx(5.0f));
-    CHECK(dst.scene.player_spawn.position.z == doctest::Approx(6.0f));
-    CHECK_FALSE(dst.scene.player_spawn_is_fallback);
-    pistoris::ArxAngle spawn_angle = pistoris::math::quatToAngle(dst.scene.player_spawn.rotation);
+    REQUIRE(dst.scene.player_spawn.has_value());
+    CHECK(dst.scene.player_spawn.value().position.x == doctest::Approx(4.0f));
+    CHECK(dst.scene.player_spawn.value().position.y == doctest::Approx(5.0f));
+    CHECK(dst.scene.player_spawn.value().position.z == doctest::Approx(6.0f));
+    pistoris::ArxAngle spawn_angle = pistoris::math::quatToAngle(dst.scene.player_spawn.value().rotation);
     CHECK(spawn_angle.pitch == doctest::Approx(10.0f).epsilon(1.0e-4));
     CHECK(spawn_angle.yaw == doctest::Approx(20.0f).epsilon(1.0e-4));
     CHECK(spawn_angle.roll == doctest::Approx(30.0f).epsilon(1.0e-4));
@@ -3401,50 +3654,70 @@ TEST_SUITE("FtsGlb") {
     CHECK(second_entity_angle.roll == doctest::Approx(6.0f).epsilon(1.0e-4));
   }
 
-  TEST_CASE("LevelGlbEntityClassHelpersUseShorthandOnlyForCanonicalModelClasses") {
+  TEST_CASE("LevelGlbEntityClassHelpersUseSelectorsOnlyForCanonicalModelClasses") {
     pistoris::LevelModules src = makeSimpleLevel();
     src.scene.entities.push_back({"graph/obj3d/interactive/fix_inter/door/door", -1, {1.0f, 2.0f, 3.0f}, {}, "door"});
     src.scene.entities.push_back(
-        {"graph/obj3d/interactive/fix_inter/custom/layout/door", -1, {4.0f, 5.0f, 6.0f}, {}, "custom"});
+        {"graph/obj3d/interactive/fix_inter/custom__layout/door", -1, {4.0f, 5.0f, 6.0f}, {}, "custom"});
     src.scene.entities.push_back(
         {"graph/obj3d/interactive/items/armor/chest_chain/chest_chain", -1, {7.0f, 8.0f, 9.0f}, {}, "armor"});
     src.scene.entities.push_back(
         {"graph/obj3d/interactive/items/jewelry/gold_coin/gold_coin2", -1, {10.0f, 11.0f, 12.0f}, {}, "variant"});
+    src.scene.entities.push_back(
+        {"graph/obj3d/interactive/npc/my__npc/my__npc", -1, {13.0f, 14.0f, 15.0f}, {}, "double"});
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     ParsedTestGlb parsed = parseTestGlb(glb);
     CHECK(testNodeIndex(parsed, "CLASS_model:fix_inter:door__door") < parsed.gltf["nodes"].size());
     CHECK(testNodeIndex(parsed, "CLASS_model:armor:chest_chain__armor") < parsed.gltf["nodes"].size());
-    CHECK(testNodeIndex(parsed, "CLASS_graph/obj3d/interactive/fix_inter/custom/layout/door__custom") <
+    CHECK(testNodeIndex(parsed, "CLASS_graph/obj3d/interactive/fix_inter/custom__layout/door__custom") <
           parsed.gltf["nodes"].size());
     CHECK(testNodeIndex(parsed, "CLASS_graph/obj3d/interactive/items/jewelry/gold_coin/gold_coin2__variant") <
           parsed.gltf["nodes"].size());
+    CHECK(testNodeIndex(parsed, "CLASS_model:npc:my__npc__double") < parsed.gltf["nodes"].size());
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
-    REQUIRE(dst.scene.entities.size() == 4);
+    REQUIRE(dst.scene.entities.size() == 5);
     CHECK(dst.scene.entities[0].class_path == "graph/obj3d/interactive/fix_inter/door/door");
-    CHECK(dst.scene.entities[1].class_path == "graph/obj3d/interactive/fix_inter/custom/layout/door");
+    CHECK(dst.scene.entities[1].class_path == "graph/obj3d/interactive/fix_inter/custom__layout/door");
     CHECK(dst.scene.entities[2].class_path == "graph/obj3d/interactive/items/armor/chest_chain/chest_chain");
     CHECK(dst.scene.entities[3].class_path == "graph/obj3d/interactive/items/jewelry/gold_coin/gold_coin2");
+    CHECK(dst.scene.entities[4].class_path == "graph/obj3d/interactive/npc/my__npc/my__npc");
 
-    const std::size_t shorthand = testNodeIndex(parsed, "CLASS_model:armor:chest_chain__armor");
-    REQUIRE(shorthand < parsed.gltf["nodes"].size());
-    parsed.gltf["nodes"][shorthand]["name"] = "CLASS_model:armor:chest_chain.teo__armor";
+    {
+      const std::size_t custom =
+          testNodeIndex(parsed, "CLASS_graph/obj3d/interactive/fix_inter/custom__layout/door__custom");
+      REQUIRE(custom < parsed.gltf["nodes"].size());
+      parsed.gltf["nodes"][custom]["name"] =
+          "CLASS_editor/cache/graph/obj3d/interactive/fix_inter/custom__layout/door__custom";
+      LogCapture logs;
+      REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
+      REQUIRE(dst.scene.entities.size() == 5);
+      CHECK(dst.scene.entities[1].class_path == "graph/obj3d/interactive/fix_inter/custom__layout/door");
+      CHECK(
+          logs.contains("entity class path 'editor/cache/graph/obj3d/interactive/fix_inter/custom__layout/door' "
+                        "is resolved by the game as 'graph/obj3d/interactive/fix_inter/custom__layout/door'"));
+    }
+
+    parsed = parseTestGlb(glb);
+    const std::size_t selector = testNodeIndex(parsed, "CLASS_model:armor:chest_chain__armor");
+    REQUIRE(selector < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][selector]["name"] = "CLASS_model:armor:chest_chain.teo__armor";
     LogCapture logs;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    REQUIRE(dst.scene.entities.size() == 4);
+    REQUIRE(dst.scene.entities.size() == 5);
     CHECK(dst.scene.entities[2].class_path == "graph/obj3d/interactive/items/armor/chest_chain/chest_chain");
     CHECK(logs.contains("normalized 1 legacy .teo entity class path(s)"));
 
-    parsed.gltf["nodes"][shorthand]["name"] = "CLASS_model:items:armor:chest_chain__armor";
+    parsed.gltf["nodes"][selector]["name"] = "CLASS_model:items:armor:chest_chain__armor";
     CHECK(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_GLB_BAD_LEVEL_ENTITY);
 
     parsed = parseTestGlb(glb);
-    const std::size_t nonitem_shorthand = testNodeIndex(parsed, "CLASS_model:fix_inter:door__door");
-    REQUIRE(nonitem_shorthand < parsed.gltf["nodes"].size());
-    parsed.gltf["nodes"][nonitem_shorthand]["name"] = "CLASS_model:fix_inter::door__door";
+    const std::size_t nonitem_selector = testNodeIndex(parsed, "CLASS_model:fix_inter:door__door");
+    REQUIRE(nonitem_selector < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][nonitem_selector]["name"] = "CLASS_model:fix_inter::door__door";
     CHECK(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_GLB_BAD_LEVEL_ENTITY);
   }
 
@@ -3469,6 +3742,14 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.scene.entities[0].name == "spider");
     CHECK(dst.scene.entities[1].name == "spider_2");
     CHECK(dst.scene.entities[2].name == "spider_1");
+
+    parsed = parseTestGlb(glb);
+    const std::size_t repaired_node = testNodeIndex(parsed, "arx_entity__001__other");
+    REQUIRE(repaired_node < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][repaired_node]["name"] = "arx_entity__001__Spider ?? One";
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.scene.entities.size() == 3);
+    CHECK(dst.scene.entities[1].name == "Spider-One");
   }
 
   TEST_CASE("LevelGlbExportUsesIdentityLocalRotationForUprightIdentityEntities") {
@@ -3497,7 +3778,8 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
-    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.rotation).pitch == doctest::Approx(0.0f));
+    REQUIRE(dst.scene.player_spawn.has_value());
+    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.value().rotation).pitch == doctest::Approx(0.0f));
     REQUIRE(dst.scene.entities.size() == 1);
     CHECK(pistoris::math::quatToAngle(dst.scene.entities[0].rotation).pitch == doctest::Approx(0.0f));
   }
@@ -3516,8 +3798,10 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    CHECK(pistoris::math::norm(dst.scene.player_spawn.rotation) == doctest::Approx(1.0f));
-    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.rotation).yaw == doctest::Approx(20.0f).epsilon(1.0e-4));
+    REQUIRE(dst.scene.player_spawn.has_value());
+    CHECK(pistoris::math::norm(dst.scene.player_spawn.value().rotation) == doctest::Approx(1.0f));
+    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.value().rotation).yaw ==
+          doctest::Approx(20.0f).epsilon(1.0e-4));
 
     const std::size_t original_vertex_count = dst.geometry.vertices.size();
     parsed.gltf["nodes"][spawn_index]["rotation"] = {0.0f, 0.0f, 0.0f, 1.0e-7f};
@@ -3540,8 +3824,10 @@ TEST_SUITE("FtsGlb") {
     LogCapture logs;
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    CHECK(dst.scene.player_spawn.position.x == doctest::Approx(4.0f));
-    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.rotation).yaw == doctest::Approx(20.0f).epsilon(1.0e-4));
+    REQUIRE(dst.scene.player_spawn.has_value());
+    CHECK(dst.scene.player_spawn.value().position.x == doctest::Approx(4.0f));
+    CHECK(pistoris::math::quatToAngle(dst.scene.player_spawn.value().rotation).yaw ==
+          doctest::Approx(20.0f).epsilon(1.0e-4));
     CHECK(logs.contains("player spawn node"));
     CHECK(logs.contains("nonidentity local scale; scale ignored"));
 
@@ -3753,23 +4039,23 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules src = makeSimpleLevel();
     src.scene.paths.push_back({"patrol",
                                {10.0f, 20.0f, 30.0f},
-                               {{{}, pistoris::PathNodeType::kStandard, 0},
-                                {{2.0f, 3.0f, 4.0f}, pistoris::PathNodeType::kBezier, 500},
-                                {{5.0f, 6.0f, 7.0f}, pistoris::PathNodeType::kControlPoint, 750}}});
+                               {{{}, pistoris::PathNodeType::kBezier, 0},
+                                {{2.0f, 3.0f, 4.0f}, pistoris::PathNodeType::kStandard, 500},
+                                {{5.0f, 6.0f, 7.0f}, pistoris::PathNodeType::kStandard, 750}}});
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     ParsedTestGlb parsed = parseTestGlb(glb);
     std::size_t parent_index = testNodeIndex(parsed, "paths_parent");
     std::size_t path_index = testNodeIndex(parsed, "arx_path__patrol");
-    std::size_t start_index = testNodeIndex(parsed, "000__STANDARD__TIME_0__patrol");
-    std::size_t turn_index = testNodeIndex(parsed, "001__BEZIER__TIME_500__patrol");
-    std::size_t control_index = testNodeIndex(parsed, "002__CONTROL__TIME_750__patrol");
+    std::size_t start_index = testNodeIndex(parsed, "000__BEZIER__TIME_0__patrol");
+    std::size_t control_index = testNodeIndex(parsed, "001__STANDARD__TIME_500__patrol");
+    std::size_t end_index = testNodeIndex(parsed, "002__STANDARD__TIME_750__patrol");
     REQUIRE(parent_index < parsed.gltf["nodes"].size());
     REQUIRE(path_index < parsed.gltf["nodes"].size());
     REQUIRE(start_index < parsed.gltf["nodes"].size());
-    REQUIRE(turn_index < parsed.gltf["nodes"].size());
     REQUIRE(control_index < parsed.gltf["nodes"].size());
+    REQUIRE(end_index < parsed.gltf["nodes"].size());
     CHECK(parsed.gltf["nodes"][parent_index]["translation"][1].get<float>() == doctest::Approx(-60.0f));
 
     pistoris::LevelModules dst;
@@ -3780,28 +4066,29 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.scene.paths[0].position.y == doctest::Approx(20.0f));
     CHECK(dst.scene.paths[0].position.z == doctest::Approx(30.0f));
     REQUIRE(dst.scene.paths[0].nodes.size() == 3);
-    CHECK(dst.scene.paths[0].nodes[0].type == pistoris::PathNodeType::kStandard);
+    CHECK(dst.scene.paths[0].nodes[0].type == pistoris::PathNodeType::kBezier);
     CHECK(dst.scene.paths[0].nodes[0].time_ms == 0);
-    CHECK(dst.scene.paths[0].nodes[1].type == pistoris::PathNodeType::kBezier);
+    CHECK(dst.scene.paths[0].nodes[1].type == pistoris::PathNodeType::kStandard);
     CHECK(dst.scene.paths[0].nodes[1].time_ms == 500);
     CHECK(dst.scene.paths[0].nodes[1].relative_position.x == doctest::Approx(2.0f));
     CHECK(dst.scene.paths[0].nodes[1].relative_position.y == doctest::Approx(3.0f));
     CHECK(dst.scene.paths[0].nodes[1].relative_position.z == doctest::Approx(4.0f));
-    CHECK(dst.scene.paths[0].nodes[2].type == pistoris::PathNodeType::kControlPoint);
+    CHECK(dst.scene.paths[0].nodes[2].type == pistoris::PathNodeType::kStandard);
     CHECK(dst.scene.paths[0].nodes[2].time_ms == 750);
 
-    parsed.gltf["nodes"][turn_index]["name"] = "001__BEZIER__TIME_500__anything.001";
-    parsed.gltf["nodes"][control_index]["name"] = "002__CONTROL__TIME_750";
-    REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    REQUIRE(dst.scene.paths[0].nodes.size() == 3);
-    CHECK(dst.scene.paths[0].nodes[1].type == pistoris::PathNodeType::kBezier);
-    CHECK(dst.scene.paths[0].nodes[2].type == pistoris::PathNodeType::kControlPoint);
-
-    parsed.gltf["nodes"][turn_index]["name"] = "000__BEZIER__TIME_500__patrol";
+    parsed.gltf["nodes"][control_index]["name"] = "001__STANDARD__TIME_500";
     CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_PATH);
 
     parsed = parseTestGlb(glb);
-    parsed.gltf["nodes"][turn_index]["name"] = "turn";
+    parsed.gltf["nodes"][control_index]["name"] = "001__CONTROL__TIME_500__patrol";
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_PATH);
+
+    parsed = parseTestGlb(glb);
+    parsed.gltf["nodes"][control_index]["name"] = "000__STANDARD__TIME_500__patrol";
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_PATH);
+
+    parsed = parseTestGlb(glb);
+    parsed.gltf["nodes"][control_index]["name"] = "turn";
     CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_PATH);
 
     parsed = parseTestGlb(glb);
@@ -3814,34 +4101,34 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("LevelGlbImportRepairsDuplicatePathNames") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.scene.paths.push_back({"patrol_", {10.0f, 20.0f, 30.0f}, {{{}, pistoris::PathNodeType::kStandard, 0}}});
+    src.scene.paths.push_back({"patrol", {10.0f, 20.0f, 30.0f}, {{{}, pistoris::PathNodeType::kStandard, 0}}});
     src.scene.paths.push_back({"patrol_1", {40.0f, 50.0f, 60.0f}, {{{}, pistoris::PathNodeType::kStandard, 0}}});
     src.scene.paths.push_back({"other", {70.0f, 80.0f, 90.0f}, {{{}, pistoris::PathNodeType::kStandard, 0}}});
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     ParsedTestGlb parsed = parseTestGlb(glb);
-    const std::size_t first_root = testNodeIndex(parsed, "arx_path__patrol_");
+    const std::size_t first_root = testNodeIndex(parsed, "arx_path__patrol");
     const std::size_t second_root = testNodeIndex(parsed, "arx_path__patrol_1");
     const std::size_t third_root = testNodeIndex(parsed, "arx_path__other");
-    const std::size_t first_point = testNodeIndex(parsed, "000__STANDARD__TIME_0__patrol_");
+    const std::size_t first_point = testNodeIndex(parsed, "000__STANDARD__TIME_0__patrol");
     REQUIRE(first_root < parsed.gltf["nodes"].size());
     REQUIRE(second_root < parsed.gltf["nodes"].size());
     REQUIRE(third_root < parsed.gltf["nodes"].size());
     REQUIRE(first_point < parsed.gltf["nodes"].size());
-    parsed.gltf["nodes"][third_root]["name"] = "arx_path__patrol_";
+    parsed.gltf["nodes"][third_root]["name"] = "arx_path__patrol";
 
     pistoris::LevelModules dst;
     LogCapture logs;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
     REQUIRE(dst.scene.paths.size() == 3);
-    CHECK(dst.scene.paths[0].name == "patrol_");
+    CHECK(dst.scene.paths[0].name == "patrol");
     CHECK(dst.scene.paths[1].name == "patrol_1");
     CHECK(dst.scene.paths[2].name == "patrol_2");
     CHECK(dst.scene.paths[0].position.x == doctest::Approx(10.0f));
     CHECK(dst.scene.paths[1].position.x == doctest::Approx(40.0f));
     CHECK(dst.scene.paths[2].position.x == doctest::Approx(70.0f));
-    CHECK(logs.contains("1 duplicate path name(s) renamed"));
+    CHECK(logs.contains("1 path name(s) repaired"));
   }
 
   TEST_CASE("LevelGlbRoundtripPreservesZonesAndSelfCrossingTopology") {
@@ -3853,7 +4140,7 @@ TEST_SUITE("FtsGlb") {
     finite.height = 2.0f;
     finite.color = pistoris::ArxColor3{0.25f, 0.5f, 0.75f};
     finite.farclip = 1200.0f;
-    finite.ambiance = pistoris::ZoneAmbiance{"ambient_cave_a", 80.0f};
+    finite.ambiance = pistoris::ZoneAmbiance{"ambient__cave_a.v2", 80.0f};
     src.scene.zones.push_back(finite);
 
     pistoris::Zone infinite;
@@ -3877,7 +4164,7 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(sewer_index < parsed.gltf["nodes"].size());
     std::size_t settings_index = testNodeIndex(parsed, "SETTINGS__RGB_0.25_0.5_0.75__FARCLIP_1200__VOLUME_80__hall");
     REQUIRE(settings_index < parsed.gltf["nodes"].size());
-    const std::size_t ambiance_index = testNodeIndex(parsed, "AMBIANCE_ambient_cave_a__hall");
+    const std::size_t ambiance_index = testNodeIndex(parsed, "AMBIANCE_ambiance:ambient__cave_a.v2__hall");
     REQUIRE(ambiance_index < parsed.gltf["nodes"].size());
     parsed.gltf["nodes"][settings_index]["name"] = "SETTINGS__VOLUME_80__RGB_0.25_0.5_0.75__FARCLIP_1200__different";
 
@@ -3893,13 +4180,31 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(dst.scene.zones[0].farclip.has_value());
     CHECK(*dst.scene.zones[0].farclip == doctest::Approx(1200.0f));
     REQUIRE(dst.scene.zones[0].ambiance.has_value());
-    CHECK(dst.scene.zones[0].ambiance->name == "ambient_cave_a");
+    CHECK(dst.scene.zones[0].ambiance->name == "ambient__cave_a.v2");
     CHECK(dst.scene.zones[0].ambiance->volume == doctest::Approx(80.0f));
     REQUIRE(dst.scene.zones[0].perimeter_xz.size() == 4);
     CHECK(dst.scene.zones[0].perimeter_xz[0].x == doctest::Approx(dst.scene.zones[0].perimeter_xz[2].x));
     CHECK(dst.scene.zones[0].perimeter_xz[1].x == doctest::Approx(dst.scene.zones[0].perimeter_xz[3].x));
     CHECK(dst.scene.zones[1].name == "sewer");
     CHECK(dst.scene.zones[1].height_mode == pistoris::ZoneHeightMode::kInfinite);
+
+    constexpr std::array kAcceptedReferences = {
+        std::pair{"AMBIANCE_sfx/ambiance/cave/water.v2.amb__path", "cave/water.v2"},
+        std::pair{"AMBIANCE_cave/water.v2__name", "cave/water.v2"},
+        std::pair{"AMBIANCE_none__stop", "none"},
+    };
+    for (const auto& [reference, expected] : kAcceptedReferences) {
+      ParsedTestGlb alternative = parsed;
+      alternative.gltf["nodes"][ambiance_index]["name"] = reference;
+      pistoris::LevelModules imported;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(alternative)), imported) == ARX_OK);
+      REQUIRE(imported.scene.zones[0].ambiance.has_value());
+      CHECK(imported.scene.zones[0].ambiance->name == expected);
+    }
+
+    ParsedTestGlb malformed_selector = parsed;
+    malformed_selector.gltf["nodes"][ambiance_index]["name"] = "AMBIANCE_ambiance:__broken";
+    CHECK(importLevelGlb(writeTestGlb(std::move(malformed_selector)), dst) == ARX_GLB_BAD_LEVEL_ZONE);
 
     const std::size_t duplicate_settings = parsed.gltf["nodes"].size();
     parsed.gltf["nodes"].push_back({{"name", "SETTINGS__RGB_1_0_0__FARCLIP_500__VOLUME_50__other"}});
@@ -3912,7 +4217,7 @@ TEST_SUITE("FtsGlb") {
     CHECK((dst.scene.zones[0].farclip == std::optional<float>{1200.0f} ||
            dst.scene.zones[0].farclip == std::optional<float>{500.0f}));
     REQUIRE(dst.scene.zones[0].ambiance.has_value());
-    CHECK((dst.scene.zones[0].ambiance->name == "ambient_cave_a" ||
+    CHECK((dst.scene.zones[0].ambiance->name == "ambient__cave_a.v2" ||
            dst.scene.zones[0].ambiance->name == "ambient_other"));
 
     ParsedTestGlb malformed_settings = parsed;
@@ -4108,11 +4413,10 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbImportCanonicalizesTheSourceQuadPortalDiagonal") {
     pistoris::LevelModules src;
     addPortalRooms(src);
-    src.geometry.textures.push_back("graph/test.bmp");
+    src.textures.textures.push_back("graph/test.bmp");
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
     addSecondRoomTriangle(src);
     pistoris::Portal portal;
@@ -4143,21 +4447,23 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbExportSplitsRenderVerticesAndMaterialPrimitives") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures.push_back("graph/test.bmp");
+    src.textures.textures.push_back("graph/test.bmp");
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}, {{1.0f, 0.0f, 1.0f}}};
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.5f, 0.5f},
-                                    {3, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f},
-                                    {2, {0.0f, 1.0f, 0.0f}, 0.0f, 1.0f}}},
-                                  0,
-                                  pistoris::kFaceBitStone,
-                                  0.25f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.5f, 0.5f},
+                       {3, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f},
+                       {2, {0.0f, 1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     0,
+                     pistoris::kFaceBitStone,
+                     0.25f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -4204,10 +4510,37 @@ TEST_SUITE("FtsGlb") {
     CHECK(testMaterialAlpha(transparent_material) == doctest::Approx(0.25f));
   }
 
+  TEST_CASE("LevelGlbExportPreservesExternalImageExtensionsAndAssumesPngWhenUnknown") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    src.textures.textures[0].path = "custom/item.pie";
+    src.textures.textures[0].external_image_extension = ".jpg";
+
+    LogCapture logs;
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    CHECK(parsed.gltf["images"][0]["name"] == "item.pie.jpg");
+    CHECK(parsed.gltf["images"][0]["uri"] == "custom/item.pie.jpg");
+    CHECK_FALSE(logs.contains("assuming PNG"));
+
+    pistoris::LevelModules imported;
+    REQUIRE(importLevelGlb(glb, imported) == ARX_OK);
+    REQUIRE(imported.textures.textures.size() == 1);
+    CHECK(imported.textures.textures[0].path == "custom/item.pie");
+    CHECK(imported.textures.textures[0].external_image_extension == ".jpg");
+
+    src.textures.textures[0].external_image_extension.clear();
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    parsed = parseTestGlb(glb);
+    CHECK(parsed.gltf["images"][0]["name"] == "item.pie.png");
+    CHECK(parsed.gltf["images"][0]["uri"] == "custom/item.pie.png");
+    CHECK(logs.contains("external texture format unknown; assuming PNG: custom/item.pie.png"));
+  }
+
   TEST_CASE("LevelGlbExportUsesTextureAlphaForCutout") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.geometry.textures[0].encoded_image = makeTestRgbaPng(255);
-    REQUIRE_FALSE(src.geometry.textures[0].encoded_image.empty());
+    src.textures.textures[0].encoded_image = makeTestRgbaPng(255);
+    REQUIRE_FALSE(src.textures.textures[0].encoded_image.empty());
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
@@ -4226,7 +4559,7 @@ TEST_SUITE("FtsGlb") {
     CHECK(testMaterialAlpha(blended_material) == doctest::Approx(0.75f));
 
     src.geometry.faces[0].flags = 0;
-    src.geometry.textures[0].encoded_image = makeTestBmp(0, 0, 0);
+    src.textures.textures[0].encoded_image = makeTestBmp(0, 0, 0);
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     parsed = parseTestGlb(glb);
     CHECK(parsed.gltf["materials"][0].at("alphaMode") == "MASK");
@@ -4312,9 +4645,32 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.geometry.faces[0].transval == doctest::Approx(0.75f));
   }
 
-  TEST_CASE("LevelGlbExportChecksOnlyReferencedTextureStems") {
+  TEST_CASE("LevelGlbMaterialStemPreservesTexturePunctuationBeforeFlags") {
+    constexpr std::string_view kMaterialName = "my tex_(stone)&old__DOUBLESIDED";
+    constexpr std::string_view kTexturePath = "my tex_(stone)&old";
     pistoris::LevelModules src = makeSimpleLevel();
-    src.geometry.textures.push_back("graph/no_tex.bmp");
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    auto& material = parsed.gltf["materials"][0];
+    material["name"] = kMaterialName;
+    material["pbrMetallicRoughness"].erase("baseColorTexture");
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.textures.textures.size() == 1);
+    REQUIRE(dst.geometry.faces.size() == 1);
+    CHECK(dst.textures.textures[0].path == kTexturePath);
+    CHECK((dst.geometry.faces[0].flags & pistoris::kFaceBitDoublesided) != 0);
+
+    REQUIRE(exportLevelGlb(dst, glb) == ARX_OK);
+    parsed = parseTestGlb(glb);
+    CHECK(parsed.gltf["materials"][0]["name"].get_ref<const std::string&>() == kMaterialName);
+  }
+
+  TEST_CASE("LevelGlbExportDisambiguatesReferencedReservedFallbackStems") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    src.textures.textures.push_back("graph/no_tex.bmp");
 
     LogCapture logs;
     std::vector<std::uint8_t> glb;
@@ -4322,11 +4678,16 @@ TEST_SUITE("FtsGlb") {
     CHECK(logs.contains("unused texture omitted: graph/no_tex.bmp"));
 
     src.geometry.faces[0].texture = 1;
-    CHECK(exportLevelGlb(src, glb) == ARX_GLB_BAD_LEVEL_MATERIAL_RESERVED_STEM);
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+
+    src.textures.textures[1].path = "graph/no_tex";
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    CHECK(parseTestGlb(glb).gltf["materials"][0]["name"] == "no_tex_1");
 
     for (std::string_view reserved : {"arx_zone", "arx_nav_surface"}) {
-      src.geometry.textures[1].path = std::string("graph/") + std::string(reserved) + ".bmp";
-      CHECK(exportLevelGlb(src, glb) == ARX_GLB_BAD_LEVEL_MATERIAL_RESERVED_STEM);
+      src.textures.textures[1].path = std::string("graph/") + std::string(reserved);
+      REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+      CHECK(parseTestGlb(glb).gltf["materials"][0]["name"] == std::string(reserved) + "_1");
     }
   }
 
@@ -4345,40 +4706,40 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("LevelGlbExportEmbedsTextureImagesAndConvertsBmpToPng") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.geometry.textures[0].encoded_image = makeTestBmp();
+    src.textures.textures[0].encoded_image = makeTestBmp();
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     ParsedTestGlb parsed = parseTestGlb(glb);
     REQUIRE(parsed.gltf["images"].size() == 1);
     const auto& image = parsed.gltf["images"][0];
-    CHECK(image.at("name") == "test.png");
+    CHECK(image.at("name") == "graph/test.png");
     CHECK(image.at("mimeType") == "image/png");
     CHECK_FALSE(image.contains("uri"));
     std::span<const std::uint8_t> embedded = testBufferView(parsed, image.at("bufferView").get<std::size_t>());
-    pistoris::geometry::ImageInfo info;
-    REQUIRE(pistoris::geometry::inspectImage(embedded, &info) == pistoris::geometry::ImageError::kNone);
-    CHECK(info.format == pistoris::geometry::ImageFormat::kPng);
+    pistoris::image::Info info;
+    REQUIRE(pistoris::image::inspect(embedded, &info) == pistoris::image::Error::kNone);
+    CHECK(info.format == pistoris::image::Format::kPng);
 
     pistoris::LevelModules imported;
     REQUIRE(importLevelGlb(glb, imported) == ARX_OK);
-    REQUIRE(imported.geometry.textures.size() == 1);
-    CHECK(imported.geometry.textures[0].path == "test.png");
-    CHECK(imported.geometry.textures[0].encoded_image == std::vector<std::uint8_t>(embedded.begin(), embedded.end()));
+    REQUIRE(imported.textures.textures.size() == 1);
+    CHECK(imported.textures.textures[0].path == "graph/test");
+    CHECK(imported.textures.textures[0].encoded_image == std::vector<std::uint8_t>(embedded.begin(), embedded.end()));
 
-    src.geometry.textures[0] = imported.geometry.textures[0];
+    src.textures.textures[0] = imported.textures.textures[0];
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     parsed = parseTestGlb(glb);
     const auto& pass_through_image = parsed.gltf["images"][0];
     std::span<const std::uint8_t> pass_through =
         testBufferView(parsed, pass_through_image.at("bufferView").get<std::size_t>());
     CHECK(std::vector<std::uint8_t>(pass_through.begin(), pass_through.end()) ==
-          imported.geometry.textures[0].encoded_image);
+          imported.textures.textures[0].encoded_image);
   }
 
   TEST_CASE("LevelGlbImportAcceptsBase64ImageDataUris") {
     std::vector<std::uint8_t> png;
-    REQUIRE(pistoris::geometry::transcodeImageToPng(makeTestBmp(), png) == pistoris::geometry::ImageError::kNone);
+    REQUIRE(pistoris::image::transcodeToPng(makeTestBmp(), png) == pistoris::image::Error::kNone);
 
     pistoris::LevelModules src = makeSimpleLevel();
     std::vector<std::uint8_t> glb;
@@ -4391,20 +4752,20 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules imported;
     REQUIRE(importLevelGlb(glb, imported) == ARX_OK);
-    REQUIRE(imported.geometry.textures.size() == 1);
-    CHECK(imported.geometry.textures[0].path == "test.png");
-    CHECK(imported.geometry.textures[0].encoded_image == png);
+    REQUIRE(imported.textures.textures.size() == 1);
+    CHECK(imported.textures.textures[0].path == "test");
+    CHECK(imported.textures.textures[0].encoded_image == png);
   }
 
   TEST_CASE("LevelGlbImportAcceptsPercentEncodedImagesAndRejectsMismatchedMediaTypes") {
     std::vector<std::uint8_t> png;
-    REQUIRE(pistoris::geometry::transcodeImageToPng(makeTestBmp(), png) == pistoris::geometry::ImageError::kNone);
+    REQUIRE(pistoris::image::transcodeToPng(makeTestBmp(), png) == pistoris::image::Error::kNone);
 
     pistoris::LevelModules src = makeSimpleLevel();
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     ParsedTestGlb parsed = parseTestGlb(glb);
-    parsed.gltf["images"][0]["name"] = "unrelated.png";
+    parsed.gltf["images"][0]["name"] = "unrelated__variant.png";
     parsed.gltf["images"][0].erase("bufferView");
     parsed.gltf["images"][0].erase("mimeType");
     parsed.gltf["images"][0]["uri"] = "data:image/png," + testPercentEncoding(png);
@@ -4412,9 +4773,9 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules imported;
     REQUIRE(importLevelGlb(glb, imported) == ARX_OK);
-    REQUIRE(imported.geometry.textures.size() == 1);
-    CHECK(imported.geometry.textures[0].path == "unrelated.png");
-    CHECK(imported.geometry.textures[0].encoded_image == png);
+    REQUIRE(imported.textures.textures.size() == 1);
+    CHECK(imported.textures.textures[0].path == "unrelated__variant");
+    CHECK(imported.textures.textures[0].encoded_image == png);
 
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     parsed = parseTestGlb(glb);
@@ -4429,9 +4790,9 @@ TEST_SUITE("FtsGlb") {
     constexpr std::array<std::uint8_t, 3> kRed = {255, 0, 0};
     std::vector<std::uint8_t> jpeg;
     REQUIRE(stbi_write_jpg_to_func(appendTestImage, &jpeg, 1, 1, 3, kRed.data(), 90) != 0);
-    pistoris::geometry::ImageInfo info;
-    REQUIRE(pistoris::geometry::inspectImage(jpeg, &info) == pistoris::geometry::ImageError::kNone);
-    REQUIRE(info.format == pistoris::geometry::ImageFormat::kJpeg);
+    pistoris::image::Info info;
+    REQUIRE(pistoris::image::inspect(jpeg, &info) == pistoris::image::Error::kNone);
+    REQUIRE(info.format == pistoris::image::Format::kJpeg);
 
     pistoris::LevelModules src = makeSimpleLevel();
     std::vector<std::uint8_t> glb;
@@ -4443,27 +4804,28 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules imported;
     REQUIRE(importLevelGlb(glb, imported) == ARX_OK);
-    REQUIRE(imported.geometry.textures.size() == 1);
-    CHECK(imported.geometry.textures[0].path == "test.jpg");
-    REQUIRE(pistoris::geometry::inspectImage(imported.geometry.textures[0].encoded_image, &info) ==
-            pistoris::geometry::ImageError::kNone);
-    CHECK(info.format == pistoris::geometry::ImageFormat::kJpeg);
+    REQUIRE(imported.textures.textures.size() == 1);
+    CHECK(imported.textures.textures[0].path == "test");
+    REQUIRE(pistoris::image::inspect(imported.textures.textures[0].encoded_image, &info) ==
+            pistoris::image::Error::kNone);
+    CHECK(info.format == pistoris::image::Format::kJpeg);
 
-    src.geometry.textures[0] = imported.geometry.textures[0];
+    src.textures.textures[0] = imported.textures.textures[0];
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     parsed = parseTestGlb(glb);
     const auto& image = parsed.gltf["images"][0];
     CHECK(image.at("name") == "test.jpg");
     CHECK(image.at("mimeType") == "image/jpeg");
     std::span<const std::uint8_t> embedded = testBufferView(parsed, image.at("bufferView").get<std::size_t>());
-    CHECK(std::vector<std::uint8_t>(embedded.begin(), embedded.end()) == imported.geometry.textures[0].encoded_image);
+    CHECK(std::vector<std::uint8_t>(embedded.begin(), embedded.end()) == imported.textures.textures[0].encoded_image);
   }
 
-  TEST_CASE("LevelGlbExportSharesIdenticalImagesAndRejectsConflictingPayloads") {
+  TEST_CASE("LevelGlbExportDoesNotDeduplicateImagesByPayload") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.geometry.textures.push_back(src.geometry.textures[0]);
-    src.geometry.textures[0].encoded_image = makeTestBmp();
-    src.geometry.textures[1].encoded_image = src.geometry.textures[0].encoded_image;
+    src.textures.textures.push_back(src.textures.textures[0]);
+    src.textures.textures[1].path = "graph/test_1";
+    src.textures.textures[0].encoded_image = makeTestBmp();
+    src.textures.textures[1].encoded_image = src.textures.textures[0].encoded_image;
     src.geometry.faces.push_back(src.geometry.faces[0]);
     src.geometry.faces.back().texture = 1;
     src.geometry.faces.back().flags = pistoris::kFaceBitStone;
@@ -4472,19 +4834,17 @@ TEST_SUITE("FtsGlb") {
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     ParsedTestGlb parsed = parseTestGlb(glb);
-    CHECK(parsed.gltf["images"].size() == 1);
-    CHECK(parsed.gltf["textures"].size() == 1);
+    CHECK(parsed.gltf["images"].size() == 2);
+    CHECK(parsed.gltf["textures"].size() == 2);
     CHECK(parsed.gltf["materials"].size() == 3);
 
-    src.geometry.textures[1].encoded_image = makeTestTga();
-    CHECK(exportLevelGlb(src, glb) == ARX_GLB_BAD_LEVEL_MATERIAL_STEM_COLLISION);
+    src.textures.textures[1].encoded_image = makeTestTga();
+    CHECK(exportLevelGlb(src, glb) == ARX_OK);
   }
 
   TEST_CASE("LevelGlbExportGroupsMaterialsByEffectiveTextureIdentity") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.geometry.textures.push_back(src.geometry.textures[0]);
     src.geometry.faces.push_back(src.geometry.faces[0]);
-    src.geometry.faces.back().texture = 1;
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -4499,21 +4859,37 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
     REQUIRE(dst.geometry.faces.size() == 2);
-    REQUIRE(dst.geometry.textures.size() == 1);
+    REQUIRE(dst.textures.textures.size() == 1);
     CHECK(dst.geometry.faces[0].texture == dst.geometry.faces[1].texture);
   }
 
-  TEST_CASE("LevelGlbExportRejectsConflictingSanitizedTextureStems") {
+  TEST_CASE("LevelGlbExportKeepsConflictingSanitizedTextureStemsDistinct") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.geometry.textures = {"a/foo_.bmp", "b/foo.bmp"};
+    src.textures.textures = {"a/foo", "b/foo"};
     src.geometry.vertices.push_back({{1.0f, 0.0f, 1.0f}});
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
+    addGeometryFace(src,
+                    {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}},
+                     1,
+                     pistoris::kFaceBitMetal,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
-    CHECK(exportLevelGlb(src, glb) == ARX_GLB_BAD_LEVEL_MATERIAL_STEM_COLLISION);
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    CHECK(parsed.gltf["textures"].size() == 2);
+    std::set<std::string> material_names;
+    for (const nlohmann::json& material : parsed.gltf["materials"])
+      material_names.insert(material.value("name", std::string{}));
+    CHECK(material_names.contains("foo"));
+    CHECK(material_names.contains("foo_1__METAL"));
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
+    REQUIRE(dst.textures.textures.size() == 2);
+    REQUIRE(dst.geometry.faces.size() == 2);
+    CHECK(dst.geometry.faces[0].texture != dst.geometry.faces[1].texture);
   }
 
   TEST_CASE("LevelGlbExportReportsNonstandardTransvalPreview") {
@@ -4522,10 +4898,11 @@ TEST_SUITE("FtsGlb") {
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
     src.geometry.faces[0].flags = pistoris::kFaceBitTrans;
     src.geometry.faces[0].transval = -1.0f;
-    src.geometry.faces.push_back({{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}},
-                                  0,
-                                  pistoris::kFaceBitTrans,
-                                  -1.0f});
+    addGeometryFace(src,
+                    {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}},
+                     0,
+                     pistoris::kFaceBitTrans,
+                     -1.0f});
     src.rooms.face_rooms.push_back(0);
 
     LogCapture logs;
@@ -4540,7 +4917,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelRenderSplitsDebugGlbPreservesTopologyAndMarksRenderBoundaries") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"graph/a.bmp", "graph/b.bmp"};
+    src.textures.textures = {"graph/a.bmp", "graph/b.bmp"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}},
                              {{1.0f, 0.0f, 0.0f}},
                              {{0.0f, 0.0f, 1.0f}},
@@ -4548,33 +4925,37 @@ TEST_SUITE("FtsGlb") {
                              {{0.0f, 0.0f, 0.0f}},
                              {{2.0f, 0.0f, 0.0f}},
                              {{2.0f, 0.0f, 1.0f}}};
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {1, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back({{{{0, {1.0f, 0.0f, 0.0f}, 0.5f, 0.5f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f},
-                                    {3, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f}}},
-                                  0,
-                                  pistoris::kFaceBitStone,
-                                  0.25f});
+    addGeometryFace(src,
+                    {{{{0, {1.0f, 0.0f, 0.0f}, 0.5f, 0.5f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f},
+                       {3, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f}}},
+                     0,
+                     pistoris::kFaceBitStone,
+                     0.25f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back({{{{1, {0.0f, -1.0f, 0.0f}, 0.75f, 0.75f},
-                                    {3, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
-                                  1,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{1, {0.0f, -1.0f, 0.0f}, 0.75f, 0.75f},
+                       {3, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f}}},
+                     1,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back({{{{4, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {5, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
-                                    {6, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{4, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {5, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f},
+                       {6, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -4613,21 +4994,23 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelRenderSplitsDebugGlbUsesFirstNormalWhenAverageCancels") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"graph/test.bmp"};
+    src.textures.textures = {"graph/test.bmp"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}, {{1.0f, 0.0f, 1.0f}}};
-    src.geometry.faces.push_back({{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {1, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {2, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {1, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f},
+                       {2, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back({{{{0, {0.0f, 1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {2, {0.0f, 1.0f, 0.0f}, 0.0f, 0.0f},
-                                    {3, {0.0f, 1.0f, 0.0f}, 0.0f, 0.0f}}},
-                                  0,
-                                  0,
-                                  0.0f});
+    addGeometryFace(src,
+                    {{{{0, {0.0f, 1.0f, 0.0f}, 0.0f, 0.0f},
+                       {2, {0.0f, 1.0f, 0.0f}, 0.0f, 0.0f},
+                       {3, {0.0f, 1.0f, 0.0f}, 0.0f, 0.0f}}},
+                     0,
+                     0,
+                     0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -4740,7 +5123,7 @@ TEST_SUITE("FtsGlb") {
 
     level = makeSimpleLevel();
     level.geometry.faces[0].corners[0].normal = {};
-    CHECK(validateModules(level) == ARX_LEVEL_BAD_FACE_NORMAL);
+    CHECK(validateModules(level) == ARX_LEVEL_BAD_CORNER_NORMAL);
 
     level = makeSimpleLevel();
     level.geometry.faces[0].corners[0].u = std::numeric_limits<float>::quiet_NaN();
@@ -4785,7 +5168,7 @@ TEST_SUITE("FtsGlb") {
     const pistoris::LevelModules source = makeSimpleLevel();
     mesh.vertices = source.geometry.vertices;
     mesh.faces = source.geometry.faces;
-    mesh.textures = source.geometry.textures;
+    mesh.textures = source.textures.textures;
     mesh.face_rooms = source.rooms.face_rooms;
     REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
 
@@ -4882,7 +5265,7 @@ TEST_SUITE("FtsGlb") {
     CHECK(validateModules(level) == ARX_LEVEL_BAD_ANCHOR_CONNECTION_INDEX);
 
     level.navigation.connections = {{0, 1}, {0, 1}};
-    CHECK(validateModules(level) == ARX_LEVEL_BAD_ANCHOR_CONNECTION_ORDER);
+    CHECK(validateModules(level) == ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION);
 
     level = makeSimpleLevel();
     level.navigation.surface = pistoris::NavSurface{
@@ -4961,7 +5344,7 @@ TEST_SUITE("FtsGlb") {
     level.scene.player_spawn = pistoris::PlayerSpawn{};
     CHECK(validateModules(level) == ARX_OK);
 
-    level.scene.player_spawn.rotation.x = std::numeric_limits<float>::infinity();
+    level.scene.player_spawn.value().rotation.x = std::numeric_limits<float>::infinity();
     CHECK(validateModules(level) == ARX_LEVEL_BAD_PLAYER_SPAWN);
 
     level = makeSimpleLevel();
@@ -5067,16 +5450,15 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules src = makeNormalFan(normals);
 
     std::vector<std::uint8_t> glb;
-    CHECK(exportLevelGlb(src, glb) == ARX_LEVEL_BAD_FACE_NORMAL);
+    CHECK(exportLevelGlb(src, glb) == ARX_LEVEL_BAD_CORNER_NORMAL);
   }
 
   TEST_CASE("LevelExportRejectsDegenerateFaces") {
     pistoris::LevelModules src;
-    src.geometry.textures = {"graph/test.bmp"};
+    src.textures.textures = {"graph/test.bmp"};
     src.geometry.vertices.resize(3);
     pistoris::ArxVector3 normal{0.0f, 1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
 
     std::vector<std::uint8_t> glb;
     CHECK(exportLevelGlb(src, glb) == ARX_LEVEL_DEGENERATE_FACE);
@@ -5102,14 +5484,12 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbImportPreservesDistinctAccessorVertexIdentity") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"a.bmp", "b.bmp"};
+    src.textures.textures = {"a.bmp", "b.bmp"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}, {{1.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back(
-        {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 1.0f, 0.0f}}}, 1, 0, 0.0f});
+    addGeometryFace(src, {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 1.0f, 0.0f}}}, 1, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -5196,11 +5576,11 @@ TEST_SUITE("FtsGlb") {
 
     parsed = parseTestGlb(glb);
     replaceColors(parsed, std::span<const std::uint8_t>(rgba), 5121, false, 4);
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_FORMAT);
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_COLOR_ATTRIBUTE);
 
     parsed = parseTestGlb(glb);
     replaceFirstAttributeFloat(parsed, "COLOR_0", 0, 1.1f);
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_GEOMETRY);
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_COLOR_ATTRIBUTE);
 
     parsed = parseTestGlb(glb);
     parsed.gltf["meshes"][0]["primitives"][0]["attributes"].erase("COLOR_0");
@@ -5281,7 +5661,7 @@ TEST_SUITE("FtsGlb") {
         "EFFECT__FLICKER_0.1_0.2_0.3__RADIUS_4__FREQUENCY_0.5__SIZE_1.25__SPEED_2__FLARESIZE_80__Hall_torch.001";
     REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
     REQUIRE(dst.lighting.lights.size() == 1);
-    CHECK(dst.lighting.lights[0].name == "Hall_torch.001");
+    CHECK(dst.lighting.lights[0].name == "Hall_torch-001");
     CHECK(dst.lighting.lights[0].fallstart == doctest::Approx(3.0f));
     CHECK(dst.lighting.lights[0].fallend == doctest::Approx(10.0f));
     CHECK(dst.lighting.lights[0].flags == light.flags);
@@ -5628,12 +6008,12 @@ TEST_SUITE("FtsGlb") {
     std::array<std::uint16_t, 6> u16 = {0, 65535, 32768, 0, 0, 32768};
     replaceTexcoords(parsed, std::span<const std::uint16_t>(u16), 5123, false);
     pistoris::LevelModules dst;
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_FORMAT);
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_TEXCOORD_ATTRIBUTE);
 
     parsed = parseTestGlb(glb);
     int index_accessor = parsed.gltf["meshes"][0]["primitives"][0]["indices"].get<int>();
     parsed.gltf["accessors"][index_accessor]["normalized"] = true;
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_FORMAT);
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_INDEX_ACCESSOR);
 
     parsed = parseTestGlb(glb);
     int normal_accessor = parsed.gltf["meshes"][0]["primitives"][0]["attributes"]["NORMAL"].get<int>();
@@ -5652,14 +6032,26 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
     pistoris::LevelModules dst;
 
+    {
+      LogCapture logs;
+      ParsedTestGlb parsed = parseTestGlb(glb);
+      parsed.gltf["images"][0]["uri"] = "Folder/TEST.PNG";
+      REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
+      REQUIRE(dst.textures.textures.size() == 1);
+      CHECK(dst.textures.textures[0].path == "folder/test");
+      CHECK_FALSE(logs.contains("texture path 'Folder/TEST' normalized"));
+    }
+
     ParsedTestGlb parsed = parseTestGlb(glb);
     parsed.gltf["materials"][0]["name"] = "no_tex";
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_MATERIAL);
+    REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
+    REQUIRE(dst.textures.textures.size() == 1);
+    CHECK(dst.textures.textures[0].path == "graph/test");
 
     parsed = parseTestGlb(glb);
     parsed.gltf["materials"][0]["name"] = "test__TRANS";
     parsed.gltf["materials"][0]["pbrMetallicRoughness"]["baseColorFactor"][3] = 2.0f;
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_FORMAT);
+    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_MATERIAL);
 
     parsed = parseTestGlb(glb);
     parsed.gltf["materials"][0]["name"] = "test__TRANSVAL_2";
@@ -5679,6 +6071,13 @@ TEST_SUITE("FtsGlb") {
 
     parsed = parseTestGlb(glb);
     parsed.gltf["images"][0]["uri"] = "folder/test__variant.png";
+    REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
+    REQUIRE(dst.textures.textures.size() == 1);
+    CHECK(dst.textures.textures[0].path == "folder/test__variant");
+    CHECK(dst.textures.textures[0].external_image_extension == ".png");
+
+    parsed = parseTestGlb(glb);
+    parsed.gltf["images"][0]["uri"] = "../outside.png";
     CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_MATERIAL);
 
     parsed = parseTestGlb(glb);
@@ -5742,17 +6141,51 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.geometry.faces[0].transval == doctest::Approx(0.75f));
   }
 
+  TEST_CASE("LevelGlbImportClassifiesOpaqueBlendAfterTextureResolution") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const int material_index = parsed.gltf["meshes"][0]["primitives"][0]["material"].get<int>();
+    auto& material = parsed.gltf["materials"][material_index];
+    material["alphaMode"] = "BLEND";
+    material["pbrMetallicRoughness"]["baseColorFactor"][3] = 1.0f;
+
+    {
+      LogCapture logs;
+      pistoris::LevelModules dst;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+      REQUIRE(dst.geometry.faces.size() == 1);
+      CHECK((dst.geometry.faces[0].flags & pistoris::kFaceBitTrans) == 0);
+      CHECK(logs.contains(
+          "BLEND with base alpha 1 imported without TRANS; texture alpha, if present, remains native cutout"));
+    }
+
+    ParsedTestGlb portal = parseTestGlb(glb);
+    auto& portal_material = portal.gltf["materials"][material_index];
+    portal_material["name"] = "arx_portal";
+    portal_material["alphaMode"] = "BLEND";
+    portal_material["pbrMetallicRoughness"]["baseColorFactor"][3] = 1.0f;
+
+    {
+      LogCapture logs;
+      pistoris::LevelModules dst;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(portal)), dst) == ARX_OK);
+      CHECK(logs.contains("BLEND with base alpha 1 and no texture imported as opaque"));
+      CHECK_FALSE(logs.contains("texture alpha, if present"));
+    }
+  }
+
   TEST_CASE("LevelGlbImportKeepsDistinctImagesDespiteMatchingMaterialStems") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"a/first.bmp", "b/second.bmp"};
+    src.textures.textures = {"a/first", "b/second"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}, {{1.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back(
-        {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
+    addGeometryFace(src, {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -5762,24 +6195,22 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    REQUIRE(dst.geometry.textures.size() == 2);
+    REQUIRE(dst.textures.textures.size() == 2);
     CHECK(dst.geometry.faces[0].texture == 0);
     CHECK(dst.geometry.faces[1].texture == 1);
-    CHECK(dst.geometry.textures[0].path == "a/first.bmp");
-    CHECK(dst.geometry.textures[1].path == "b/second.bmp");
+    CHECK(dst.textures.textures[0].path == "a/first");
+    CHECK(dst.textures.textures[1].path == "b/second");
   }
 
   TEST_CASE("LevelGlbImportDeduplicatesMaterialsReferencingTheSameImage") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"first.bmp", "second.bmp"};
+    src.textures.textures = {"first", "second"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}, {{1.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back(
-        {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
+    addGeometryFace(src, {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -5791,7 +6222,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    REQUIRE(dst.geometry.textures.size() == 1);
+    REQUIRE(dst.textures.textures.size() == 1);
     CHECK(dst.geometry.faces[0].texture == 0);
     CHECK(dst.geometry.faces[1].texture == 0);
     CHECK((dst.geometry.faces[1].flags & pistoris::kFaceBitNoShadow) != 0);
@@ -5800,14 +6231,12 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbImportDisambiguatesDifferentImagesWithTheSameExtensionlessPath") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"first.bmp", "second.bmp"};
+    src.textures.textures = {"first", "second"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}, {{1.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 1.0f, 0.0f}, {2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back(
-        {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
+    addGeometryFace(src, {{{{1, normal, 0.0f, 0.0f}, {3, normal, 1.0f, 1.0f}, {2, normal, 0.0f, 1.0f}}}, 1, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -5818,9 +6247,9 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
-    REQUIRE(dst.geometry.textures.size() == 2);
-    CHECK(dst.geometry.textures[0].path == "folder/shared.jpg");
-    CHECK(dst.geometry.textures[1].path == "folder/shared_1.png");
+    REQUIRE(dst.textures.textures.size() == 2);
+    CHECK(dst.textures.textures[0].path == "folder/shared");
+    CHECK(dst.textures.textures[1].path == "folder/shared_1");
   }
 
   TEST_CASE("LevelGlbImportReportsDiscardedAttributeBindings") {
@@ -6117,11 +6546,10 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbImportDoesNotWeldAcrossNodeInstances") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"graph/test.bmp"};
+    src.textures.textures = {"graph/test.bmp"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -6141,11 +6569,10 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbImportReadsRoomChildMeshes") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"graph/test.bmp"};
+    src.textures.textures = {"graph/test.bmp"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -6236,7 +6663,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelGlbPreservesDistinctLevelVertexIdentity") {
     pistoris::LevelModules src;
     addDefaultRoom(src);
-    src.geometry.textures = {"graph/test.bmp"};
+    src.textures.textures = {"graph/test.bmp"};
     src.geometry.vertices = {{{0.0f, 0.0f, 0.0f}},
                              {{1.0f, 0.0f, 0.0f}},
                              {{0.0f, 0.0f, 1.0f}},
@@ -6244,11 +6671,9 @@ TEST_SUITE("FtsGlb") {
                              {{2.0f, 0.0f, 0.0f}},
                              {{2.0f, 0.0f, 1.0f}}};
     pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {2, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.geometry.faces.push_back(
-        {{{{3, normal, 0.0f, 0.0f}, {4, normal, 0.0f, 0.0f}, {5, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{3, normal, 0.0f, 0.0f}, {4, normal, 0.0f, 0.0f}, {5, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
     src.rooms.face_rooms.push_back(0);
 
     std::vector<std::uint8_t> glb;
@@ -6262,11 +6687,10 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("LevelRenderSplitsDebugGlbRejectsInvalidReferences") {
     pistoris::LevelModules src;
-    src.geometry.textures = {"graph/test.bmp"};
+    src.textures.textures = {"graph/test.bmp"};
     src.geometry.vertices.resize(3);
     pistoris::ArxVector3 normal{0.0f, 1.0f, 0.0f};
-    src.geometry.faces.push_back(
-        {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {3, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
+    addGeometryFace(src, {{{{0, normal, 0.0f, 0.0f}, {1, normal, 0.0f, 0.0f}, {3, normal, 0.0f, 0.0f}}}, 0, 0, 0.0f});
     std::vector<std::uint8_t> glb = {1, 2, 3};
     CHECK(exportRenderSplitsDebugGlb(src, 0.0f, glb) == ARX_LEVEL_BAD_FACE_VERTEX);
     CHECK(glb == std::vector<std::uint8_t>{1, 2, 3});
@@ -6276,14 +6700,14 @@ TEST_SUITE("FtsGlb") {
     pistoris::fts::Data src = makeTriangleFtsScene();
 
     pistoris::LevelModules source_level;
-    REQUIRE(pistoris::arx_level_conversion::buildLevel({src}, source_level) == ARX_OK);
+    REQUIRE(pistoris::level_native::buildLevel({src}, source_level) == ARX_OK);
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(source_level, glb) == ARX_OK);
 
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
     CHECK(dst.geometry.faces.size() == 1);
-    CHECK(dst.geometry.textures == source_level.geometry.textures);
+    CHECK(dst.textures.textures == source_level.textures.textures);
     CHECK(dst.geometry.faces[0].texture == 0);
     CHECK((dst.geometry.faces[0].flags & pistoris::kFaceBitStone) != 0);
   }
@@ -6298,7 +6722,7 @@ TEST_SUITE("FtsGlb") {
     src.scene.num_anchors = 1;
 
     pistoris::LevelModules level;
-    REQUIRE(pistoris::arx_level_conversion::buildLevel({src}, level) == ARX_OK);
+    REQUIRE(pistoris::level_native::buildLevel({src}, level) == ARX_OK);
     REQUIRE(level.navigation.anchors.size() == 1);
     CHECK(level.navigation.anchors[0].height == -5.0f);
     std::vector<std::uint8_t> glb;
@@ -6331,7 +6755,7 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::LevelModules level;
-    REQUIRE(pistoris::arx_level_conversion::buildLevel({src}, level) == ARX_OK);
+    REQUIRE(pistoris::level_native::buildLevel({src}, level) == ARX_OK);
 
     REQUIRE(level.navigation.anchors.size() == 1);
     CHECK(level.navigation.anchors[0].position.x == 2.0f);
@@ -6350,7 +6774,7 @@ TEST_SUITE("FtsGlb") {
 
     LogCapture logs;
     pistoris::LevelModules level;
-    REQUIRE(pistoris::arx_level_conversion::buildLevel({src}, level) == ARX_OK);
+    REQUIRE(pistoris::level_native::buildLevel({src}, level) == ARX_OK);
 
     CHECK(level.navigation.anchors.empty());
     CHECK(logs.contains("1 anchor(s) outside native X/Z bounds discarded"));
@@ -6373,7 +6797,7 @@ TEST_SUITE("FtsGlb") {
     src.scene.num_anchors = 3;
 
     pistoris::LevelModules level;
-    REQUIRE(pistoris::arx_level_conversion::buildLevel({src}, level) == ARX_OK);
+    REQUIRE(pistoris::level_native::buildLevel({src}, level) == ARX_OK);
     REQUIRE(level.navigation.anchors.size() == 2);
     REQUIRE(level.navigation.connections.size() == 1);
     CHECK(level.navigation.connections[0].first == 0);
@@ -6396,7 +6820,7 @@ TEST_SUITE("FtsGlb") {
     src.scene.num_anchors = 2;
 
     pistoris::LevelModules level;
-    REQUIRE(pistoris::arx_level_conversion::buildLevel({src}, level) == ARX_OK);
+    REQUIRE(pistoris::level_native::buildLevel({src}, level) == ARX_OK);
     REQUIRE(level.navigation.anchors.size() == 2);
     REQUIRE(level.navigation.connections.size() == 1);
     CHECK(level.navigation.connections[0].first == 0);

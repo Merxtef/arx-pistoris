@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include "arx_pistoris/arx_math.hpp"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/pistoris_types.h"
 
 #include "../writer.h"
 #include "cgltf/cgltf.h"
@@ -13,7 +13,6 @@
 
 #include <cstddef>
 #include <span>
-#include <string>
 #include <vector>
 
 namespace pistoris {
@@ -27,7 +26,6 @@ struct ImportUnits;
 void exportFogs(const LevelModules& level, const ArxAabb& referenced_bounds, const Level::GlbExportOptions& options,
                 glb::Builder& builder);
 ArxReturnCode importFogs(const cgltf_data& data, const std::vector<math::Mat4>& world,
-                         std::span<const std::size_t> nodes, const ImportUnits& units, LevelModules& level,
-                         std::vector<std::string>& warnings);
+                         std::span<const std::size_t> nodes, const ImportUnits& units, LevelModules& level);
 
 }  // namespace pistoris::glb_level

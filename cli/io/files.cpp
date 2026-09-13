@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
-#include "io/files.h"
-
 #include "console/diagnostics.h"
 #include "io/files_internal.h"
 #include "io/native_path.h"
@@ -14,7 +12,6 @@
 #include <ios>
 #include <new>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -59,22 +56,3 @@ bool readFileSized(const std::filesystem::path& path, std::vector<std::uint8_t>&
 }
 
 }  // namespace cli::io_detail
-
-bool readFile(const char* path, std::vector<std::uint8_t>& out) {
-  std::filesystem::path native_path;
-  std::string error;
-  if (!path || !cli::io_detail::pathFromUtf8(path ? std::string_view(path) : std::string_view(), native_path, error)) {
-    cli::diagnostic(cli::DiagnosticCode::kIoOpenFailed, "Invalid input path: %s", error.c_str());
-    return false;
-  }
-  return cli::io_detail::readFileSized(native_path, out, false);
-}
-
-bool readFileOptional(const char* path, std::vector<std::uint8_t>& out) {
-  std::filesystem::path native_path;
-  std::string error;
-  if (!path || !cli::io_detail::pathFromUtf8(path ? std::string_view(path) : std::string_view(), native_path, error)) {
-    return false;
-  }
-  return cli::io_detail::readFileSized(native_path, out, true);
-}

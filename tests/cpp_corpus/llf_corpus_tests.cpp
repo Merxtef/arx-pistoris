@@ -6,55 +6,44 @@
 
 #include "arx_pistoris/pistoris.hpp"
 
+#include "support/corpus_checks.h"
 #include "support/corpus_files.h"
 #include "support/native_equivalence.h"
 
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
-#include <ios>
-#include <iterator>
 #include <vector>
 
 namespace fs = std::filesystem;
 
-namespace {
-
-std::vector<std::uint8_t> readBytes(const fs::path& path) {
-  std::ifstream file(path, std::ios::binary);
-  return {std::istreambuf_iterator<char>(file), {}};
-}
-
-}  // namespace
-
 TEST_SUITE("llf_corpus") {
   TEST_CASE("ArxLlfParse") {
-    for (const fs::path& path :
-         test_support::discoverCorpusFiles({"data/fixtures/level/llf/native", "data/arx/llf"}, ".llf")) {
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kLlf)) {
       CAPTURE(path.string());
 
-      std::vector<std::uint8_t> llf_bytes = readBytes(path);
+      std::vector<std::uint8_t> llf_bytes;
+      if (!test_support::readCorpusBytes(path, llf_bytes)) continue;
       pistoris::Llf llf;
-      REQUIRE(pistoris::readLlf(llf_bytes, llf) == ARX_OK);
-      CHECK(pistoris::validate(llf) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "read LLF", pistoris::readLlf(llf_bytes, llf))) continue;
+      test_support::checkCorpusStatus(path, "validate LLF", pistoris::validate(llf));
     }
   }
 
   TEST_CASE("ArxLlfWriteRoundtrip") {
-    for (const fs::path& path :
-         test_support::discoverCorpusFiles({"data/fixtures/level/llf/native", "data/arx/llf"}, ".llf")) {
+    for (const fs::path& path : test_support::nativeCorpusFiles(test_support::NativeCorpusFormat::kLlf)) {
       CAPTURE(path.string());
 
-      std::vector<std::uint8_t> source_bytes = readBytes(path);
+      std::vector<std::uint8_t> source_bytes;
+      if (!test_support::readCorpusBytes(path, source_bytes)) continue;
       pistoris::Llf source;
-      REQUIRE(pistoris::readLlf(source_bytes, source) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "read source LLF", pistoris::readLlf(source_bytes, source))) continue;
 
       std::vector<std::uint8_t> written;
-      REQUIRE(pistoris::writeLlf(source, {}, written) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "write LLF", pistoris::writeLlf(source, {}, written))) continue;
 
       pistoris::Llf roundtrip;
-      REQUIRE(pistoris::readLlf(written, roundtrip) == ARX_OK);
-      CHECK(pistoris::validate(roundtrip) == ARX_OK);
+      if (!test_support::checkCorpusStatus(path, "read written LLF", pistoris::readLlf(written, roundtrip))) continue;
+      if (!test_support::checkCorpusStatus(path, "validate written LLF", pistoris::validate(roundtrip))) continue;
       test_support::checkEquivalent(source, roundtrip);
     }
   }
