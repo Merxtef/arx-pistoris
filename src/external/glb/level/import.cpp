@@ -16,6 +16,7 @@
 #include "external/glb/level/anchor_metadata.h"
 #include "external/glb/level/import/internal.h"
 #include "external/glb/node_graph.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/texture.h"
 #include "fogs.h"
 #include "level/anchor_bounds.h"
@@ -39,6 +40,7 @@
 #include "utils/math/mat4.h"
 #include "zones.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <format>
@@ -173,10 +175,9 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
   rc = parse(bytes, asset);
   if (rc != ARX_OK) return rc;
   cgltf_data& data = *asset.data();
-  for (std::size_t i = 0; i < data.extensions_required_count; ++i) {
-    if (data.extensions_required[i] == nullptr) return ARX_GLB_BAD_FORMAT;
-    if (std::string_view(data.extensions_required[i]) != "KHR_lights_punctual") return ARX_GLB_UNSUPPORTED_FEATURE;
-  }
+  constexpr std::array<std::string_view, 1> kSupportedExtensions = {"KHR_lights_punctual"};
+  rc = glb::validateRequiredExtensions(data, kSupportedExtensions);
+  if (rc != ARX_OK) return rc;
 
   glb::NodeGraph graph;
   rc = glb::buildNodeGraph(data, graph);
@@ -340,10 +341,12 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
     const cgltf_node& node = data.nodes[node_index];
     const std::string_view name = nodeName(node);
     log(ARX_LOG_DEBUG, "GLB -> Level: importing nav surface node {} '{}'", node_index, name);
-    if (!glb_level::isNavSurfaceRootName(name)) {
+    glb::ParsedLabel label;
+    if (!glb_level::isNavSurfaceRootName(name, &label)) {
       logLevelObjectFailure("navigation surface import", node_index, name, ARX_GLB_BAD_LEVEL_NAV_SURFACE);
       return ARX_GLB_BAD_LEVEL_NAV_SURFACE;
     }
+    glb::reportConventionLabel("GLB -> Level navigation surface", name, label);
     NavSurface surface;
     rc = importNavSurface(asset, node, node_index, world[node_index], units, surface);
     if (rc != ARX_OK) {
@@ -360,9 +363,11 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
     const std::size_t node_index = discovery.minimaps.front();
     const cgltf_node& node = data.nodes[node_index];
     const std::string_view name = nodeName(node);
-    if (!glb_level::isMinimapRootName(name)) {
+    glb::ParsedLabel label;
+    if (!glb_level::isMinimapRootName(name, &label)) {
       log(ARX_LOG_WARN, "GLB -> Level: minimap node {} '{}' has a malformed name; minimap omitted", node_index, name);
     } else {
+      glb::reportConventionLabel("GLB -> Level minimap", name, label);
       const glb_level::MinimapImportError error =
           glb_level::importMinimap(asset, node, world[node_index], units, tmp.minimap);
       switch (error) {

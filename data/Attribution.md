@@ -146,19 +146,79 @@ data/fixtures/mount/sfx/misc_04.wav
 data/fixtures/mount/sfx/misc_08.wav
 ```
 
+## Voiceover Pack (40+ lines)
+
+- Author: [Kenney](https://opengameart.org/users/kenney)
+- Source:
+  [Voiceover Pack (40+ lines)](https://opengameart.org/content/voiceover-pack-40-lines)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The English number clips are used as-is. Native regeneration converts them
+from Ogg Vorbis to WAV.
+
+```text
+data/fixtures/cinematic/numbers/speech/*[english].ogg
+data/fixtures/mount/speech/english/*.wav
+```
+
+## German Vocabulary - Numbers
+
+- Author: Human Robot
+- Source:
+  [German Vocabulary - Numbers.ogg](https://commons.wikimedia.org/wiki/File%3AGerman_Vocabulary_-_Numbers.ogg)
+- License: [Public domain](https://creativecommons.org/publicdomain/mark/1.0/)
+
+The German number clips are excerpts from the source recording. Native
+regeneration converts them to WAV.
+
+```text
+data/fixtures/cinematic/numbers/speech/*[deutsch].ogg
+data/fixtures/mount/speech/deutsch/*.wav
+```
+
+## 0-10 en Francais
+
+- Author: [Sadiquecat](https://freesound.org/people/Sadiquecat/)
+- Source: [0-10 en Francais](https://freesound.org/people/Sadiquecat/sounds/854808/)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The French number clips are excerpts from the source recording.
+
+```text
+data/fixtures/cinematic/numbers/speech/*[francais].wav
+data/fixtures/mount/speech/francais/*.wav
+```
+
+## Flash Bang Sound
+
+- Author: [teeeece](https://opengameart.org/users/teeeece)
+- Source: [Flash Bang Sound](https://opengameart.org/content/flash-bang-sound)
+- License: [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+
+The WAV is used as-is by the authored Cinematic and its native fixture.
+
+```text
+data/fixtures/cinematic/numbers/sfx/flash_bang.wav
+data/fixtures/mount/sfx/flash_bang.wav
+```
+
 ## Pistoris Project Fixtures
 
 - Author: Merxtef
 - License: [Pistoris repository license](../LICENSE)
 
-The level 9 and JSON Model source scenes, their textures, and the black helper
-texture were created for Pistoris. Native files are generated from the source
-scenes.
+The level 9, JSON Model, and Numbers Cinematic source scenes, their original
+visuals, and the black helper texture were created for Pistoris. The Cinematic
+illustrations are embedded in its GLB. Native files are generated from the
+source scenes.
 
 ```text
 data/fixtures/json/
+data/fixtures/cinematic/numbers/numbers.glb
 data/fixtures/level/glb/level9/level9.glb
 data/fixtures/model/glb/json_dummy/json_dummy.glb
+data/fixtures/mount/graph/interface/illustrations/numbers.cin
+data/fixtures/mount/graph/interface/illustrations/numbers_*.bmp
 data/fixtures/mount/game/graph/levels/level9/fast.fts
 data/fixtures/mount/game/graph/obj3d/interactive/fix_inter/json_dummy/json_dummy.ftl
 data/fixtures/mount/graph/levels/level9/

@@ -18,6 +18,7 @@ enum class Format : std::uint8_t {
   kLlf,
   kTea,
   kAmb,
+  kCin,
   kObj,
   kJson,
   kGlb,

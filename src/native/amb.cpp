@@ -7,18 +7,19 @@
 #include "arx_pistoris/native/amb.hpp"
 #include "arx_pistoris/runtime/types.h"
 
+#include "native/c_string.h"
 #include "native/resource_lookup.h"
+#include "native/resource_path.h"
 #include "utils/container_allocation.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <new>
-#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -28,23 +29,6 @@ namespace {
 constexpr std::size_t kAmbKeySize = 116;
 constexpr amb::TrackFlags kTrackFlagMask = amb::kTrackPosition | amb::kTrackMaster;
 constexpr amb::SettingFlags kSettingFlagMask = amb::kSettingRandom | amb::kSettingInterpolate;
-
-ArxReturnCode readCString(std::string& out, ReadCursor& cursor) {
-  out.clear();
-  try {
-    for (;;) {
-      char value = '\0';
-      cursor.read(value);
-      if (!cursor) return ARX_UNEXPECTED_EOF;
-      if (value == '\0') return ARX_OK;
-      out.push_back(value);
-    }
-  } catch (const std::bad_alloc&) {
-    return ARX_BAD_ALLOC;
-  } catch (const std::length_error&) {
-    return ARX_BAD_ALLOC;
-  }
-}
 
 ReadCursor& readSetting(amb::Setting& setting, ReadCursor& cursor) {
   cursor.read(setting.min);
@@ -92,8 +76,6 @@ WriteCursor& writeKey(const amb::Key& key, WriteCursor& cursor) {
   writeSetting(key.z, cursor);
   return cursor;
 }
-
-bool containsNull(const std::string& value) { return value.find('\0') != std::string::npos; }
 
 bool isZeroSetting(const amb::Setting& setting) {
   return setting.min == 0.0f && setting.max == 0.0f && setting.interval_ms == 0 && setting.flags == 0;
@@ -194,13 +176,16 @@ ArxReturnCode loadAmb(amb::Data* data, ReadCursor& cursor) {
 
   for (std::uint32_t track_index = 0; track_index < track_count; ++track_index) {
     amb::Track& track = result.tracks[track_index];
-    ARX_RETURN_IF_ERR(readCString(track.sample_path, cursor));
+    ARX_RETURN_IF_ERR(native_io::readCString(track.sample_path, cursor));
 
     if (version >= kAmbVersion1002) {
       std::string discarded_name;
-      ARX_RETURN_IF_ERR(readCString(discarded_name, cursor));
+      ARX_RETURN_IF_ERR(native_io::readCString(discarded_name, cursor));
       if (!discarded_name.empty()) {
-        log(ARX_LOG_WARN, "AMB: track {} name '{}' is unused and was discarded", track_index, discarded_name);
+        log(ARX_LOG_WARN,
+            "AMB: track {} name '{}' is unused and was discarded",
+            track_index,
+            native_text::diagnostic(discarded_name));
       }
     }
 
@@ -229,19 +214,24 @@ ArxReturnCode loadAmb(amb::Data* data, ReadCursor& cursor) {
     }
   }
 
-  canonicalizeAmb(result);
+  ARX_RETURN_IF_ERR(canonicalizeAmb(&result));
   ARX_RETURN_IF_ERR(validateAmb(&result));
   *data = std::move(result);
   log(ARX_LOG_INFO, "AMB loaded: {} tracks", data->tracks.size());
   return ARX_OK;
 }
 
-void canonicalizeAmb(amb::Data& data) noexcept {
-  for (amb::Track& track : data.tracks) {
+ArxReturnCode canonicalizeAmb(amb::Data* data) {
+  if (!data) return ARX_INVALID_DATA_POINTER;
+  for (amb::Track& track : data->tracks) {
+    std::string canonical_path;
+    if (!normalizeNativeResourcePath(track.sample_path, canonical_path)) return ARX_AMB_BAD_SAMPLE_PATH;
+    track.sample_path = std::move(canonical_path);
     track.flags &= kTrackFlagMask;
     const bool positioned = (track.flags & amb::kTrackPosition) != 0;
     for (amb::Key& key : track.keys) canonicalizeKey(key, positioned);
   }
+  return ARX_OK;
 }
 
 ArxReturnCode saveAmb(const amb::Data* data, WriteCursor& cursor) {
@@ -254,7 +244,7 @@ ArxReturnCode saveAmb(const amb::Data* data, WriteCursor& cursor) {
           "AMB saving: track[{}] sample path '{}' resolves outside Libertatis default loose roots; "
           "it may not be discovered",
           index,
-          path);
+          native_text::diagnostic(path));
     }
   }
 
@@ -262,8 +252,7 @@ ArxReturnCode saveAmb(const amb::Data* data, WriteCursor& cursor) {
   cursor.write(kAmbVersion);
   cursor.write(static_cast<std::uint32_t>(data->tracks.size()));
   for (const amb::Track& track : data->tracks) {
-    cursor.writeN(track.sample_path.data(), track.sample_path.size());
-    cursor.pad(1);
+    native_io::writeCString(track.sample_path, cursor);
     cursor.write(track.flags & kTrackFlagMask);
     cursor.write(static_cast<std::uint32_t>(track.keys.size()));
     for (const amb::Key& key : track.keys) writeKey(key, cursor);
@@ -281,7 +270,10 @@ ArxReturnCode validateAmb(const amb::Data* data) {
 
   std::size_t master_count = 0;
   for (const amb::Track& track : data->tracks) {
-    if (track.sample_path.empty() || containsNull(track.sample_path)) return ARX_AMB_BAD_SAMPLE_PATH;
+    if (track.sample_path.empty() || native_io::containsNull(track.sample_path)) return ARX_AMB_BAD_SAMPLE_PATH;
+    std::string canonical_path;
+    if (!normalizeNativeResourcePath(track.sample_path, canonical_path) || canonical_path != track.sample_path)
+      return ARX_AMB_BAD_SAMPLE_PATH;
     if (track.keys.empty() || track.keys.size() > std::numeric_limits<std::uint32_t>::max())
       return ARX_AMB_BAD_KEY_COUNT;
     if ((track.flags & amb::kTrackMaster) != 0) ++master_count;

@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/math.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "level/data.h"
@@ -22,12 +23,13 @@
 #include "utils/log.h"
 #include "utils/math/finite.h"
 #include "utils/math/geometry_algorithms.h"
+#include "utils/native_text.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <format>
 #include <limits>
 #include <span>
@@ -251,16 +253,13 @@ fts::SavePoly makePortalPoly(const Portal& portal) {
   return poly;
 }
 
-ArxReturnCode copyTexturePath(const std::string& path, fts::Texture& out) {
-  if (path.empty() || path.size() + 2U > sizeof(out.fic)) return ARX_FTS_BAD_TEXTURE_PATH;
-  std::memcpy(out.fic, path.data(), path.size());
-  out.fic[path.size()] = '.';
-  out.fic[path.size() + 1U] = '\0';
+ArxReturnCode copyTexturePath(const std::string& path, NativeTextMode text_mode, fts::Texture& out) {
+  if (path.empty() || !native_text::encodeFixed(path, text_mode, out.fic)) return ARX_FTS_BAD_TEXTURE_PATH;
   return ARX_OK;
 }
 
 ArxReturnCode assignNativeTexture(const BakedPolygon& polygon, NativeTextureResources& textures,
-                                  fts_bake::TextureShardAllocator& allocator, fts::Data& fts,
+                                  fts_bake::TextureShardAllocator& allocator, fts::Data& fts, NativeTextMode text_mode,
                                   TextureIndex& out_texture) {
   if (polygon.texture == kNoTexture) {
     out_texture = kNoTexture;
@@ -283,7 +282,7 @@ ArxReturnCode assignNativeTexture(const BakedPolygon& polygon, NativeTextureReso
 
     const NativeTextureShard& added = family.shards[added_shard];
     fts::Texture texture;
-    rc = copyTexturePath(added.resource_path, texture);
+    rc = copyTexturePath(added.resource_path, text_mode, texture);
     if (rc != ARX_OK) return rc;
     fts.textures.emplace(added.fts_id, texture);
   }
@@ -362,8 +361,8 @@ void logRoomDistanceBakeWarnings(const LevelModules& level) {
 }
 
 ArxReturnCode bakeFts(const LevelModules& level, NativeTextureResources& textures, bool reconstruct_quads,
-                      fts::Data& out, std::vector<ArxColor3>& baked_colors, NativeBakeWarnings& warnings,
-                      NativeBakeStatistics& statistics) {
+                      NativeTextMode text_mode, fts::Data& out, std::vector<ArxColor3>& baked_colors,
+                      NativeBakeWarnings& warnings, NativeBakeStatistics& statistics) {
   NativeBakeStatistics baked_statistics;
   if (level.rooms.definitions.size() > static_cast<std::size_t>(std::numeric_limits<std::int16_t>::max()))
     return ARX_FTS_BAD_ROOM_COUNT;
@@ -387,7 +386,7 @@ ArxReturnCode bakeFts(const LevelModules& level, NativeTextureResources& texture
     if (family.shards.size() != 1U) return ARX_FTS_BAD_TEXTURE_COUNT;
     const NativeTextureShard& base = family.shards.front();
     fts::Texture texture;
-    ArxReturnCode rc = copyTexturePath(base.resource_path, texture);
+    ArxReturnCode rc = copyTexturePath(base.resource_path, text_mode, texture);
     if (rc != ARX_OK) return rc;
     fts.textures.emplace(base.fts_id, texture);
   }
@@ -536,7 +535,7 @@ ArxReturnCode bakeFts(const LevelModules& level, NativeTextureResources& texture
 
       const std::int16_t local_idx = static_cast<std::int16_t>(fts.cells[cell_idx].polygons.size());
       BakedPolygon emitted = source;
-      ArxReturnCode rc = assignNativeTexture(source, textures, texture_shards, fts, emitted.texture);
+      ArxReturnCode rc = assignNativeTexture(source, textures, texture_shards, fts, text_mode, emitted.texture);
       if (rc != ARX_OK) return rc;
       fts.cells[cell_idx].polygons.push_back(makeFtsPoly(emitted));
       const std::size_t corner_count = source.kind == fts_bake::PolygonKind::kTriangle ? 3U : 4U;

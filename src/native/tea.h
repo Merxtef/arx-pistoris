@@ -12,6 +12,7 @@ namespace pistoris {
 ArxReturnCode loadTea(tea::Data* d, ReadCursor& c);
 ArxReturnCode saveTea(const tea::Data* d, WriteCursor& c);
 
+ArxReturnCode canonicalizeTea(tea::Data* d);
 ArxReturnCode validateTea(const tea::Data* d);
 
 }  // namespace pistoris

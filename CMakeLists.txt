@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Merxtef
 
 cmake_minimum_required(VERSION 3.25)
-project(arx-pistoris VERSION 0.4.0 LANGUAGES C CXX)
+project(arx-pistoris VERSION 0.5.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -269,6 +269,7 @@ file(GLOB ARX_C_TEST_SRCS      CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/te
 file(GLOB ARX_CPP_TEST_SRCS    CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_api/*.cpp")
 file(GLOB ARX_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/corpus/*.cpp")
 file(GLOB ARX_CPP_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_corpus/*.cpp")
+file(GLOB ARX_CLI_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_corpus/*.cpp")
 
 file(GLOB_RECURSE ARX_PUBLIC_C_HEADERS CONFIGURE_DEPENDS
   RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -349,9 +350,23 @@ target_include_directories(arx_pistoris_cpp_corpus_tests PRIVATE
 )
 arx_target_defaults(arx_pistoris_cpp_corpus_tests)
 
+add_executable(arx_pistoris_cli_corpus_tests ${ARX_CLI_CORPUS_TEST_SRCS})
+target_link_libraries(arx_pistoris_cli_corpus_tests PRIVATE
+  arx_pistoris_cli_support
+  arx_pistoris_cpp
+  doctest
+  nlohmann_json
+)
+target_include_directories(arx_pistoris_cli_corpus_tests PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/cli
+  ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+arx_target_defaults(arx_pistoris_cli_corpus_tests)
+
 doctest_discover_tests(arx_pistoris_unit_tests   ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 doctest_discover_tests(arx_pistoris_cpp_tests    ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 doctest_discover_tests(arx_pistoris_cpp_corpus_tests ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+doctest_discover_tests(arx_pistoris_cli_corpus_tests ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 add_test(NAME arx_pistoris_c_tests
   COMMAND arx_pistoris_c_tests
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
@@ -457,14 +472,35 @@ endif()
 
 # --- Fuzz targets ---
 function(arx_add_fuzz_target name source seed_directory)
+  cmake_parse_arguments(PARSE_ARGV 3 ARX_FUZZ "" "DICTIONARY" "")
+  if(ARX_FUZZ_KEYWORDS_MISSING_VALUES)
+    message(FATAL_ERROR "Missing values for fuzz target ${name}: ${ARX_FUZZ_KEYWORDS_MISSING_VALUES}")
+  endif()
+  if(ARX_FUZZ_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "Unknown arguments for fuzz target ${name}: ${ARX_FUZZ_UNPARSED_ARGUMENTS}")
+  endif()
+
   add_executable(${name} ${source})
   target_compile_definitions(${name} PRIVATE ARX_PISTORIS_EXPORTS)
   target_link_libraries(${name} PRIVATE arx_pistoris_fuzz_api)
   arx_fuzz_target_defaults(${name})
   add_dependencies(${name} arx_fuzz_seeds)
+
+  if(ARX_FUZZ_DICTIONARY)
+    set(dictionary_path "${CMAKE_CURRENT_SOURCE_DIR}/${ARX_FUZZ_DICTIONARY}")
+    if(NOT EXISTS "${dictionary_path}" OR IS_DIRECTORY "${dictionary_path}")
+      message(FATAL_ERROR "Dictionary for fuzz target ${name} is not a file: ${dictionary_path}")
+    endif()
+  endif()
+
   if(BUILD_TESTING)
+    set(smoke_arguments -runs=1 -verbosity=0)
+    if(ARX_FUZZ_DICTIONARY)
+      list(APPEND smoke_arguments "-dict=${dictionary_path}")
+    endif()
+    list(APPEND smoke_arguments "${FUZZ_SEED_DIR}/${seed_directory}")
     add_test(NAME ${name}_smoke
-      COMMAND $<TARGET_FILE:${name}> -runs=1 -verbosity=0 "${FUZZ_SEED_DIR}/${seed_directory}")
+      COMMAND $<TARGET_FILE:${name}> ${smoke_arguments})
     set_tests_properties(${name}_smoke PROPERTIES
       LABELS fuzz-smoke
       TIMEOUT 120
@@ -498,38 +534,72 @@ if(ARX_FUZZING)
               ${FUZZ_SEED_DIR}/level-glb-source ${FUZZ_SEED_DIR}/level-glb
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
               ${FUZZ_SEED_DIR}/ambiance-glb-source ${FUZZ_SEED_DIR}/ambiance-glb
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/destructure_glb.py
+              ${FUZZ_SEED_DIR}/cinematic-glb-source ${FUZZ_SEED_DIR}/cinematic-glb
       COMMENT "Preparing fixture-derived fuzzer seeds"
       VERBATIM
   )
 
-  arx_add_fuzz_target(arx_pistoris_ftl_fuzz                     fuzz/ftl_fuzz.cpp                     ftl)
-  arx_add_fuzz_target(arx_pistoris_ftl_roundtrip_fuzz           fuzz/ftl_roundtrip_fuzz.cpp           ftl)
-  arx_add_fuzz_target(arx_pistoris_model_native_import_fuzz     fuzz/model_native_import_fuzz.cpp     ftl)
-  arx_add_fuzz_target(arx_pistoris_tea_fuzz                     fuzz/tea_fuzz.cpp                     tea)
-  arx_add_fuzz_target(arx_pistoris_tea_roundtrip_fuzz           fuzz/tea_roundtrip_fuzz.cpp           tea)
-  arx_add_fuzz_target(arx_pistoris_animation_native_import_fuzz fuzz/animation_native_import_fuzz.cpp tea)
-  arx_add_fuzz_target(arx_pistoris_amb_fuzz                     fuzz/amb_fuzz.cpp                     amb)
-  arx_add_fuzz_target(arx_pistoris_amb_roundtrip_fuzz           fuzz/amb_roundtrip_fuzz.cpp           amb)
-  arx_add_fuzz_target(arx_pistoris_ambiance_native_import_fuzz  fuzz/ambiance_native_import_fuzz.cpp  amb)
-  arx_add_fuzz_target(arx_pistoris_obj_fuzz                     fuzz/obj_fuzz.cpp                     obj)
-  arx_add_fuzz_target(arx_pistoris_obj_with_mtl_fuzz            fuzz/obj_with_mtl_fuzz.cpp            obj-mtl)
+  arx_add_fuzz_target(arx_pistoris_ftl_fuzz                     fuzz/ftl_fuzz.cpp                     ftl
+                      DICTIONARY fuzz/ftl.dict)
+  arx_add_fuzz_target(arx_pistoris_ftl_roundtrip_fuzz           fuzz/ftl_roundtrip_fuzz.cpp           ftl
+                      DICTIONARY fuzz/ftl.dict)
+  arx_add_fuzz_target(arx_pistoris_model_native_import_fuzz     fuzz/model_native_import_fuzz.cpp     ftl
+                      DICTIONARY fuzz/ftl.dict)
+  arx_add_fuzz_target(arx_pistoris_tea_fuzz                     fuzz/tea_fuzz.cpp                     tea
+                      DICTIONARY fuzz/tea.dict)
+  arx_add_fuzz_target(arx_pistoris_tea_roundtrip_fuzz           fuzz/tea_roundtrip_fuzz.cpp           tea
+                      DICTIONARY fuzz/tea.dict)
+  arx_add_fuzz_target(arx_pistoris_animation_native_import_fuzz fuzz/animation_native_import_fuzz.cpp tea
+                      DICTIONARY fuzz/tea.dict)
+  arx_add_fuzz_target(arx_pistoris_amb_fuzz                     fuzz/amb_fuzz.cpp                     amb
+                      DICTIONARY fuzz/amb.dict)
+  arx_add_fuzz_target(arx_pistoris_amb_roundtrip_fuzz           fuzz/amb_roundtrip_fuzz.cpp           amb
+                      DICTIONARY fuzz/amb.dict)
+  arx_add_fuzz_target(arx_pistoris_ambiance_native_import_fuzz  fuzz/ambiance_native_import_fuzz.cpp  amb
+                      DICTIONARY fuzz/amb.dict)
+  arx_add_fuzz_target(arx_pistoris_cin_fuzz                     fuzz/cin_fuzz.cpp                     cin
+                      DICTIONARY fuzz/cin.dict)
+  arx_add_fuzz_target(arx_pistoris_cin_roundtrip_fuzz           fuzz/cin_roundtrip_fuzz.cpp           cin
+                      DICTIONARY fuzz/cin.dict)
+  arx_add_fuzz_target(arx_pistoris_cinematic_native_import_fuzz fuzz/cinematic_native_import_fuzz.cpp cin
+                      DICTIONARY fuzz/cin.dict)
+  arx_add_fuzz_target(arx_pistoris_obj_fuzz                     fuzz/obj_fuzz.cpp                     obj
+                      DICTIONARY fuzz/obj.dict)
+  arx_add_fuzz_target(arx_pistoris_obj_with_mtl_fuzz            fuzz/obj_with_mtl_fuzz.cpp            obj-mtl
+                      DICTIONARY fuzz/obj.dict)
   arx_add_fuzz_target(arx_pistoris_glb_container_fuzz           fuzz/glb_container_fuzz.cpp           glb-container)
   target_include_directories(arx_pistoris_glb_container_fuzz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(arx_pistoris_glb_container_fuzz PRIVATE arx_pistoris_cgltf)
-  arx_add_fuzz_target(arx_pistoris_model_glb_import_fuzz        fuzz/model_glb_import_fuzz.cpp        model-glb)
-  arx_add_fuzz_target(arx_pistoris_ambiance_glb_import_fuzz     fuzz/ambiance_glb_import_fuzz.cpp     ambiance-glb)
+  arx_add_fuzz_target(arx_pistoris_model_glb_import_fuzz        fuzz/model_glb_import_fuzz.cpp        model-glb
+                      DICTIONARY fuzz/model-glb.dict)
+  arx_add_fuzz_target(arx_pistoris_ambiance_glb_import_fuzz     fuzz/ambiance_glb_import_fuzz.cpp     ambiance-glb
+                      DICTIONARY fuzz/ambiance-glb.dict)
+  arx_add_fuzz_target(arx_pistoris_cinematic_glb_import_fuzz    fuzz/cinematic_glb_import_fuzz.cpp    cinematic-glb
+                      DICTIONARY fuzz/cinematic-glb.dict)
   arx_add_fuzz_target(arx_pistoris_image_fuzz                   fuzz/image_fuzz.cpp                   image)
   arx_add_fuzz_target(arx_pistoris_audio_fuzz                   fuzz/audio_fuzz.cpp                   audio)
-  arx_add_fuzz_target(arx_pistoris_fts_fuzz                     fuzz/fts_fuzz.cpp                     fts)
-  arx_add_fuzz_target(arx_pistoris_fts_roundtrip_fuzz           fuzz/fts_roundtrip_fuzz.cpp           fts)
-  arx_add_fuzz_target(arx_pistoris_llf_fuzz                     fuzz/llf_fuzz.cpp                     llf)
-  arx_add_fuzz_target(arx_pistoris_llf_roundtrip_fuzz           fuzz/llf_roundtrip_fuzz.cpp           llf)
-  arx_add_fuzz_target(arx_pistoris_dlf_fuzz                     fuzz/dlf_fuzz.cpp                     dlf)
-  arx_add_fuzz_target(arx_pistoris_dlf_roundtrip_fuzz           fuzz/dlf_roundtrip_fuzz.cpp           dlf)
-  arx_add_fuzz_target(arx_pistoris_level_native_fts_fuzz        fuzz/level_native_fts_fuzz.cpp        fts)
-  arx_add_fuzz_target(arx_pistoris_level_native_llf_fuzz        fuzz/level_native_llf_fuzz.cpp        llf)
-  arx_add_fuzz_target(arx_pistoris_level_native_dlf_fuzz        fuzz/level_native_dlf_fuzz.cpp        dlf)
+  arx_add_fuzz_target(arx_pistoris_fts_fuzz                     fuzz/fts_fuzz.cpp                     fts
+                      DICTIONARY fuzz/fts.dict)
+  arx_add_fuzz_target(arx_pistoris_fts_roundtrip_fuzz           fuzz/fts_roundtrip_fuzz.cpp           fts
+                      DICTIONARY fuzz/fts.dict)
+  arx_add_fuzz_target(arx_pistoris_llf_fuzz                     fuzz/llf_fuzz.cpp                     llf
+                      DICTIONARY fuzz/llf.dict)
+  arx_add_fuzz_target(arx_pistoris_llf_roundtrip_fuzz           fuzz/llf_roundtrip_fuzz.cpp           llf
+                      DICTIONARY fuzz/llf.dict)
+  arx_add_fuzz_target(arx_pistoris_dlf_fuzz                     fuzz/dlf_fuzz.cpp                     dlf
+                      DICTIONARY fuzz/dlf.dict)
+  arx_add_fuzz_target(arx_pistoris_dlf_roundtrip_fuzz           fuzz/dlf_roundtrip_fuzz.cpp           dlf
+                      DICTIONARY fuzz/dlf.dict)
+  arx_add_fuzz_target(arx_pistoris_level_native_fts_fuzz        fuzz/level_native_fts_fuzz.cpp        fts
+                      DICTIONARY fuzz/fts.dict)
+  arx_add_fuzz_target(arx_pistoris_level_native_llf_fuzz        fuzz/level_native_llf_fuzz.cpp        llf
+                      DICTIONARY fuzz/llf.dict)
+  arx_add_fuzz_target(arx_pistoris_level_native_dlf_fuzz        fuzz/level_native_dlf_fuzz.cpp        dlf
+                      DICTIONARY fuzz/dlf.dict)
   arx_add_fuzz_target(arx_pistoris_level_native_dlf_embedded_fuzz
-                                                               fuzz/level_native_dlf_embedded_fuzz.cpp dlf)
-  arx_add_fuzz_target(arx_pistoris_level_glb_import_fuzz        fuzz/level_glb_import_fuzz.cpp        level-glb)
+                                                               fuzz/level_native_dlf_embedded_fuzz.cpp dlf
+                      DICTIONARY fuzz/dlf.dict)
+  arx_add_fuzz_target(arx_pistoris_level_glb_import_fuzz        fuzz/level_glb_import_fuzz.cpp        level-glb
+                      DICTIONARY fuzz/level-glb.dict)
 endif()

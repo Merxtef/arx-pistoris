@@ -57,15 +57,14 @@ bool resolveSoundOutput(const RouteResolveContext& context, Invocation& invocati
 }
 
 bool resolveSoundRebase(const RouteResolveContext& context, Invocation& invocation, SidecarRebaseDirection automatic) {
-  return resolveSidecarRebase({.explicit_requested = context.conversion.rebase_sounds,
-                               .explicit_directory = context.conversion.sound_directory,
+  return resolveSidecarRebase({.explicit_requested = context.conversion.sounds.requested,
+                               .explicit_directory = context.conversion.sounds.directory,
                                .automatic = automatic,
                                .to_loose_directory = kLooseSoundDirectory,
                                .to_game_directory = pistoris::paths::ambianceSoundDirectory()},
                               "sound",
                               context.io,
-                              invocation.rebase_sounds,
-                              invocation.sound_rebase_directory);
+                              invocation.sound_rebase);
 }
 
 bool loadReferenceModel(const std::string& argument, const TextureIoOptions& texture_options, IoService& io,
@@ -86,10 +85,15 @@ bool loadReferenceModel(const std::string& argument, const TextureIoOptions& tex
     return false;
 
   ConvertedModelInput converted;
-  pistoris::Model::GlbImportOptions glb_options;
-  glb_options.arx_units_per_glb_unit = invocation.options.glb_import.arx_units_per_glb_unit;
-  if (!convertModelInput(
-          input, material_libraries, glb_options, DiagnosticCode::kAmbianceInputFailed, "Reference Model", converted)) {
+  ModelInputConversionOptions conversion_options;
+  conversion_options.glb.arx_units_per_glb_unit = invocation.options.glb_import.arx_units_per_glb_unit;
+  conversion_options.native_text_mode = invocation.native_text_mode;
+  if (!convertModelInput(input,
+                         material_libraries,
+                         conversion_options,
+                         DiagnosticCode::kAmbianceInputFailed,
+                         "Reference Model",
+                         converted)) {
     return false;
   }
 

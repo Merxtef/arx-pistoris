@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string_view>
 
 namespace pistoris::glb {
 
@@ -31,5 +32,6 @@ class Asset {
 };
 
 ArxReturnCode parse(std::span<const std::uint8_t> glb, Asset& out);
+ArxReturnCode validateRequiredExtensions(const cgltf_data& data, std::span<const std::string_view> supported) noexcept;
 
 }  // namespace pistoris::glb

@@ -16,6 +16,7 @@ level/glb/<fixture>/<fixture>.glb
 model/glb/<fixture>/<fixture>.glb
 model/obj/<fixture>/<fixture>.obj
 ambiance/glb/<fixture>/<fixture>.glb
+cinematic/<fixture>/<fixture>.glb
 ```
 
 Sidecars may be absent when a fixture is not intended to exercise hydration.
@@ -30,11 +31,12 @@ extension in each name, for example `sample.ftl.json` or `level43.dlf.json`.
 
 Level GLBs are authored inputs. Their FTS, LLF, DLF, and texture outputs under
 `mount/` are generated from those GLBs through `level:<N>` CLI output.
-Model, Animation, and Ambiance native fixtures are generated from their
-cataloged loose sources in the same way. Each GLB catalog entry records its
-Arx-units-per-GLB-unit scale, and regeneration entries record fixture-specific
-operations. The top-level native sidecar manifest lists every generated image
-and audio file, including textures, icons, minimaps, and loading screens.
+Model, Animation, Ambiance, and Cinematic native fixtures are generated from
+their cataloged loose sources in the same way. Scaled GLB catalog entries
+record their Arx-units-per-GLB-unit scale, and regeneration entries record
+fixture-specific operations. The top-level native sidecar manifest lists every
+generated image and audio file, including textures, icons, minimaps, loading
+screens, illustrations, effects, and speech.
 
 After building the development CLI, regenerate the native mount with:
 

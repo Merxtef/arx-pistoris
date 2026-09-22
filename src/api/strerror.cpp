@@ -48,6 +48,10 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "audio data exceeds the safety limit";
     case ARX_IMAGE_BAD_DATA:
       return "encoded image data is invalid";
+    case ARX_TEXT_INVALID_UTF8:
+      return "text is not valid UTF-8";
+    case ARX_TEXT_NOT_LATIN1:
+      return "text cannot be represented in Latin-1";
 
     // FTL
     case ARX_FTL_BAD_VERSION:
@@ -291,6 +295,38 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "AMB: key setting is invalid";
     case ARX_AMB_UNUSED_SETTING_DATA:
       return "AMB: unused key setting data must be zero";
+
+    // CIN
+    case ARX_CIN_BAD_VERSION:
+      return "CIN: unsupported version";
+    case ARX_CIN_BAD_BITMAP_COUNT:
+      return "CIN: invalid bitmap count";
+    case ARX_CIN_BAD_BITMAP_PATH:
+      return "CIN: invalid bitmap path";
+    case ARX_CIN_BAD_BITMAP_SCALE:
+      return "CIN: invalid bitmap subdivision scale";
+    case ARX_CIN_BAD_SOUND_COUNT:
+      return "CIN: invalid sound count";
+    case ARX_CIN_BAD_SOUND_PATH:
+      return "CIN: invalid sound path";
+    case ARX_CIN_BAD_TRACK:
+      return "CIN: invalid track";
+    case ARX_CIN_BAD_KEY_COUNT:
+      return "CIN: invalid keyframe count";
+    case ARX_CIN_BAD_KEY_FRAME:
+      return "CIN: invalid keyframe frame";
+    case ARX_CIN_BAD_KEY_BITMAP:
+      return "CIN: keyframe bitmap index out of range";
+    case ARX_CIN_BAD_KEY_SOUND:
+      return "CIN: keyframe sound index out of range";
+    case ARX_CIN_BAD_KEY_TRANSFORM:
+      return "CIN: keyframe data is not finite";
+    case ARX_CIN_BAD_KEY_TIMING:
+      return "CIN: invalid keyframe timing";
+    case ARX_CIN_BAD_KEY_INTERPOLATION:
+      return "CIN: invalid keyframe interpolation";
+    case ARX_CIN_BAD_KEY_CROSSFADE:
+      return "CIN: invalid keyframe crossfade";
 
     // Level
     case ARX_LEVEL_BAD_RESOURCE_PATH:
@@ -660,6 +696,66 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
     case ARX_AMBIANCE_TRACK_CANNOT_FIT_MASTER:
       return "Ambiance: track cannot fit within the master duration";
 
+    // Cinematic
+    case ARX_CINEMATIC_NO_ILLUSTRATIONS:
+      return "Cinematic: no illustrations";
+    case ARX_CINEMATIC_TOO_MANY_ILLUSTRATIONS:
+      return "Cinematic: too many illustrations";
+    case ARX_CINEMATIC_BAD_RESOURCE_PATH:
+      return "Cinematic: resource path is invalid";
+    case ARX_CINEMATIC_BAD_ILLUSTRATION:
+      return "Cinematic: illustration texture index is invalid";
+    case ARX_CINEMATIC_BAD_ILLUSTRATION_SCALE:
+      return "Cinematic: illustration subdivision scale is invalid";
+    case ARX_CINEMATIC_BAD_TIMELINE:
+      return "Cinematic: timeline is invalid";
+    case ARX_CINEMATIC_BAD_KEY_COUNT:
+      return "Cinematic: keyframe count is invalid";
+    case ARX_CINEMATIC_BAD_KEY_FRAME:
+      return "Cinematic: keyframe frame is invalid";
+    case ARX_CINEMATIC_BAD_KEY_ILLUSTRATION:
+      return "Cinematic: keyframe illustration index is invalid";
+    case ARX_CINEMATIC_BAD_KEY_SOUND:
+      return "Cinematic: keyframe sound handle is invalid";
+    case ARX_CINEMATIC_BAD_KEY_TRANSFORM:
+      return "Cinematic: keyframe data is not finite";
+    case ARX_CINEMATIC_BAD_KEY_TIMING:
+      return "Cinematic: keyframe timing is invalid";
+    case ARX_CINEMATIC_BAD_KEY_INTERPOLATION:
+      return "Cinematic: keyframe interpolation is invalid";
+    case ARX_CINEMATIC_BAD_KEY_EFFECT:
+      return "Cinematic: keyframe effect is invalid";
+    case ARX_CINEMATIC_TOO_MANY_TEXTURES:
+      return "Cinematic: too many textures";
+    case ARX_CINEMATIC_BAD_TEXTURE_PATH:
+      return "Cinematic: texture path is invalid";
+    case ARX_CINEMATIC_BAD_TEXTURE_IMAGE:
+      return "Cinematic: encoded texture image is invalid";
+    case ARX_CINEMATIC_DUPLICATE_TEXTURE_PATH:
+      return "Cinematic: texture path is not unique";
+    case ARX_CINEMATIC_ILLUSTRATION_IN_USE:
+      return "Cinematic: illustration is referenced by a keyframe";
+    case ARX_CINEMATIC_TOO_MANY_SOUNDS:
+      return "Cinematic: too many sounds";
+    case ARX_CINEMATIC_BAD_SOUND_PATH:
+      return "Cinematic: sound path is invalid";
+    case ARX_CINEMATIC_BAD_SOUND_DATA:
+      return "Cinematic: encoded sound data is invalid";
+    case ARX_CINEMATIC_UNSUPPORTED_SOUND_CHANNELS:
+      return "Cinematic: sound channel count is unsupported";
+    case ARX_CINEMATIC_SOUND_TOO_LARGE:
+      return "Cinematic: decoded sound data is too large";
+    case ARX_CINEMATIC_DUPLICATE_SOUND_PATH:
+      return "Cinematic: sound path is not unique within its kind";
+    case ARX_CINEMATIC_SOUND_IN_USE:
+      return "Cinematic: sound is referenced by a keyframe";
+    case ARX_CINEMATIC_BAD_LANGUAGE:
+      return "Cinematic: language is invalid";
+    case ARX_CINEMATIC_DUPLICATE_LANGUAGE:
+      return "Cinematic: language name is not unique";
+    case ARX_CINEMATIC_BAD_SOUND_ENCODING:
+      return "Cinematic: sound encoding is invalid";
+
     // OBJ
     case ARX_OBJ_BAD_FORMAT:
       return "OBJ: malformed syntax";
@@ -789,6 +885,26 @@ ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
       return "GLB: invalid Ambiance key convention";
     case ARX_GLB_BAD_AMBIANCE_AUTOMATION:
       return "GLB: invalid Ambiance automation convention";
+    case ARX_GLB_NO_CINEMATIC:
+      return "GLB: no Cinematic root";
+    case ARX_GLB_AMBIGUOUS_CINEMATIC:
+      return "GLB: multiple Cinematic roots";
+    case ARX_GLB_BAD_CINEMATIC_ROOT:
+      return "GLB: invalid Cinematic root convention";
+    case ARX_GLB_BAD_CINEMATIC_ILLUSTRATION:
+      return "GLB: invalid Cinematic illustration convention";
+    case ARX_GLB_BAD_CINEMATIC_IMAGE:
+      return "GLB: invalid or missing Cinematic illustration image";
+    case ARX_GLB_BAD_CINEMATIC_KEY_NAME:
+      return "GLB: invalid Cinematic KEY name";
+    case ARX_GLB_BAD_CINEMATIC_KEY_TRANSFORM:
+      return "GLB: invalid Cinematic KEY transform";
+    case ARX_GLB_BAD_CINEMATIC_CAMERA:
+      return "GLB: invalid Cinematic KEY camera";
+    case ARX_GLB_BAD_CINEMATIC_KEY_PLACEMENT:
+      return "GLB: Cinematic KEY cannot be mapped onto its illustration";
+    case ARX_GLB_BAD_CINEMATIC_HELPER:
+      return "GLB: invalid Cinematic key helper convention";
 
     // JSON
     case ARX_JSON_BAD_FORMAT:

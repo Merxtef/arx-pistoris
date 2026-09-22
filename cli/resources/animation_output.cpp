@@ -3,7 +3,6 @@
 
 #include "resources/animation_output.h"
 
-#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
 #include "arx_pistoris/runtime/types.h"
@@ -17,7 +16,7 @@
 #include "resources/selector.h"
 
 #include <algorithm>
-#include <cstring>
+#include <cstddef>
 #include <span>
 #include <string>
 #include <string_view>
@@ -59,14 +58,6 @@ struct AnimationNamePlan {
 };
 
 }  // namespace
-
-AnimationOutputIdentity nativeAnimationOutputIdentity(const pistoris::tea::Data& animation,
-                                                      std::string_view resource_path) noexcept {
-  const void* end = std::memchr(animation.name, '\0', sizeof(animation.name));
-  const std::size_t size =
-      end ? static_cast<std::size_t>(static_cast<const char*>(end) - animation.name) : sizeof(animation.name);
-  return {{animation.name, size}, resource_path};
-}
 
 bool buildAnimationTargets(std::span<const AnimationOutputIdentity> animations, const OutputTarget& base,
                            std::string_view resource_directory, Format output_format,
@@ -163,22 +154,6 @@ bool buildAnimationTargets(std::span<const AnimationOutputIdentity> animations, 
     out[plan.index] = std::move(target);
   }
   return true;
-}
-
-bool buildAnimationTargets(std::span<const pistoris::tea::Data> teas, const OutputTarget& base,
-                           std::string_view resource_directory, Format output_format,
-                           std::span<const std::string_view> reserved_paths, std::vector<OutputTarget>& out,
-                           std::string& error) {
-  std::vector<AnimationOutputIdentity> identities;
-  identities.reserve(teas.size());
-  for (const pistoris::tea::Data& tea : teas) identities.push_back(nativeAnimationOutputIdentity(tea));
-  return buildAnimationTargets(identities, base, resource_directory, output_format, reserved_paths, out, error);
-}
-
-bool buildNativeAnimationTargets(std::span<const pistoris::tea::Data> teas, const OutputTarget& base,
-                                 std::string_view resource_directory, std::vector<OutputTarget>& out,
-                                 std::string& error) {
-  return buildAnimationTargets(teas, base, resource_directory, Format::kTea, {}, out, error);
 }
 
 bool buildGameAnimationTargets(std::span<const AnimationOutputIdentity> animations, std::string_view fallback_type,

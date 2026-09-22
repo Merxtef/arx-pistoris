@@ -6,16 +6,23 @@
 #include "external/glb/level/lighting.h"
 #include "external/glb/level/objects.h"
 #include "external/glb/level/zones.h"
+#include "external/glb/utils/names.h"
 
+#include <span>
 #include <string_view>
 
 namespace pistoris::glb_level {
 namespace {
 
-bool singletonRootName(std::string_view name, std::string_view root) {
-  if (name == root) return true;
-  if (!name.starts_with(root) || name.size() <= root.size() + 2 || name.substr(root.size(), 2) != "__") return false;
-  return name.substr(root.size() + 2).find("__") == std::string_view::npos;
+bool singletonRootName(std::string_view name, std::string_view root, glb::ParsedLabel* label) {
+  bool parsed = false;
+  if (!glb::parseRecoverableLabel(name, parsed, label, {}, [root](std::span<const std::string_view> tokens, bool& out) {
+        if (tokens.size() != 1 || tokens.front() != root) return false;
+        out = true;
+        return true;
+      }))
+    return false;
+  return parsed;
 }
 
 bool singletonRootAttempt(std::string_view name, std::string_view root) {
@@ -24,11 +31,17 @@ bool singletonRootAttempt(std::string_view name, std::string_view root) {
 
 }  // namespace
 
-bool isPlayerSpawnRootName(std::string_view name) { return singletonRootName(name, kPlayerSpawnRootName); }
+bool isPlayerSpawnRootName(std::string_view name, glb::ParsedLabel* label) {
+  return singletonRootName(name, kPlayerSpawnRootName, label);
+}
 
-bool isNavSurfaceRootName(std::string_view name) { return singletonRootName(name, kNavSurfaceRootName); }
+bool isNavSurfaceRootName(std::string_view name, glb::ParsedLabel* label) {
+  return singletonRootName(name, kNavSurfaceRootName, label);
+}
 
-bool isMinimapRootName(std::string_view name) { return singletonRootName(name, kMinimapRootName); }
+bool isMinimapRootName(std::string_view name, glb::ParsedLabel* label) {
+  return singletonRootName(name, kMinimapRootName, label);
+}
 
 LevelObjectKind levelObjectKind(const cgltf_node& node) {
   const std::string_view name = node.name != nullptr ? node.name : "";
@@ -54,7 +67,7 @@ bool directLevelHelper(LevelObjectKind owner, std::string_view name) {
     case LevelObjectKind::kEntity:
       return name.starts_with("CLASS_");
     case LevelObjectKind::kFog:
-      return name.starts_with("SETTINGS__") || name.starts_with("DIRECTION__");
+      return name.starts_with("SETTINGS__") || name == "DIRECTION" || name.starts_with("DIRECTION__");
     case LevelObjectKind::kZone:
       return name.starts_with("SETTINGS__") || name.starts_with("AMBIANCE_");
     case LevelObjectKind::kPath:

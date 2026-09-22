@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 
 static pistoris::ftl::Data parseFixture(const std::vector<uint8_t>& fixture) {
@@ -42,6 +43,10 @@ TEST_SUITE("ftl") {
     pistoris::WriteCursor wc;
     CHECK(pistoris::saveFtl(&d, wc) == ARX_OK);
     auto bytes = wc.take();
+    const std::size_t texture = kFtlDataOff + 3 * kFtlVertexSize + kFtlFaceSize;
+    std::memset(fixture.data() + texture, 0, kFtlTextureSize);
+    constexpr std::string_view kCanonicalTexture = "graph/obj3d/body.";
+    std::memcpy(fixture.data() + texture, kCanonicalTexture.data(), kCanonicalTexture.size());
     CHECK(bytes.size() == fixture.size());
     CHECK(std::memcmp(bytes.data(), fixture.data(), fixture.size()) == 0);
   }
@@ -56,7 +61,7 @@ TEST_SUITE("ftl") {
     d1.faces.push_back(f);
 
     pistoris::ftl::TextureContainer tc{};
-    std::strcpy(tc.filename, "GRAPH\\OBJ3D\\BODY.BMP");
+    std::strcpy(tc.filename, "graph/obj3d/body");
     d1.texture_containers.push_back(tc);
 
     pistoris::ftl::Group g{};

@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/arx_pistoris.h"
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/text.h"
 
 #include "amb_helpers.h"
 
@@ -68,12 +69,13 @@ TEST_SUITE("amb") {
     REQUIRE(arx_pistoris_amb_read(bytes.data(), bytes.size(), &amb) == ARX_OK);
 
     char* json = nullptr;
-    REQUIRE(arx_pistoris_amb_to_json(amb, 1, &json) == ARX_OK);
+    REQUIRE(arx_pistoris_amb_to_json(amb, 1, ARX_NATIVE_TEXT_UTF8, &json) == ARX_OK);
     REQUIRE(json != nullptr);
     CHECK(std::strstr(json, "https://arx-tools.github.io/schemas/amb.schema.json") != nullptr);
 
     ArxAmb* imported = nullptr;
-    REQUIRE(arx_pistoris_amb_from_json(reinterpret_cast<const std::uint8_t*>(json), std::strlen(json), &imported) ==
+    REQUIRE(arx_pistoris_amb_from_json(
+                reinterpret_cast<const std::uint8_t*>(json), std::strlen(json), ARX_NATIVE_TEXT_UTF8, &imported) ==
             ARX_OK);
     CHECK(arx_pistoris_amb_validate(imported) == ARX_OK);
 
@@ -84,11 +86,11 @@ TEST_SUITE("amb") {
 
   TEST_CASE("AmbJsonNullArguments") {
     char* json = nullptr;
-    CHECK(arx_pistoris_amb_to_json(nullptr, 0, &json) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_amb_to_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &json) == ARX_INVALID_HANDLE);
 
     const std::uint8_t empty = 0;
     ArxAmb* amb = nullptr;
-    CHECK(arx_pistoris_amb_from_json(nullptr, 0, &amb) == ARX_INVALID_DATA_POINTER);
-    CHECK(arx_pistoris_amb_from_json(&empty, 0, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_amb_from_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &amb) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_amb_from_json(&empty, 0, ARX_NATIVE_TEXT_UTF8, nullptr) == ARX_INVALID_DATA_POINTER);
   }
 }

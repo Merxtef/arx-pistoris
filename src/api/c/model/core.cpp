@@ -12,14 +12,15 @@
 #include "arx_pistoris/model/obj.hpp"
 #include "arx_pistoris/native.h"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/text.h"
 #include "arx_pistoris/sound.h"
 #include "arx_pistoris/texture.h"
-#include "arx_pistoris/texture.hpp"
 
 #include "api/c/animation/internal.h"
 #include "api/c/internal.h"
 #include "api/c/model/internal.h"
 #include "api/c/native/internal.h"
+#include "api/c/native/text_internal.h"
 #include "api/c/sound/internal.h"
 #include "api/c/texture/internal.h"
 
@@ -104,8 +105,10 @@ ArxReturnCode arx_pistoris_model_reset(ArxModel* model) noexcept {
 }
 
 ArxReturnCode arx_pistoris_model_import_native(const ArxFtl* native, ArxModel** out_model,
-                                               ArxTextureSourcePaths** out_texture_source_paths) noexcept {
+                                               ArxTextureSourcePaths** out_texture_source_paths,
+                                               ArxNativeTextMode text_mode) noexcept {
   if (!native) return ARX_INVALID_HANDLE;
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
   if (!out_model) return ARX_INVALID_DATA_POINTER;
   *out_model = nullptr;
   if (out_texture_source_paths) *out_texture_source_paths = nullptr;
@@ -113,8 +116,8 @@ ArxReturnCode arx_pistoris_model_import_native(const ArxFtl* native, ArxModel** 
     auto result = std::make_unique<ArxModel>();
     std::unique_ptr<ArxTextureSourcePaths> paths;
     if (out_texture_source_paths) paths = std::make_unique<ArxTextureSourcePaths>();
-    const ArxReturnCode rc =
-        pistoris::Model::importNative(result->value, native->value, paths ? &paths->value : nullptr);
+    const ArxReturnCode rc = pistoris::Model::importNative(
+        result->value, native->value, paths ? &paths->value : nullptr, pistoris::c_api::nativeTextMode(text_mode));
     if (rc != ARX_OK) return rc;
     *out_model = result.release();
     if (out_texture_source_paths) *out_texture_source_paths = paths.release();
@@ -344,7 +347,7 @@ ArxReturnCode arx_pistoris_model_export_glb(const ArxModel* model, const ArxAnim
   });
 }
 
-ArxReturnCode arx_pistoris_model_bake_native(const ArxModel* model, const ArxNativeTextureBakeOptions* options,
+ArxReturnCode arx_pistoris_model_bake_native(const ArxModel* model, const ArxNativeModelBakeOptions* options,
                                              ArxFtl** out_native, ArxNativeTextureFiles** out_textures) noexcept {
   if (!model) return ARX_INVALID_HANDLE;
   if (!options) return ARX_INVALID_OPTIONS;
@@ -352,7 +355,10 @@ ArxReturnCode arx_pistoris_model_bake_native(const ArxModel* model, const ArxNat
   *out_native = nullptr;
   if (out_textures) *out_textures = nullptr;
   return pistoris::c_api::guard([&]() -> ArxReturnCode {
-    const pistoris::NativeTextureBakeOptions cpp_options{out_textures && options->include_files != 0};
+    if (!pistoris::c_api::validNativeTextMode(options->text_mode)) return ARX_INVALID_OPTIONS;
+    const pistoris::NativeModelBakeOptions cpp_options{
+        .include_texture_files = out_textures && options->include_texture_files != 0,
+        .text_mode = pistoris::c_api::nativeTextMode(options->text_mode)};
     pistoris::NativeModelBundle bundle;
     const ArxReturnCode rc = model->value.bakeNativeBundle(cpp_options, bundle);
     if (rc != ARX_OK) return rc;

@@ -14,6 +14,7 @@ enum class RouteKind : std::uint8_t {
   kModel,
   kAnimation,
   kAmbiance,
+  kCinematic,
   kLevel,
 };
 

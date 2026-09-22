@@ -20,17 +20,15 @@ typedef struct arx_pistoris_sound_source_references ArxSoundSourceReferences;
 typedef struct arx_pistoris_animation_sound_files ArxAnimationSoundFiles;
 typedef struct arx_pistoris_animation_sound_source_references ArxAnimationSoundSourceReferences;
 
+typedef enum ArxSoundKind {
+  ARX_SOUND_EFFECT = 0,
+  ARX_SOUND_SPEECH = 1,
+} ArxSoundKind;
+
 typedef struct ArxSoundView {
   ArxStringView path;
   ArxEncodedAudioView encoded_audio;
 } ArxSoundView;
-
-typedef struct ArxNativeSoundBakeOptions {
-  // Include encoded sidecars in output bundle
-  uint8_t include_files;
-} ArxNativeSoundBakeOptions;
-
-#define ARX_NATIVE_SOUND_BAKE_OPTIONS_INIT {1U}
 
 typedef struct ArxSoundFile {
   ArxSoundIndex source_sound;
@@ -56,6 +54,16 @@ typedef struct ArxAnimationSoundSourceReference {
 /* Returned views remain valid until their owning sound-files or source-references handle is destroyed */
 
 ARX_EXTERN_C_BEGIN
+
+// --- Handles ---
+
+/* SoundHandle invalidates together with SoundIndex */
+ARX_API ArxReturnCode arx_pistoris_sound_handle(ArxSoundKind kind, ArxSoundIndex index,
+                                                ArxSoundHandle* out_handle) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_sound_handle_kind(ArxSoundHandle handle, ArxSoundKind* out_kind) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_sound_handle_index(ArxSoundHandle handle, ArxSoundIndex* out_index) ARX_NOEXCEPT;
+
+// --- Collections ---
 
 ARX_API ArxReturnCode arx_pistoris_sound_files_count(const ArxSoundFiles* files, size_t* out_count) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_sound_files_get(const ArxSoundFiles* files, size_t index,

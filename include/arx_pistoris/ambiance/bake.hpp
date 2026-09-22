@@ -4,12 +4,18 @@
 #pragma once
 
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/sound.hpp"
 
 #include <cstdint>
 #include <vector>
 
 namespace pistoris {
+
+struct NativeAmbianceBakeOptions {
+  bool include_sound_files = true;
+  NativeTextMode text_mode = NativeTextMode::kAuto;
+};
 
 struct NativeAmbianceBundle {
   amb::Data amb;

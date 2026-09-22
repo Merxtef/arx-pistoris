@@ -13,8 +13,8 @@
 namespace cli::ambiance {
 
 struct InputConverterDescriptor {
-  using NativeLoader = bool (*)(const ClassifiedPath& input, NativeAmbiance& out);
-  using IntermediateLoader = bool (*)(const ClassifiedPath& input, const AmbianceOptions& options,
+  using NativeLoader = bool (*)(const ClassifiedPath& input, const Invocation& invocation, NativeAmbiance& out);
+  using IntermediateLoader = bool (*)(const ClassifiedPath& input, const Invocation& invocation,
                                       IntermediateAmbiance& out);
 
   NativeLoader load_native = nullptr;

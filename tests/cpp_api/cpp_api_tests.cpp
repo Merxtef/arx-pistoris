@@ -21,7 +21,35 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
+
+namespace {
+
+template <std::size_t N>
+void setNativeText(char (&out)[N], std::string_view value) {
+  REQUIRE(value.size() < N);
+  std::memcpy(out, value.data(), value.size());
+  std::memset(out + value.size(), 0, N - value.size());
+}
+
+template <std::size_t N>
+std::string_view nativeText(const char (&value)[N]) {
+  const void* terminator = std::memchr(value, '\0', N);
+  return {value, terminator ? static_cast<const char*>(terminator) - value : N};
+}
+
+pistoris::dlf::Entity nativeEntity(std::string_view class_path, std::int32_t ident, pistoris::ArxVector3 position = {},
+                                   pistoris::ArxAngle angle = {}) {
+  pistoris::dlf::Entity result;
+  setNativeText(result.class_path, class_path);
+  result.ident = ident;
+  result.position = position;
+  result.angle = angle;
+  return result;
+}
+
+}  // namespace
 
 TEST_SUITE("cpp_api") {
   TEST_CASE("Metadata") {
@@ -112,8 +140,9 @@ TEST_SUITE("cpp_api") {
 
   TEST_CASE("DlfWriteReadRoundtrip") {
     pistoris::Dlf source;
-    source.scene_path = "graph/levels/level1/";
-    source.entities.push_back({"graph/obj3d/interactive/items/key/key", 7, {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}});
+    setNativeText(source.scene_path, "graph/levels/level1");
+    source.entities.push_back(
+        nativeEntity("graph/obj3d/interactive/items/key/key", 7, {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}));
 
     pistoris::Llf lighting;
     pistoris::llf::Light light;
@@ -130,12 +159,12 @@ TEST_SUITE("cpp_api") {
     std::optional<pistoris::Llf> loaded_lighting;
     REQUIRE(pistoris::readDlf(bytes, loaded, &loaded_lighting) == ARX_OK);
     REQUIRE(loaded.entities.size() == 1);
-    CHECK(loaded.entities[0].class_path == source.entities[0].class_path);
+    CHECK(nativeText(loaded.entities[0].class_path).compare(nativeText(source.entities[0].class_path)) == 0);
     REQUIRE(loaded_lighting.has_value());
     CHECK(loaded_lighting->lights.size() == 1);
 
     std::vector<std::uint8_t> unchanged = {1, 2, 3};
-    source.scene_path.clear();
+    std::memset(source.scene_path, 0, sizeof(source.scene_path));
     CHECK(pistoris::writeDlf(source, options, unchanged) == ARX_DLF_BAD_SCENE_PATH);
     CHECK(unchanged == std::vector<std::uint8_t>{1, 2, 3});
   }
@@ -146,7 +175,7 @@ TEST_SUITE("cpp_api") {
     constexpr std::size_t kTimeOffset = kLastUserOffset + kLastUserSize;
 
     pistoris::Dlf dlf;
-    dlf.scene_path = "graph/levels/level1/";
+    setNativeText(dlf.scene_path, "graph/levels/level1");
     std::vector<std::uint8_t> dlf_bytes;
     REQUIRE(pistoris::writeDlf(dlf, {nullptr, "editor"}, dlf_bytes, false) == ARX_OK);
     REQUIRE(dlf_bytes.size() > kTimeOffset + sizeof(std::int32_t));
@@ -172,10 +201,8 @@ TEST_SUITE("cpp_api") {
     CHECK(llf_time > 0);
 
     const std::string utf8_signer = std::string(241, 'x') + "\xe2\x82\xac" + "z";
-    REQUIRE(pistoris::writeLlf(llf, {utf8_signer}, llf_bytes, false) == ARX_OK);
-    const std::string utf8_expected = "arx-pistoris/" + std::string(241, 'x');
-    CHECK(std::memcmp(llf_bytes.data() + kLastUserOffset, utf8_expected.data(), utf8_expected.size()) == 0);
-    CHECK(llf_bytes[kLastUserOffset + utf8_expected.size()] == 0);
+    CHECK(pistoris::writeLlf(llf, {utf8_signer}, llf_bytes, false) == ARX_INVALID_OPTIONS);
+    CHECK(pistoris::writeLlf(llf, {std::string("bad\0signer", 10)}, llf_bytes, false) == ARX_INVALID_OPTIONS);
 
     std::string dlf_json;
     REQUIRE(pistoris::toJson(dlf, dlf_json, false, "editor") == ARX_OK);
@@ -239,7 +266,7 @@ TEST_SUITE("cpp_api") {
     CHECK(pistoris::readLlf(raw_llf, loaded_llf) == ARX_OK);
 
     pistoris::Dlf dlf;
-    dlf.scene_path = "graph/levels/level1/";
+    setNativeText(dlf.scene_path, "graph/levels/level1");
     const pistoris::DlfWriteOptions dlf_options;
     std::vector<std::uint8_t> compressed_dlf;
     std::vector<std::uint8_t> raw_dlf;
@@ -313,32 +340,34 @@ TEST_SUITE("cpp_api") {
     CHECK(imported_fts.cells[0].polygons[0].room == 1);
 
     pistoris::Dlf dlf;
-    dlf.scene_path = "graph/levels/level7/";
-    dlf.entities.push_back({"graph/obj3d/interactive/items/key/key", 7, {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}});
+    setNativeText(dlf.scene_path, "graph/levels/level7");
+    dlf.entities.push_back(
+        nativeEntity("graph/obj3d/interactive/items/key/key", 7, {1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}));
     pistoris::dlf::Zone silent_zone;
-    silent_zone.name = "silent";
+    setNativeText(silent_zone.name, "silent");
     silent_zone.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}};
     silent_zone.height = 5;
-    silent_zone.ambiance = pistoris::dlf::ZoneAmbiance{"NONE", 100.0f};
+    silent_zone.ambiance.emplace();
+    setNativeText(silent_zone.ambiance->name, "none");
     dlf.zones.push_back(std::move(silent_zone));
     pistoris::dlf::Zone unchanged_zone;
-    unchanged_zone.name = "unchanged";
+    setNativeText(unchanged_zone.name, "unchanged");
     unchanged_zone.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}};
     unchanged_zone.height = 5;
     dlf.zones.push_back(std::move(unchanged_zone));
     std::string dlf_json;
     REQUIRE(pistoris::toJson(dlf, dlf_json, true) == ARX_OK);
     CHECK(dlf_json.find("https://arx-tools.github.io/schemas/dlf.schema.json") != std::string::npos);
-    dlf.scene_path = "custom/scene";
+    setNativeText(dlf.scene_path, "custom/scene");
     CHECK(pistoris::toJson(dlf, dlf_json, true) == ARX_JSON_BAD_SCHEMA);
-    dlf.scene_path = "graph/levels/level7/";
+    setNativeText(dlf.scene_path, "graph/levels/level7");
     pistoris::Dlf imported_dlf;
     REQUIRE(pistoris::fromJson(dlf_json, imported_dlf) == ARX_OK);
     REQUIRE(imported_dlf.entities.size() == 1);
-    CHECK(imported_dlf.entities[0].class_path == dlf.entities[0].class_path);
+    CHECK(nativeText(imported_dlf.entities[0].class_path).compare(nativeText(dlf.entities[0].class_path)) == 0);
     REQUIRE(imported_dlf.zones.size() == 2);
     REQUIRE(imported_dlf.zones[0].ambiance.has_value());
-    CHECK(imported_dlf.zones[0].ambiance->name == "NONE");
+    CHECK(nativeText(imported_dlf.zones[0].ambiance->name).compare("none") == 0);
     CHECK(imported_dlf.zones[0].ambiance->volume == 100.0f);
     CHECK_FALSE(imported_dlf.zones[1].ambiance.has_value());
 
@@ -396,12 +425,12 @@ TEST_SUITE("cpp_api") {
     CHECK(report.skipped_invalid_models == 6);
   }
 
-  TEST_CASE("Returns the first raw FTS texture path for each normalized Level texture") {
+  TEST_CASE("Returns the first canonical FTS texture path for each Level texture") {
     pistoris::Fts fts = makeTriangleFtsData();
     pistoris::fts::Texture first{};
-    std::memcpy(first.fic, "GRAPH\\OBJ3D\\TEXTURES\\WALL.BMP", sizeof("GRAPH\\OBJ3D\\TEXTURES\\WALL.BMP"));
+    std::memcpy(first.fic, "graph/obj3d/textures/wall", sizeof("graph/obj3d/textures/wall"));
     pistoris::fts::Texture second{};
-    std::memcpy(second.fic, "graph/obj3d/textures/wall.tga", sizeof("graph/obj3d/textures/wall.tga"));
+    std::memcpy(second.fic, "graph/obj3d/textures/wall", sizeof("graph/obj3d/textures/wall"));
     fts.textures.emplace(1, first);
     fts.textures.emplace(2, second);
     fts.scene.num_textures = 2;
@@ -412,7 +441,7 @@ TEST_SUITE("cpp_api") {
     REQUIRE(pistoris::Level::importNative(level, fts, nullptr, nullptr, &sources) == ARX_OK);
     CHECK(level.textureCount() == 1);
     REQUIRE(sources.size() == 1);
-    CHECK(sources[0] == "GRAPH\\OBJ3D\\TEXTURES\\WALL.BMP");
+    CHECK(sources[0] == "graph/obj3d/textures/wall");
   }
 
   TEST_CASE("Level public values preserve semantic defaults") {

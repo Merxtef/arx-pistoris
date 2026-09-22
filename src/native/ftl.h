@@ -12,6 +12,7 @@ namespace pistoris {
 ArxReturnCode loadFtl(ftl::Data* h, ReadCursor& c);
 ArxReturnCode saveFtl(const ftl::Data* d, WriteCursor& c);
 
+ArxReturnCode canonicalizeFtl(ftl::Data* d);
 ArxReturnCode validateFtl(const ftl::Data* d);
 
 }  // namespace pistoris

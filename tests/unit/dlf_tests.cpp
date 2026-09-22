@@ -55,10 +55,12 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "external/json.h"
 #include "native/dlf.h"
+#include "native/fixed_string.h"
 #include "native/lighting_layout.h"
 #include "paths/entity_class.h"
 #include "utils/cursor.h"
@@ -74,6 +76,11 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include <vector>
 
 namespace {
+
+template <std::size_t N>
+void setText(char (&out)[N], std::string_view value) {
+  REQUIRE(pistoris::copyFixedString(value, out));
+}
 
 struct Header {
   float version = pistoris::kDlfVersion;
@@ -173,7 +180,7 @@ TEST_SUITE("dlf") {
     CHECK(data.fogs.empty());
     CHECK(data.zones.empty());
     CHECK(data.paths.empty());
-    CHECK(data.scene_path == "graph/levels/level1/");
+    CHECK(pistoris::fixedStringView(data.scene_path).compare("graph/levels/level1") == 0);
     CHECK_FALSE(lighting.has_value());
   }
 
@@ -202,7 +209,10 @@ TEST_SUITE("dlf") {
     CHECK(load(minimalDlf(header, scene), data) == ARX_DLF_BAD_SCENE_PATH);
 
     std::memset(scene.name, 'x', sizeof(scene.name));
-    CHECK(load(minimalDlf(header, scene), data) == ARX_DLF_BAD_SCENE_PATH);
+    LogCapture logs;
+    REQUIRE(load(minimalDlf(header, scene), data) == ARX_OK);
+    CHECK(pistoris::fixedStringView(data.scene_path).size() == sizeof(scene.name) - 1);
+    CHECK(logs.contains("scene.name not null-terminated, clamping"));
 
     header = {};
     header.num_entities = -1;
@@ -365,25 +375,28 @@ TEST_SUITE("dlf") {
     LogCapture logs;
     REQUIRE(load(bytes, data) == ARX_OK);
     REQUIRE(data.entities.size() == 1);
-    CHECK(data.entities[0].class_path == "graph/obj3d/interactive/fix_inter/timed_lever/timed_lever");
+    CHECK(pistoris::fixedStringView(data.entities[0].class_path)
+              .compare("graph/obj3d/interactive/fix_inter/timed_lever/timed_lever") == 0);
     CHECK(logs.contains("normalized 1 legacy .teo entity class path(s)"));
   }
 
   TEST_CASE("DlfJsonReadNormalizesLegacyTeoEntityClasses") {
     pistoris::dlf::Data source;
-    source.scene_path = "graph/levels/level1/";
-    source.entities.push_back({"graph/obj3d/interactive/fix_inter/timed_lever/timed_lever"});
+    setText(source.scene_path, "graph/levels/level1");
+    source.entities.emplace_back();
+    setText(source.entities.back().class_path, "graph/obj3d/interactive/fix_inter/timed_lever/timed_lever");
     std::string json;
-    REQUIRE(pistoris::exportDlfToJson(source, false, {}, json) == ARX_OK);
+    REQUIRE(pistoris::exportDlfToJson(source, false, {}, pistoris::NativeTextMode::kUtf8, json) == ARX_OK);
     const std::size_t name = json.find("fix_inter/timed_lever");
     REQUIRE(name != std::string::npos);
     json.insert(name + std::string_view("fix_inter/timed_lever").size(), ".TEO");
 
     pistoris::dlf::Data data;
     LogCapture logs;
-    REQUIRE(pistoris::importJsonToDlf(json, &data) == ARX_OK);
+    REQUIRE(pistoris::importJsonToDlf(json, pistoris::NativeTextMode::kUtf8, &data) == ARX_OK);
     REQUIRE(data.entities.size() == 1);
-    CHECK(data.entities[0].class_path == "graph/obj3d/interactive/fix_inter/timed_lever/timed_lever");
+    CHECK(pistoris::fixedStringView(data.entities[0].class_path)
+              .compare("graph/obj3d/interactive/fix_inter/timed_lever/timed_lever") == 0);
     CHECK(logs.contains("normalized 1 legacy .teo entity class path(s)"));
   }
 
@@ -392,7 +405,7 @@ TEST_SUITE("dlf") {
     CHECK(pistoris::validateDlf(nullptr) == ARX_INVALID_DATA_POINTER);
     CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_SCENE_PATH);
 
-    data.scene_path = "graph/levels/level1/";
+    setText(data.scene_path, "graph/levels/level1");
     CHECK(pistoris::validateDlf(&data) == ARX_OK);
 
     data.player_spawn.position.x = std::numeric_limits<float>::infinity();
@@ -401,16 +414,17 @@ TEST_SUITE("dlf") {
 
   TEST_CASE("DlfValidationReportsSpecificPayloadErrors") {
     pistoris::dlf::Data data;
-    data.scene_path = "graph/levels/level1/";
+    setText(data.scene_path, "graph/levels/level1");
     const float not_finite = std::numeric_limits<float>::quiet_NaN();
 
     SUBCASE("entity") {
-      data.entities.push_back({"graph/obj3d/interactive/fix_inter/door/door"});
+      data.entities.emplace_back();
+      setText(data.entities.back().class_path, "graph/obj3d/interactive/fix_inter/door/door");
       REQUIRE(pistoris::validateDlf(&data) == ARX_OK);
 
-      data.entities[0].class_path = "prefix/graph/obj3d/interactive/fix_inter/door/door";
+      setText(data.entities[0].class_path, "prefix/graph/obj3d/interactive/fix_inter/door/door");
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ENTITY_CLASS_PATH);
-      data.entities[0].class_path = "graph/obj3d/interactive/fix_inter/door/door";
+      setText(data.entities[0].class_path, "graph/obj3d/interactive/fix_inter/door/door");
       data.entities[0].position.x = not_finite;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ENTITY_POSITION);
       data.entities[0].position = {};
@@ -437,17 +451,17 @@ TEST_SUITE("dlf") {
 
     SUBCASE("zone") {
       pistoris::dlf::Zone zone;
-      zone.name = "zone";
+      setText(zone.name, "zone");
       zone.points = {{}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
       zone.height = 1;
       data.zones.push_back(std::move(zone));
       REQUIRE(pistoris::validateDlf(&data) == ARX_OK);
 
-      data.zones[0].name.clear();
+      std::memset(data.zones[0].name, 0, sizeof(data.zones[0].name));
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_NAME);
-      data.zones[0].name = std::string("zo\0ne", 5);
+      std::memset(data.zones[0].name, 'x', sizeof(data.zones[0].name));
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_NAME);
-      data.zones[0].name = "zone";
+      setText(data.zones[0].name, "zone");
       data.zones[0].position.y = not_finite;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_POSITION);
       data.zones[0].position = {};
@@ -466,21 +480,26 @@ TEST_SUITE("dlf") {
       data.zones[0].farclip = not_finite;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_FARCLIP);
       data.zones[0].farclip.reset();
-      data.zones[0].ambiance = pistoris::dlf::ZoneAmbiance{"ambient", not_finite};
+      data.zones[0].ambiance.emplace();
+      setText(data.zones[0].ambiance->name, "ambient");
+      data.zones[0].ambiance->volume = not_finite;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_AMBIANCE);
-      data.zones[0].ambiance = pistoris::dlf::ZoneAmbiance{std::string("amb\0ient", 8), 1.0f};
+      std::memset(data.zones[0].ambiance->name, 'x', sizeof(data.zones[0].ambiance->name));
+      data.zones[0].ambiance->volume = 1.0f;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_ZONE_AMBIANCE);
     }
 
     SUBCASE("path") {
-      data.paths.push_back({"path", {}, {{{}, pistoris::dlf::PathNodeType::kStandard, 0}}});
+      data.paths.emplace_back();
+      setText(data.paths.back().name, "path");
+      data.paths.back().nodes.push_back({{}, pistoris::dlf::PathNodeType::kStandard, 0});
       REQUIRE(pistoris::validateDlf(&data) == ARX_OK);
 
-      data.paths[0].name.clear();
+      std::memset(data.paths[0].name, 0, sizeof(data.paths[0].name));
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_PATH_NAME);
-      data.paths[0].name = std::string("pa\0th", 5);
+      std::memset(data.paths[0].name, 'x', sizeof(data.paths[0].name));
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_PATH_NAME);
-      data.paths[0].name = "path";
+      setText(data.paths[0].name, "path");
       data.paths[0].position.z = not_finite;
       CHECK(pistoris::validateDlf(&data) == ARX_DLF_BAD_PATH_POSITION);
       data.paths[0].position = {};
@@ -501,24 +520,29 @@ TEST_SUITE("dlf") {
   TEST_CASE("DlfWriteReadCanonicalRoundtrip") {
     pistoris::dlf::Data source;
     source.player_spawn = {{1.0f, 2.0f, 3.0f}, {10.0f, 20.0f, 30.0f}};
-    source.scene_path = "graph/levels/level1/";
-    source.entities.push_back(
-        {"graph/obj3d/interactive/fix_inter/door/door", 42, {4.0f, 5.0f, 6.0f}, {40.0f, 50.0f, 60.0f}});
+    setText(source.scene_path, "graph/levels/level1");
+    source.entities.emplace_back();
+    setText(source.entities.back().class_path, "graph/obj3d/interactive/fix_inter/door/door");
+    source.entities.back().ident = 42;
+    source.entities.back().position = {4.0f, 5.0f, 6.0f};
+    source.entities.back().angle = {40.0f, 50.0f, 60.0f};
     source.fogs.push_back(
         {{7.0f, 8.0f, 9.0f}, {0.1f, 0.2f, 0.3f}, 12.0f, true, 1.5f, {1.0f, 2.0f, 3.0f}, 4.0f, 5.0f, 600, 7.0f});
 
     pistoris::dlf::Zone zone;
-    zone.name = "hall";
+    setText(zone.name, "hall");
     zone.position = {100.0f, 200.0f, 300.0f};
     zone.points = {{0.0f, 0.0f, 0.0f}, {100.0f, 0.0f, 0.0f}, {100.0f, 0.0f, 100.0f}};
     zone.height = 150;
     zone.color = pistoris::ArxColor3{0.4f, 0.5f, 0.6f};
     zone.farclip = 1200.0f;
-    zone.ambiance = pistoris::dlf::ZoneAmbiance{"ambient_cave_a", 80.0f};
+    zone.ambiance.emplace();
+    setText(zone.ambiance->name, "ambient_cave_a");
+    zone.ambiance->volume = 80.0f;
     source.zones.push_back(zone);
 
     pistoris::dlf::Path path;
-    path.name = "patrol";
+    setText(path.name, "patrol");
     path.position = {10.0f, 20.0f, 30.0f};
     path.nodes = {
         {{0.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kStandard, 0},
@@ -545,15 +569,16 @@ TEST_SUITE("dlf") {
     std::optional<pistoris::llf::Data> loaded_lighting;
     REQUIRE(load(bytes, loaded, &loaded_lighting) == ARX_OK);
     REQUIRE(loaded.entities.size() == 1);
-    CHECK(loaded.entities[0].class_path == source.entities[0].class_path);
+    CHECK(pistoris::fixedStringView(loaded.entities[0].class_path)
+              .compare(pistoris::fixedStringView(source.entities[0].class_path)) == 0);
     CHECK(loaded.entities[0].ident == 42);
     REQUIRE(loaded.fogs.size() == 1);
     CHECK(loaded.fogs[0].directional);
     REQUIRE(loaded.zones.size() == 1);
-    CHECK(loaded.zones[0].name == "hall");
+    CHECK(pistoris::fixedStringView(loaded.zones[0].name).compare("hall") == 0);
     CHECK(loaded.zones[0].height == 150);
     REQUIRE(loaded.zones[0].ambiance.has_value());
-    CHECK(loaded.zones[0].ambiance->name == "ambient_cave_a");
+    CHECK(pistoris::fixedStringView(loaded.zones[0].ambiance->name).compare("ambient_cave_a") == 0);
     REQUIRE(loaded.paths.size() == 1);
     REQUIRE(loaded.paths[0].nodes.size() == 3);
     CHECK(loaded.paths[0].nodes[1].type == pistoris::dlf::PathNodeType::kBezier);
@@ -567,24 +592,22 @@ TEST_SUITE("dlf") {
     pistoris::dlf::Data data;
     std::vector<std::uint8_t> out;
     CHECK(save(data, out) == ARX_DLF_BAD_SCENE_PATH);
-    data.scene_path = std::string(512, 'x');
+    std::memset(data.scene_path, 'x', sizeof(data.scene_path));
     CHECK(save(data, out) == ARX_DLF_BAD_SCENE_PATH);
-    data.scene_path = std::string("level\0scene", 11);
-    CHECK(save(data, out) == ARX_DLF_BAD_SCENE_PATH);
-
-    data.scene_path = "graph/levels/level1/";
-    data.entities.push_back({std::string(512, 'x')});
+    setText(data.scene_path, "graph/levels/level1");
+    data.entities.emplace_back();
+    std::memset(data.entities.back().class_path, 'x', sizeof(data.entities.back().class_path));
     CHECK(save(data, out) == ARX_DLF_BAD_ENTITY_CLASS_PATH);
   }
 
-  TEST_CASE("DlfReadRetainsScenePath") {
+  TEST_CASE("DlfReadRetainsCanonicalScenePath") {
     pistoris::dlf::Data source;
-    source.scene_path = R"(Graph\Levels\Level12\)";
+    setText(source.scene_path, "graph/levels/level12");
     std::vector<std::uint8_t> bytes;
     REQUIRE(save(source, bytes) == ARX_OK);
 
     pistoris::dlf::Data loaded;
     REQUIRE(load(bytes, loaded) == ARX_OK);
-    CHECK(loaded.scene_path == source.scene_path);
+    CHECK(pistoris::fixedStringView(loaded.scene_path).compare(pistoris::fixedStringView(source.scene_path)) == 0);
   }
 }

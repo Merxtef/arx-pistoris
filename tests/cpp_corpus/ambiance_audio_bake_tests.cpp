@@ -61,7 +61,7 @@ TEST_SUITE("ambiance_corpus") {
       }
 
       pistoris::NativeAmbianceBundle bundle;
-      REQUIRE(ambiance.bakeNativeBundle({.include_files = true}, bundle) == ARX_OK);
+      REQUIRE(ambiance.bakeNativeBundle({.include_sound_files = true}, bundle) == ARX_OK);
       REQUIRE(pistoris::validate(bundle.amb) == ARX_OK);
       REQUIRE(test_support::validateSoundFiles(ambiance, std::span<const pistoris::SoundFile>(bundle.sound_files)));
       for (const pistoris::SoundIndex source : converted_sources) {

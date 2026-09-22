@@ -106,7 +106,8 @@ ArxReturnCode importLlf(std::string_view text, llf::Data& out) {
 ArxReturnCode exportLlfToJson(const llf::Data& data, bool pretty, std::string_view signer, std::string& out) {
   return json_detail::guarded("LLF export", [&]() -> ArxReturnCode {
     ARX_RETURN_IF_ERR(validateLlf(&data));
-    const NativeWriteMetadata metadata = nativeWriteMetadata(signer);
+    NativeWriteMetadata metadata;
+    ARX_RETURN_IF_ERR(nativeWriteMetadata(signer, metadata));
     json_detail::Json root;
     root["$schema"] = kLlfSchema;
     root["header"] = {

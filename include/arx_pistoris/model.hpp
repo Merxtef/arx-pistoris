@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/model/types.h"
+#include "arx_pistoris/native/text.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -29,7 +30,7 @@ struct Data;
 struct AnimationSoundFile;
 struct AnimationSoundSourceReference;
 struct NativeModelBundle;
-struct NativeTextureBakeOptions;
+struct NativeModelBakeOptions;
 struct ModelGlbBundle;
 struct ObjBundle;
 struct ObjExportOptions;
@@ -118,7 +119,8 @@ class Model {
   // --- Conversion ---
 
   [[nodiscard]] static ArxReturnCode importNative(Model& out, const ftl::Data& native,
-                                                  std::vector<std::string>* texture_source_paths = nullptr) noexcept;
+                                                  std::vector<std::string>* texture_source_paths = nullptr,
+                                                  NativeTextMode text_mode = NativeTextMode::kAuto) noexcept;
   [[nodiscard]] static ArxReturnCode importObj(Model& out, std::string_view obj, std::string_view mtl = {},
                                                std::vector<std::string>* texture_source_paths = nullptr) noexcept;
   [[nodiscard]] static ArxReturnCode importObj(Model& out, std::string_view obj,
@@ -152,7 +154,7 @@ class Model {
   [[nodiscard]] ArxReturnCode exportObj(std::string_view stem, ObjBundle& out) const noexcept;
   [[nodiscard]] ArxReturnCode exportObj(std::string_view stem, const ObjExportOptions& options,
                                         ObjBundle& out) const noexcept;
-  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeTextureBakeOptions& options,
+  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeModelBakeOptions& options,
                                                NativeModelBundle& out) const noexcept;
 
   // --- Validation ---

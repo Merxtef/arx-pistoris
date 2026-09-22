@@ -19,6 +19,7 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <numbers>
 #include <span>
 #include <string>
 #include <string_view>
@@ -111,6 +112,7 @@ struct CgltfWriteProjection {
   std::vector<cgltf_mesh> meshes;
   std::vector<cgltf_primitive> primitives;
   std::vector<cgltf_attribute> attributes;
+  std::vector<cgltf_camera> cameras;
   std::vector<cgltf_light> lights;
   std::vector<cgltf_skin> skins;
   std::vector<cgltf_node*> joints;
@@ -212,18 +214,38 @@ int Builder::addEmbeddedTexture(std::string name, std::string mime_type, std::sp
   return index;
 }
 
-int Builder::addMaterial(std::string name, int texture, FaceType flags, float alpha, bool alpha_cutout) {
+int Builder::addMaterial(std::string name, int texture, const MaterialOptions& options) {
   MaterialDesc desc;
   desc.name = std::move(name);
   desc.texture = texture;
-  desc.color = {1.0f, 1.0f, 1.0f, alpha};
-  desc.double_sided = (flags & kFaceBitDoublesided) != 0;
-  desc.alpha_mode = (flags & kFaceBitTrans) != 0 ? cgltf_alpha_mode_blend
-                    : alpha_cutout               ? cgltf_alpha_mode_mask
-                                                 : cgltf_alpha_mode_opaque;
+  desc.color = options.base_color;
+  desc.double_sided = options.double_sided;
+  desc.unlit = options.unlit;
+  switch (options.alpha_mode) {
+    case MaterialAlphaMode::kOpaque:
+      desc.alpha_mode = cgltf_alpha_mode_opaque;
+      break;
+    case MaterialAlphaMode::kMask:
+      desc.alpha_mode = cgltf_alpha_mode_mask;
+      break;
+    case MaterialAlphaMode::kBlend:
+      desc.alpha_mode = cgltf_alpha_mode_blend;
+      break;
+  }
   int index = static_cast<int>(materials_.size());
   materials_.push_back(std::move(desc));
   return index;
+}
+
+int Builder::addMaterial(std::string name, int texture, FaceType flags, float alpha, bool alpha_cutout) {
+  const MaterialOptions options{
+      .base_color = {1.0f, 1.0f, 1.0f, alpha},
+      .alpha_mode = (flags & kFaceBitTrans) != 0 ? MaterialAlphaMode::kBlend
+                    : alpha_cutout               ? MaterialAlphaMode::kMask
+                                                 : MaterialAlphaMode::kOpaque,
+      .double_sided = (flags & kFaceBitDoublesided) != 0,
+  };
+  return addMaterial(std::move(name), texture, options);
 }
 
 int Builder::addColorMaterial(std::string name, std::array<float, 4> color, bool double_sided) {
@@ -234,6 +256,12 @@ int Builder::addColorMaterial(std::string name, std::array<float, 4> color, bool
   desc.alpha_mode = color[3] < 1.0f ? cgltf_alpha_mode_blend : cgltf_alpha_mode_opaque;
   int index = static_cast<int>(materials_.size());
   materials_.push_back(std::move(desc));
+  return index;
+}
+
+int Builder::addPerspectiveCamera(std::string name, const PerspectiveCameraOptions& options) {
+  const int index = static_cast<int>(cameras_.size());
+  cameras_.push_back({std::move(name), options});
   return index;
 }
 
@@ -291,6 +319,11 @@ void Builder::setNodeRotation(int node, const ArxQuat& rotation) {
       math::normalize(content_basis_rotation_ * rotation * math::conjugate(content_basis_rotation_));
 }
 
+void Builder::setNodeCamera(int node, int camera) {
+  if (!validIndex(node, nodes_.size()) || !validIndex(camera, cameras_.size())) return;
+  nodes_[static_cast<std::size_t>(node)].camera = camera;
+}
+
 void Builder::setNodeLight(int node, int light) {
   if (!validIndex(node, nodes_.size()) || !validIndex(light, lights_.size())) return;
   nodes_[static_cast<std::size_t>(node)].light = light;
@@ -344,6 +377,7 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   auto& meshes = projection.meshes;
   auto& primitives = projection.primitives;
   auto& attributes = projection.attributes;
+  auto& cameras = projection.cameras;
   auto& lights = projection.lights;
   auto& skins = projection.skins;
   auto& skin_joints = projection.joints;
@@ -423,6 +457,7 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     material.double_sided = source.double_sided;
     material.alpha_mode = source.alpha_mode;
     material.alpha_cutoff = 0.5f;
+    material.unlit = source.unlit;
     if (source.texture >= 0) {
       if (!validIndex(source.texture, textures.size())) return ARX_GLB_BAD_FORMAT;
       material.pbr_metallic_roughness.base_color_texture.texture = &textures[static_cast<std::size_t>(source.texture)];
@@ -514,6 +549,26 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     meshes[i].primitives_count = meshes_[i].primitives.size();
   }
 
+  cameras.resize(cameras_.size());
+  for (std::size_t i = 0; i < cameras_.size(); ++i) {
+    const CameraDesc& source = cameras_[i];
+    const PerspectiveCameraOptions& options = source.options;
+    if (!std::isfinite(options.vertical_fov) || options.vertical_fov <= 0.0f ||
+        options.vertical_fov >= std::numbers::pi_v<float> || !std::isfinite(options.aspect_ratio) ||
+        options.aspect_ratio <= 0.0f || !std::isfinite(options.znear) || options.znear <= 0.0f ||
+        (options.zfar && (!std::isfinite(*options.zfar) || *options.zfar <= options.znear)))
+      return ARX_GLB_BAD_FORMAT;
+    cgltf_camera& camera = cameras[i];
+    camera.name = json_strings.pointer(source.name);
+    camera.type = cgltf_camera_type_perspective;
+    camera.data.perspective.has_aspect_ratio = 1;
+    camera.data.perspective.aspect_ratio = options.aspect_ratio;
+    camera.data.perspective.yfov = options.vertical_fov;
+    camera.data.perspective.znear = options.znear;
+    camera.data.perspective.has_zfar = options.zfar.has_value();
+    if (options.zfar) camera.data.perspective.zfar = *options.zfar;
+  }
+
   lights.resize(lights_.size());
   for (std::size_t i = 0; i < lights_.size(); ++i) {
     const LightDesc& source = lights_[i];
@@ -549,6 +604,10 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
     if (source.mesh >= 0) {
       if (!validIndex(source.mesh, meshes.size())) return ARX_GLB_BAD_FORMAT;
       nodes[i].mesh = &meshes[static_cast<std::size_t>(source.mesh)];
+    }
+    if (source.camera >= 0) {
+      if (!validIndex(source.camera, cameras.size())) return ARX_GLB_BAD_FORMAT;
+      nodes[i].camera = &cameras[static_cast<std::size_t>(source.camera)];
     }
     if (source.light >= 0) {
       if (!validIndex(source.light, lights.size())) return ARX_GLB_BAD_FORMAT;
@@ -718,6 +777,8 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   data.materials_count = materials.size();
   data.meshes = meshes.data();
   data.meshes_count = meshes.size();
+  data.cameras = cameras.data();
+  data.cameras_count = cameras.size();
   data.lights = lights.data();
   data.lights_count = lights.size();
   data.nodes = nodes.data();

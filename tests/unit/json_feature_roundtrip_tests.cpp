@@ -9,6 +9,7 @@
 #include "arx_pistoris/paths.hpp"
 
 #include "helpers.h"
+#include "native/fixed_string.h"
 #include "nlohmann/json.hpp"
 #include "support/native_equivalence.h"
 
@@ -59,7 +60,7 @@ pistoris::Fts makeFtsWithPortal() {
 
 pistoris::Dlf makeDlfWithFog() {
   pistoris::Dlf result;
-  result.scene_path = "graph/levels/level1/";
+  REQUIRE(pistoris::copyFixedString("graph/levels/level1", result.scene_path));
   result.player_spawn.position = {10.0f, 20.0f, 30.0f};
   result.player_spawn.angle = {5.0f, 10.0f, 15.0f};
   result.fogs.push_back({
@@ -113,7 +114,7 @@ TEST_SUITE("json::feature_roundtrip") {
     nlohmann::json malformed = nlohmann::json::parse(encoded);
     malformed["fogs"][0]["size"] = "invalid";
     pistoris::Dlf unchanged;
-    unchanged.scene_path = "graph/levels/level2/";
+    REQUIRE(pistoris::copyFixedString("graph/levels/level2", unchanged.scene_path));
     const pistoris::Dlf expected = unchanged;
     CHECK(pistoris::fromJson(malformed.dump(), unchanged) == ARX_JSON_BAD_SCHEMA);
     test_support::checkEquivalent(expected, unchanged);

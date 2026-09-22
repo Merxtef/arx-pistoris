@@ -28,6 +28,6 @@ inline pistoris::tea::Data makeAnimationTea() {
     }
   }
   result.keyframes[1].sample.emplace();
-  std::strcpy(result.keyframes[1].sample->name, "sfx/step.wav");
+  std::strcpy(result.keyframes[1].sample->name, "step");
   return result;
 }

@@ -239,7 +239,7 @@ TEST_SUITE("Ambiance GLB conversion") {
     CHECK(imported.y.second == doctest::Approx(-7.5f));
     CHECK(imported.y.mode == ARX_AMBIANCE_AUTOMATION_RANDOM_STEP);
     CHECK(imported.z.first == doctest::Approx(30.0f));
-    CHECK(warnings.contains("has a nonidentity transform; transform ignored"));
+    REQUIRE(warnings.messages.size() == 1);
     CHECK(warnings.contains("has a negative RANGE; using its absolute value"));
   }
 
@@ -276,9 +276,42 @@ TEST_SUITE("Ambiance GLB conversion") {
     CHECK(copied.volume.second == doctest::Approx(0.0f));
   }
 
+  TEST_CASE("Recovers self-delimiting helpers without labels") {
+    pistoris::glb::Builder builder;
+    const int root = builder.addNode("arx_ambiance__MASTER_0");
+    const int track = builder.addNode("TRACK_0__sfx/test.wav__track");
+    const int key = builder.addNode("KEY_0__PLAY_COUNT_2");
+    builder.addChild(key, builder.addNode("VOLUME__VAL_0.5"));
+    builder.addChild(track, key);
+    builder.addChild(root, track);
+    builder.addRoot(root);
+
+    std::vector<std::uint8_t> encoded;
+    REQUIRE(builder.write(encoded) == ARX_OK);
+    WarningCapture warnings;
+    pistoris::Ambiance ambiance;
+    REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_OK);
+    CHECK(ambiance.masterTrack() == 0);
+    CHECK(warnings.contains("arx_ambiance__MASTER_0' has no final label"));
+    CHECK(warnings.contains("KEY_0__PLAY_COUNT_2' has no final label"));
+    CHECK(warnings.contains("VOLUME__VAL_0.5' has no final label"));
+  }
+
+  TEST_CASE("Keeps path-bearing track labels mandatory") {
+    pistoris::glb::Builder builder;
+    const int root = builder.addNode("arx_ambiance__root");
+    builder.addChild(root, builder.addNode("TRACK_0__sfx/test.wav"));
+    builder.addRoot(root);
+
+    std::vector<std::uint8_t> encoded;
+    REQUIRE(builder.write(encoded) == ARX_OK);
+    pistoris::Ambiance ambiance;
+    CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_BAD_AMBIANCE_TRACK);
+  }
+
   TEST_CASE("Exports a reference Model preview and aligns the root to view_attach") {
     pistoris::amb::Data native = makeAmbData();
-    native.tracks.front().sample_path = R"(sfx\ambiance\test.wav)";
+    native.tracks.front().sample_path = "sfx/ambiance/test.wav";
     pistoris::Ambiance ambiance;
     REQUIRE(pistoris::Ambiance::importNative(ambiance, native) == ARX_OK);
     pistoris::Model model;
@@ -345,9 +378,24 @@ TEST_SUITE("Ambiance GLB conversion") {
       CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_AMBIGUOUS_AMBIANCE);
     }
 
-    SUBCASE("Malformed root") {
+    SUBCASE("Missing root label") {
       pistoris::glb::Builder builder;
-      builder.addRoot(builder.addNode("arx_ambiance"));
+      const int root = builder.addNode("arx_ambiance");
+      builder.addChild(root, builder.addNode("TRACK_0__sfx/test.wav__track"));
+      builder.addRoot(root);
+      std::vector<std::uint8_t> encoded;
+      REQUIRE(builder.write(encoded) == ARX_OK);
+      WarningCapture warnings;
+      pistoris::Ambiance ambiance;
+      REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_OK);
+      CHECK(warnings.contains("arx_ambiance' has no final label"));
+    }
+
+    SUBCASE("Malformed root option") {
+      pistoris::glb::Builder builder;
+      const int root = builder.addNode("arx_ambiance__MASTER_bad__root");
+      builder.addChild(root, builder.addNode("TRACK_0__sfx/test.wav__track"));
+      builder.addRoot(root);
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
       pistoris::Ambiance ambiance;

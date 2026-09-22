@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/animation.hpp"
 #include "arx_pistoris/model.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/sound.hpp"
 #include "arx_pistoris/texture.hpp"
 
@@ -28,9 +29,14 @@ struct ConvertedModelInput {
   std::vector<std::string> texture_source_paths;
 };
 
+struct ModelInputConversionOptions {
+  pistoris::Model::GlbImportOptions glb;
+  pistoris::NativeTextMode native_text_mode = pistoris::NativeTextMode::kAuto;
+};
+
 bool isModelInput(FileFacts facts) noexcept;
 bool convertModelInput(const ClassifiedPath& input, std::span<const ModelMaterialLibraryInput> material_libraries,
-                       const pistoris::Model::GlbImportOptions& glb_options, DiagnosticCode failure_code,
+                       const ModelInputConversionOptions& options, DiagnosticCode failure_code,
                        std::string_view description, ConvertedModelInput& out);
 
 }  // namespace cli

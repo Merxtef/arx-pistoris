@@ -27,6 +27,7 @@ class GlbUnitsModule final : public FormatModifierModule<formatBit(Format::kGlb)
   }
 
   ModuleHelp help(const RouteDescriptor* route) const noexcept override {
+    if (route && route->kind == RouteKind::kCinematic) return {};
     const char* usage = "--glb-arx-units-per-unit <UNITS>";
     if (route && route->kind == RouteKind::kModel) usage = "--glb-arx-units-per-unit <UNITS=10>";
     if (route && route->kind == RouteKind::kAmbiance) usage = "--glb-arx-units-per-unit <UNITS=10>";

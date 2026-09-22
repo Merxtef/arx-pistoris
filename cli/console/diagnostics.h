@@ -77,6 +77,10 @@ enum class DiagnosticCode : std::uint8_t {
   kAmbianceOutputFailed,
   kAmbianceUnsupportedInput,
   kAmbianceUnsupportedOutput,
+  kCinematicInputFailed,
+  kCinematicOutputFailed,
+  kCinematicUnsupportedInput,
+  kCinematicUnsupportedOutput,
   kUnhandledException,
 };
 

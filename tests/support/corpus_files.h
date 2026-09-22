@@ -21,7 +21,7 @@ struct LevelNativeTriplet {
   std::filesystem::path llf;
 };
 
-enum class NativeCorpusFormat : std::uint8_t { kAmb, kDlf, kFtl, kFts, kLlf, kTea };
+enum class NativeCorpusFormat : std::uint8_t { kAmb, kCin, kDlf, kFtl, kFts, kLlf, kTea };
 
 inline bool hasExtension(const std::filesystem::path& path, std::string_view extension) {
   const std::string actual = path.extension().string();
@@ -53,6 +53,10 @@ inline std::vector<std::filesystem::path> nativeCorpusFiles(NativeCorpusFormat f
     case NativeCorpusFormat::kAmb:
       extension = ".amb";
       for (const AmbianceFixture& fixture : catalog.ambiances) files.push_back(fixture.amb);
+      break;
+    case NativeCorpusFormat::kCin:
+      extension = ".cin";
+      for (const CinematicFixture& fixture : catalog.cinematics) files.push_back(fixture.cin);
       break;
     case NativeCorpusFormat::kDlf:
       extension = ".dlf";

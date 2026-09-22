@@ -13,6 +13,8 @@ SEED_DIRECTORIES = (
     "amb",
     "ambiance-glb-source",
     "audio",
+    "cin",
+    "cinematic-glb-source",
     "dlf",
     "ftl",
     "fts",
@@ -256,6 +258,39 @@ def main():
         )
         collect_project_media(
             fixtures_root, ambiance.get("glb"), f"ambiance {name}.glb", image_sources, audio_sources
+        )
+
+    for cinematic in catalog["cinematics"]:
+        name = cinematic["name"]
+        copy_fixture(
+            fixtures_root,
+            output_root,
+            claimed_targets,
+            cinematic.get("cin"),
+            "cin",
+            f"{name}.cin",
+            f"cinematic {name}.cin",
+        )
+        copy_fixture(
+            fixtures_root,
+            output_root,
+            claimed_targets,
+            cinematic.get("glb"),
+            "cinematic-glb-source",
+            f"{name}.glb",
+            f"cinematic {name}.glb",
+        )
+        copy_fixture(
+            fixtures_root,
+            output_root,
+            claimed_targets,
+            cinematic.get("glb"),
+            "glb-container",
+            f"cinematic-{name}.glb",
+            f"cinematic {name}.glb container",
+        )
+        collect_project_media(
+            fixtures_root, cinematic.get("glb"), f"cinematic {name}.glb", image_sources, audio_sources
         )
 
     for value in catalog["native_sidecars"]["images"]:

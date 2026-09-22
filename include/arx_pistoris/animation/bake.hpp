@@ -5,11 +5,17 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/tea.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/sound.hpp"
 
 #include <vector>
 
 namespace pistoris {
+
+struct NativeAnimationBakeOptions {
+  bool include_sound_files = true;
+  NativeTextMode text_mode = NativeTextMode::kAuto;
+};
 
 struct NativeAnimationBundle {
   tea::Data tea;

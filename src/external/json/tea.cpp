@@ -6,11 +6,13 @@
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/tea.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "external/json.h"
 #include "external/json/native_common.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <cstddef>
@@ -32,7 +34,7 @@ bool isIdentity(const ArxQuat& value) {
   return value.w == 1.0f && value.x == 0.0f && value.y == 0.0f && value.z == 0.0f;
 }
 
-ArxReturnCode importTea(std::string_view text, tea::Data& out) {
+ArxReturnCode importTea(std::string_view text, NativeTextMode text_mode, tea::Data& out) {
   Json root;
   ARX_RETURN_IF_ERR(json_detail::parse(text, root));
   if (!root.is_object() || !json_detail::validSchema(root, kTeaSchema)) return ARX_JSON_BAD_SCHEMA;
@@ -47,7 +49,7 @@ ArxReturnCode importTea(std::string_view text, tea::Data& out) {
       !json_detail::getSigned(*total_frames, out.num_frames)) {
     return ARX_JSON_BAD_SCHEMA;
   }
-  json_detail::copyTruncated(text_value, out.name);
+  if (!json_detail::encodeTruncated(text_value, text_mode, out.name)) return ARX_JSON_BAD_SCHEMA;
 
   const Json* keyframes = nullptr;
   ARX_RETURN_IF_ERR(json_detail::arrayMember(root, "keyframes", keyframes, kTeaMaxKeyframes));
@@ -117,12 +119,13 @@ ArxReturnCode importTea(std::string_view text, tea::Data& out) {
       const Json* sample_name = json_detail::member(*sample_json, "name");
       if (!sample_name || !json_detail::getString(*sample_name, text_value)) return ARX_JSON_BAD_SCHEMA;
       tea::Sample& sample = keyframe.sample.emplace();
-      json_detail::copyTruncated(text_value, sample.name);
+      if (!json_detail::encodeTruncated(text_value, text_mode, sample.name)) return ARX_JSON_BAD_SCHEMA;
     }
 
     out.keyframes.push_back(std::move(keyframe));
   }
 
+  ARX_RETURN_IF_ERR(canonicalizeTea(&out));
   ARX_RETURN_IF_ERR(validateTea(&out));
   log(ARX_LOG_INFO,
       "TEA JSON loaded: {} keyframes, {} groups, num_frames={}",
@@ -134,14 +137,17 @@ ArxReturnCode importTea(std::string_view text, tea::Data& out) {
 
 }  // namespace
 
-ArxReturnCode exportTeaToJson(const tea::Data& data, bool pretty, std::string& out) {
+ArxReturnCode exportTeaToJson(const tea::Data& data, bool pretty, NativeTextMode text_mode, std::string& out) {
   return json_detail::guarded("TEA export", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ARX_RETURN_IF_ERR(validateTea(&data));
 
+    std::string decoded;
+    if (!json_detail::decodeFixed(data.name, text_mode, decoded)) return ARX_TEA_BAD_NAME;
     Json root;
     root["$schema"] = kTeaSchema;
     root["header"] = Json::object();
-    root["header"]["name"] = std::string(data.name);
+    root["header"]["name"] = decoded;
     root["header"]["totalNumberOfFrames"] = data.num_frames;
 
     root["keyframes"] = Json::array();
@@ -169,7 +175,8 @@ ArxReturnCode exportTeaToJson(const tea::Data& data, bool pretty, std::string& o
       if (quaternion && !isIdentity(*quaternion)) json["quaternion"] = json_detail::quaternion(*quaternion);
       const auto& sample_value = keyframe.sample;
       if (const auto* sample = sample_value ? &*sample_value : nullptr) {
-        json["sample"] = {{"name", std::string(sample->name)}, {"sizeInBytes", 0}};
+        if (!json_detail::decodeFixed(sample->name, text_mode, decoded)) return ARX_TEA_BAD_SAMPLE_PATH;
+        json["sample"] = {{"name", decoded}, {"sizeInBytes", 0}};
       }
 
       root["keyframes"].push_back(std::move(json));
@@ -179,11 +186,12 @@ ArxReturnCode exportTeaToJson(const tea::Data& data, bool pretty, std::string& o
   });
 }
 
-ArxReturnCode importJsonToTea(std::string_view text, tea::Data* out) {
+ArxReturnCode importJsonToTea(std::string_view text, NativeTextMode text_mode, tea::Data* out) {
   if (!out) return ARX_INVALID_DATA_POINTER;
-  return json_detail::guarded("TEA import", [&] {
+  return json_detail::guarded("TEA import", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     tea::Data temporary;
-    const ArxReturnCode rc = importTea(text, temporary);
+    const ArxReturnCode rc = importTea(text, text_mode, temporary);
     if (rc == ARX_OK) *out = std::move(temporary);
     return rc;
   });

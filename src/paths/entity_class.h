@@ -19,6 +19,8 @@ enum class InteractiveKind : std::uint8_t {
 };
 
 bool isLegacyTeoExtension(std::string_view extension) noexcept;
+bool normalizeNativeEntityClassPath(std::string_view source, std::string& out, std::string_view& removed_extension,
+                                    bool* discarded_prefix = nullptr);
 bool normalizeEntityClassPath(std::string_view source, std::string& out, std::string_view& removed_extension,
                               bool* discarded_prefix = nullptr);
 InteractiveKind classifyEntityClassPath(std::string_view normalized_path) noexcept;

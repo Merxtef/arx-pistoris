@@ -13,7 +13,9 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
+#include <string_view>
 #include <vector>
 
 namespace test_support {
@@ -21,6 +23,12 @@ namespace test_support {
 constexpr pistoris::amb::TrackFlags kAmbTrackFlagMask = pistoris::amb::kTrackPosition | pistoris::amb::kTrackMaster;
 constexpr pistoris::amb::SettingFlags kAmbSettingFlagMask =
     pistoris::amb::kSettingRandom | pistoris::amb::kSettingInterpolate;
+
+template <std::size_t N>
+inline std::string_view nativeStringView(const char (&value)[N]) {
+  const void* terminator = std::memchr(value, '\0', N);
+  return {value, terminator ? static_cast<const char*>(terminator) - value : N};
+}
 
 inline bool equivalent(float lhs, float rhs) {
   return std::bit_cast<std::uint32_t>(lhs) == std::bit_cast<std::uint32_t>(rhs);
@@ -71,6 +79,57 @@ inline void checkEquivalent(const pistoris::Amb& lhs, const pistoris::Amb& rhs) 
   }
 }
 
+struct CinEquivalenceOptions {
+  float comparison_epsilon = 0.0f;
+};
+
+inline void checkEquivalent(const pistoris::Cin& lhs, const pistoris::Cin& rhs,
+                            const CinEquivalenceOptions& options = {}) {
+  CHECK(lhs.bitmaps.size() == rhs.bitmaps.size());
+  CHECK(lhs.sounds.size() == rhs.sounds.size());
+  CHECK(lhs.end_frame == rhs.end_frame);
+  CHECK(equivalence::floatEquivalent(lhs.fps, rhs.fps, options.comparison_epsilon));
+  CHECK(lhs.keyframes.size() == rhs.keyframes.size());
+
+  for (std::size_t index = 0; index < std::min(lhs.bitmaps.size(), rhs.bitmaps.size()); ++index) {
+    CAPTURE(index);
+    CHECK(lhs.bitmaps[index].subdivision_scale == rhs.bitmaps[index].subdivision_scale);
+    CHECK(lhs.bitmaps[index].path == rhs.bitmaps[index].path);
+  }
+  for (std::size_t index = 0; index < std::min(lhs.sounds.size(), rhs.sounds.size()); ++index) {
+    CAPTURE(index);
+    CHECK(lhs.sounds[index].path == rhs.sounds[index].path);
+    CHECK(lhs.sounds[index].speech == rhs.sounds[index].speech);
+  }
+  for (std::size_t index = 0; index < std::min(lhs.keyframes.size(), rhs.keyframes.size()); ++index) {
+    CAPTURE(index);
+    const pistoris::cin::Keyframe& left = lhs.keyframes[index];
+    const pistoris::cin::Keyframe& right = rhs.keyframes[index];
+    CHECK(left.frame == right.frame);
+    CHECK(left.bitmap == right.bitmap);
+    CHECK(left.effects == right.effects);
+    CHECK(left.interpolation == right.interpolation);
+    CHECK(left.crossfade == right.crossfade);
+    CHECK(equivalence::vectorEquivalent(left.camera_position, right.camera_position, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(left.camera_roll, right.camera_roll, options.comparison_epsilon));
+    CHECK(left.color == right.color);
+    CHECK(left.secondary_color == right.secondary_color);
+    CHECK(left.flash_color == right.flash_color);
+    CHECK(equivalence::floatEquivalent(left.flash_decay, right.flash_decay, options.comparison_epsilon));
+    CHECK(equivalence::vectorEquivalent(left.light.position, right.light.position, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(left.light.fall_in, right.light.fall_in, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(left.light.fall_out, right.light.fall_out, options.comparison_epsilon));
+    CHECK(equivalence::colorEquivalent(left.light.color, right.light.color, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(left.light.intensity, right.light.intensity, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(
+        left.light.random_intensity, right.light.random_intensity, options.comparison_epsilon));
+    CHECK(equivalence::vectorEquivalent(left.bitmap_position, right.bitmap_position, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(left.bitmap_roll, right.bitmap_roll, options.comparison_epsilon));
+    CHECK(equivalence::floatEquivalent(left.outgoing_speed, right.outgoing_speed, options.comparison_epsilon));
+    CHECK(left.sound == right.sound);
+  }
+}
+
 inline void checkEquivalent(const pistoris::Llf& lhs, const pistoris::Llf& rhs) {
   CHECK(equivalent(lhs.version, rhs.version));
   CHECK(lhs.lights.size() == rhs.lights.size());
@@ -104,7 +163,7 @@ inline void checkEquivalent(const pistoris::Dlf& lhs, const pistoris::Dlf& rhs) 
   CHECK(equivalent(lhs.version, rhs.version));
   CHECK(equivalent(lhs.player_spawn.position, rhs.player_spawn.position));
   CHECK(equivalent(lhs.player_spawn.angle, rhs.player_spawn.angle));
-  CHECK(lhs.scene_path == rhs.scene_path);
+  CHECK(nativeStringView(lhs.scene_path).compare(nativeStringView(rhs.scene_path)) == 0);
   CHECK(lhs.entities.size() == rhs.entities.size());
   CHECK(lhs.fogs.size() == rhs.fogs.size());
   CHECK(lhs.zones.size() == rhs.zones.size());
@@ -115,7 +174,7 @@ inline void checkEquivalent(const pistoris::Dlf& lhs, const pistoris::Dlf& rhs) 
     CAPTURE(entity_index);
     const pistoris::dlf::Entity& lhs_entity = lhs.entities[entity_index];
     const pistoris::dlf::Entity& rhs_entity = rhs.entities[entity_index];
-    CHECK(lhs_entity.class_path == rhs_entity.class_path);
+    CHECK(nativeStringView(lhs_entity.class_path).compare(nativeStringView(rhs_entity.class_path)) == 0);
     CHECK(lhs_entity.ident == rhs_entity.ident);
     CHECK(equivalent(lhs_entity.position, rhs_entity.position));
     CHECK(equivalent(lhs_entity.angle, rhs_entity.angle));
@@ -141,7 +200,7 @@ inline void checkEquivalent(const pistoris::Dlf& lhs, const pistoris::Dlf& rhs) 
     CAPTURE(zone_index);
     const pistoris::dlf::Zone& lhs_zone = lhs.zones[zone_index];
     const pistoris::dlf::Zone& rhs_zone = rhs.zones[zone_index];
-    CHECK(lhs_zone.name == rhs_zone.name);
+    CHECK(nativeStringView(lhs_zone.name).compare(nativeStringView(rhs_zone.name)) == 0);
     CHECK(equivalent(lhs_zone.position, rhs_zone.position));
     CHECK(lhs_zone.height == rhs_zone.height);
     const auto& lhs_color = lhs_zone.color;
@@ -156,7 +215,7 @@ inline void checkEquivalent(const pistoris::Dlf& lhs, const pistoris::Dlf& rhs) 
     const auto& rhs_ambiance = rhs_zone.ambiance;
     CHECK(lhs_ambiance.has_value() == rhs_ambiance.has_value());
     if (lhs_ambiance && rhs_ambiance) {
-      CHECK(lhs_ambiance->name == rhs_ambiance->name);
+      CHECK(nativeStringView(lhs_ambiance->name).compare(nativeStringView(rhs_ambiance->name)) == 0);
       CHECK(equivalent(lhs_ambiance->volume, rhs_ambiance->volume));
     }
 
@@ -172,7 +231,7 @@ inline void checkEquivalent(const pistoris::Dlf& lhs, const pistoris::Dlf& rhs) 
     CAPTURE(path_index);
     const pistoris::dlf::Path& lhs_path = lhs.paths[path_index];
     const pistoris::dlf::Path& rhs_path = rhs.paths[path_index];
-    CHECK(lhs_path.name == rhs_path.name);
+    CHECK(nativeStringView(lhs_path.name).compare(nativeStringView(rhs_path.name)) == 0);
     CHECK(equivalent(lhs_path.position, rhs_path.position));
     CHECK(lhs_path.nodes.size() == rhs_path.nodes.size());
 

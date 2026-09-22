@@ -6,6 +6,7 @@
 #include "image_helpers.h"
 #include "modules/textures.h"
 #include "stb/stb_image.h"
+#include "stb/stb_image_write.h"
 #include "utils/encoded_image.h"
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -101,6 +103,150 @@ TEST_SUITE("encoded images") {
       CHECK(std::ranges::equal(pass_through[0].bytes.data(), prepared.bytes.data()));
       CHECK(pass_through[0].bytes.converted.empty());
     }
+  }
+
+  TEST_CASE("Converts an unsupported source to the requested TGA fallback") {
+    pistoris::TexturesData textures{{pistoris::Texture{"texture"}}};
+    textures.textures[0].encoded_image = makeTestBmp();
+    const pistoris::textures::ImagePreparationRequest request{
+        0,
+        {.accepted_formats = pistoris::image::formatFlag(pistoris::image::Format::kTga),
+         .fallback_format = pistoris::image::Format::kTga}};
+
+    std::vector<pistoris::textures::PreparedImage> prepared;
+    REQUIRE(pistoris::textures::prepareImages(textures, {&request, 1}, prepared) == pistoris::textures::Error::kNone);
+    REQUIRE(prepared.size() == 1);
+    CHECK(prepared[0].info.format == pistoris::image::Format::kTga);
+    CHECK(prepared[0].bytes.borrowed.empty());
+    CHECK_FALSE(prepared[0].bytes.converted.empty());
+
+    pistoris::image::Info info;
+    REQUIRE(pistoris::image::inspect(prepared[0].bytes.data(), &info) == pistoris::image::Error::kNone);
+    CHECK(info.format == pistoris::image::Format::kTga);
+    CHECK(info.width == 1);
+    CHECK(info.height == 1);
+  }
+
+  TEST_CASE("Keeps BMP color-key policies separate for repeated requests") {
+    pistoris::TexturesData textures{{pistoris::Texture{"texture"}}};
+    textures.textures[0].encoded_image = makeColorKeyBmp();
+    const std::vector<pistoris::textures::ImagePreparationRequest> requests = {
+        {0, {.accepted_formats = pistoris::image::formatFlag(pistoris::image::Format::kPng)}},
+        {0,
+         {.accepted_formats = pistoris::image::formatFlag(pistoris::image::Format::kPng),
+          .bmp_color_key = pistoris::image::BmpColorKey::kNone}},
+    };
+    std::vector<pistoris::textures::PreparedImage> prepared;
+    REQUIRE(pistoris::textures::prepareImages(textures, requests, prepared) == pistoris::textures::Error::kNone);
+    REQUIRE(prepared.size() == 2);
+    CHECK(prepared[0].info.components == 4);
+    CHECK(prepared[1].info.components == 3);
+  }
+
+  TEST_CASE("BMP fallback preserves alpha from a TGA source") {
+    std::vector<std::uint8_t> rgba = makeTestTga();
+    rgba[16] = 32;
+    rgba[17] = 0x28;
+    rgba.push_back(127);
+    pistoris::TexturesData textures{{pistoris::Texture{"texture"}}};
+    textures.textures[0].encoded_image = std::move(rgba);
+    const pistoris::textures::ImagePreparationRequest request{
+        0,
+        {.accepted_formats = pistoris::image::formatFlag(pistoris::image::Format::kBmp),
+         .fallback_format = pistoris::image::Format::kBmp,
+         .bmp_color_key = pistoris::image::BmpColorKey::kNone}};
+    std::vector<pistoris::textures::PreparedImage> prepared;
+    REQUIRE(pistoris::textures::prepareImages(textures, {&request, 1}, prepared) == pistoris::textures::Error::kNone);
+    REQUIRE(prepared.size() == 1);
+    CHECK(prepared[0].info.format == pistoris::image::Format::kBmp);
+    CHECK(prepared[0].info.components == 4);
+    pistoris::image::Info info;
+    CHECK(pistoris::image::inspect(prepared[0].bytes.data(), &info) == pistoris::image::Error::kNone);
+    CHECK(info.format == pistoris::image::Format::kBmp);
+    CHECK(info.components == 4);
+  }
+
+  TEST_CASE("BMP fallback expands grayscale alpha instead of discarding it") {
+    std::vector<std::uint8_t> grayscale = makeTestTga();
+    grayscale[2] = 3;
+    grayscale[16] = 16;
+    grayscale[17] = 0x28;
+    grayscale[18] = 32;
+    grayscale[19] = 127;
+    grayscale.resize(20);
+
+    std::vector<std::uint8_t> bmp;
+    pistoris::image::Info info;
+    REQUIRE(pistoris::image::transcodeToBmp(grayscale, bmp, &info) == pistoris::image::Error::kNone);
+    CHECK(info.components == 4);
+    int width = 0;
+    int height = 0;
+    int components = 0;
+    stbi_uc* pixels = stbi_load_from_memory(bmp.data(), static_cast<int>(bmp.size()), &width, &height, &components, 4);
+    REQUIRE(pixels != nullptr);
+    CHECK(std::array{pixels[0], pixels[1], pixels[2], pixels[3]} == std::array<std::uint8_t, 4>{32, 32, 32, 127});
+    stbi_image_free(pixels);
+  }
+
+  TEST_CASE("Grayscale-alpha TGA preparation preserves alpha from TGA and PNG") {
+    std::vector<std::uint8_t> grayscale = makeTestTga();
+    grayscale[2] = 3;
+    grayscale[16] = 16;
+    grayscale[17] = 0x28;
+    grayscale[18] = 32;
+    grayscale[19] = 127;
+    grayscale.resize(20);
+
+    std::vector<std::uint8_t> png;
+    const std::array<std::uint8_t, 2> pixel{32, 127};
+    const auto append = [](void* context, void* data, int size) {
+      auto& bytes = *static_cast<std::vector<std::uint8_t>*>(context);
+      const auto* first = static_cast<const std::uint8_t*>(data);
+      bytes.insert(bytes.end(), first, first + size);
+    };
+    REQUIRE(stbi_write_png_to_func(append, &png, 1, 1, 2, pixel.data(), 2) != 0);
+
+    pistoris::TexturesData textures{{pistoris::Texture{"texture"}}};
+    const pistoris::textures::ImagePreparationRequest request{
+        0,
+        {.accepted_formats = pistoris::image::formatFlag(pistoris::image::Format::kTga),
+         .fallback_format = pistoris::image::Format::kTga}};
+    for (const std::vector<std::uint8_t>& source : {grayscale, png}) {
+      textures.textures[0].encoded_image = source;
+      std::vector<pistoris::textures::PreparedImage> prepared;
+      REQUIRE(pistoris::textures::prepareImages(textures, {&request, 1}, prepared) == pistoris::textures::Error::kNone);
+      REQUIRE(prepared.size() == 1);
+      CHECK(prepared[0].bytes.borrowed.empty());
+      CHECK(prepared[0].info.format == pistoris::image::Format::kTga);
+      CHECK(prepared[0].info.components == 4);
+      int width = 0;
+      int height = 0;
+      int components = 0;
+      stbi_uc* pixels = stbi_load_from_memory(prepared[0].bytes.data().data(),
+                                              static_cast<int>(prepared[0].bytes.data().size()),
+                                              &width,
+                                              &height,
+                                              &components,
+                                              4);
+      REQUIRE(pixels != nullptr);
+      CHECK(std::array{pixels[0], pixels[1], pixels[2], pixels[3]} == std::array<std::uint8_t, 4>{32, 32, 32, 127});
+      stbi_image_free(pixels);
+    }
+  }
+
+  TEST_CASE("Rejects TGA fallback for PNG-only power-of-two normalization") {
+    pistoris::TexturesData textures{{pistoris::Texture{"texture"}}};
+    textures.textures[0].encoded_image = makeTestNpotBmp();
+    const pistoris::textures::ImagePreparationRequest request{
+        0,
+        {.accepted_formats = pistoris::image::formatFlag(pistoris::image::Format::kTga),
+         .fallback_format = pistoris::image::Format::kTga,
+         .require_power_of_two = true}};
+
+    std::vector<pistoris::textures::PreparedImage> prepared;
+    CHECK(pistoris::textures::prepareImages(textures, {&request, 1}, prepared) ==
+          pistoris::textures::Error::kInvalidOptions);
+    CHECK(prepared.empty());
   }
 
   TEST_CASE("Prepares repeated texture requests in request order") {

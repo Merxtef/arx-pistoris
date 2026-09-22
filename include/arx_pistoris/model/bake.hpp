@@ -4,11 +4,17 @@
 #pragma once
 
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/texture.hpp"
 
 #include <vector>
 
 namespace pistoris {
+
+struct NativeModelBakeOptions {
+  bool include_texture_files = true;
+  NativeTextMode text_mode = NativeTextMode::kAuto;
+};
 
 struct NativeModelBundle {
   ftl::Data ftl;

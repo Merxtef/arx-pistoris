@@ -6,6 +6,8 @@
 #include "modules/module.h"
 #include "modules/sounds/modules.h"
 #include "pipeline/options.h"
+#include "routes/descriptor.h"
+#include "routes/types.h"
 
 #include <span>
 
@@ -14,7 +16,7 @@ namespace {
 
 inline constexpr FormatMask kSoundFileOutputs = formatBit(Format::kAmb) | formatBit(Format::kTea) |
                                                 formatBit(Format::kFtl) | formatBit(Format::kJson) |
-                                                formatBit(Format::kGlb);
+                                                formatBit(Format::kGlb) | formatBit(Format::kCin);
 
 class SkipSoundExportModule final : public OutputFormatModule<kSoundFileOutputs> {
  public:
@@ -23,8 +25,11 @@ class SkipSoundExportModule final : public OutputFormatModule<kSoundFileOutputs>
     return kKeywords;
   }
 
-  ModuleHelp help(const RouteDescriptor*) const noexcept override {
-    return {HelpSection::kOptions, "--skip-sound-export", "Keep sound references without writing audio files."};
+  ModuleHelp help(const RouteDescriptor* route) const noexcept override {
+    return {HelpSection::kOptions,
+            "--skip-sound-export",
+            route && route->kind == RouteKind::kCinematic ? "Do not read or write referenced audio files."
+                                                          : "Keep sound references without writing audio files."};
   }
 
   ModuleParseResult parse(ModuleParseContext& ctx) const override {

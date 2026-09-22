@@ -29,6 +29,7 @@ enum class PayloadKind : std::uint8_t {
   kLlf,
   kDlf,
   kAmb,
+  kCin,
   kObj,
 };
 

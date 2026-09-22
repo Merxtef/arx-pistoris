@@ -13,7 +13,7 @@
 
 namespace pistoris {
 
-struct AnimationModules {
+struct AnimationModules {  // NOLINT(bugprone-exception-escape): MSVC debug STL container move
   ResourceData resource;
   SoundsData sounds;
   AnimationData animation;

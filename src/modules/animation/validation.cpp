@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/runtime/types.h"
+#include "arx_pistoris/sound.hpp"
 
 #include "modules/animation.h"
 #include "utils/identifier.h"
@@ -37,7 +39,13 @@ Error validateKeyframe(const AnimationKeyframe& keyframe, std::size_t sound_coun
   if (keyframe.frame > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max())) return Error::kBadFrame;
   if (!math::finite(keyframe.root_translation) || !math::finite(keyframe.root_rotation))
     return Error::kBadRootTransform;
-  if (keyframe.sound != kNoSound && static_cast<std::size_t>(keyframe.sound) >= sound_count) return Error::kBadSound;
+  if (keyframe.sound != kNoSoundHandle) {
+    SoundKind kind = SoundKind::kEffect;
+    SoundIndex index = kNoSound;
+    if (soundHandleKind(keyframe.sound, kind) != ARX_OK || soundHandleIndex(keyframe.sound, index) != ARX_OK ||
+        kind != SoundKind::kEffect || static_cast<std::size_t>(index) >= sound_count)
+      return Error::kBadSound;
+  }
   return Error::kNone;
 }
 

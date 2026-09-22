@@ -11,6 +11,7 @@
 #include "coordinates.h"
 #include "external/glb/container.h"
 #include "external/glb/node_graph.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
 #include "external/glb/utils/tokens.h"
 #include "external/glb/utils/transform.h"
@@ -45,22 +46,7 @@ constexpr float kDirectionHelperRadius = 50.0f;
 constexpr float kTransformTolerance = 1.0e-4f;
 constexpr std::string_view kFogPrefix = "arx_fog__";
 constexpr std::string_view kSettings = "SETTINGS__";
-constexpr std::string_view kDirection = "DIRECTION__";
-
-bool parseColor(std::string_view text, ArxColor3& out) {
-  std::size_t first = text.find('_');
-  if (first == std::string_view::npos) return false;
-  std::size_t second = text.find('_', first + 1);
-  if (second == std::string_view::npos) return false;
-  float r = 0.0f;
-  float g = 0.0f;
-  float b = 0.0f;
-  if (!parseFloatToken(text.substr(0, first), r) || !parseFloatToken(text.substr(first + 1, second - first - 1), g) ||
-      !parseFloatToken(text.substr(second + 1), b))
-    return false;
-  out = {r, g, b};
-  return true;
-}
+constexpr std::string_view kDirection = "DIRECTION";
 
 ArxVector3 directionFromRotation(const ArxQuat& rotation) {
   return math::normalize(math::rotate(rotation, {0.0f, 0.0f, 1.0f}));
@@ -76,7 +62,7 @@ ArxAngle angleFromDirection(const ArxVector3& direction) {
 ArxQuat rotationFromDirection(const ArxVector3& direction) { return math::angleToQuat(angleFromDirection(direction)); }
 
 std::string fogSettingsName(std::string_view name, const Fog& fog) {
-  std::string rgb = std::format("RGB_{}_{}_{}", fog.color.r, fog.color.g, fog.color.b);
+  std::string rgb = "RGB_" + glb::formatColor3Token(fog.color);
   std::string size = std::format("SIZE_{}", fog.size);
   std::string scale = std::format("SCALE_{}", fog.scale);
   std::string speed = std::format("SPEED_{}", fog.speed);
@@ -97,44 +83,54 @@ ArxReturnCode parseSettings(const cgltf_node& root, Fog& fog) {
     if (!glb::simpleEmptyNode(*child)) return ARX_GLB_BAD_LEVEL_FOG;
 
     Fog candidate = defaults;
-    bool seen_rgb = false;
-    bool seen_size = false;
-    bool seen_scale = false;
-    bool seen_speed = false;
-    bool seen_rotate = false;
-    bool seen_lifetime = false;
-    bool seen_frequency = false;
-    std::vector<std::string_view> tokens;
-    splitDoubleUnderscore(name, tokens);
-    if (tokens.size() < 3 || tokens.front() != "SETTINGS" || tokens.back().empty()) return ARX_GLB_BAD_LEVEL_FOG;
-    for (std::string_view token : std::span<const std::string_view>(tokens).subspan(1, tokens.size() - 2)) {
-      if (token.starts_with("RGB_")) {
-        if (seen_rgb || !parseColor(token.substr(4), candidate.color)) return ARX_GLB_BAD_LEVEL_FOG;
-        seen_rgb = true;
-      } else if (token.starts_with("SIZE_")) {
-        if (seen_size || !parseFloatToken(token.substr(5), candidate.size)) return ARX_GLB_BAD_LEVEL_FOG;
-        seen_size = true;
-      } else if (token.starts_with("SCALE_")) {
-        if (seen_scale || !parseFloatToken(token.substr(6), candidate.scale)) return ARX_GLB_BAD_LEVEL_FOG;
-        seen_scale = true;
-      } else if (token.starts_with("SPEED_")) {
-        if (seen_speed || !parseFloatToken(token.substr(6), candidate.speed)) return ARX_GLB_BAD_LEVEL_FOG;
-        seen_speed = true;
-      } else if (token.starts_with("ROTATESPEED_")) {
-        if (seen_rotate || !parseFloatToken(token.substr(12), candidate.rotate_speed)) return ARX_GLB_BAD_LEVEL_FOG;
-        seen_rotate = true;
-      } else if (token.starts_with("LIFETIME_")) {
-        const auto lifetime = parseSignedToken(token.substr(9));
-        if (seen_lifetime || !lifetime) return ARX_GLB_BAD_LEVEL_FOG;
-        candidate.lifetime_ms = *lifetime;
-        seen_lifetime = true;
-      } else if (token.starts_with("FREQUENCY_")) {
-        if (seen_frequency || !parseFloatToken(token.substr(10), candidate.frequency)) return ARX_GLB_BAD_LEVEL_FOG;
-        seen_frequency = true;
-      } else {
-        return ARX_GLB_BAD_LEVEL_FOG;
-      }
-    }
+    glb::ParsedLabel label;
+    if (!glb::parseRecoverableLabel(
+            name,
+            candidate,
+            &label,
+            glb::ConventionOptions{{},
+                                   {"RGB_", "SIZE_", "SCALE_", "SPEED_", "ROTATESPEED_", "LIFETIME_", "FREQUENCY_"}},
+            [](std::span<const std::string_view> tokens, Fog& value) {
+              if (tokens.size() < 2 || tokens.front() != "SETTINGS") return false;
+              bool seen_rgb = false;
+              bool seen_size = false;
+              bool seen_scale = false;
+              bool seen_speed = false;
+              bool seen_rotate = false;
+              bool seen_lifetime = false;
+              bool seen_frequency = false;
+              for (std::string_view token : tokens.subspan(1)) {
+                if (token.starts_with("RGB_")) {
+                  if (seen_rgb || !glb::parseColor3Token(token.substr(4), value.color)) return false;
+                  seen_rgb = true;
+                } else if (token.starts_with("SIZE_")) {
+                  if (seen_size || !parseFloatToken(token.substr(5), value.size)) return false;
+                  seen_size = true;
+                } else if (token.starts_with("SCALE_")) {
+                  if (seen_scale || !parseFloatToken(token.substr(6), value.scale)) return false;
+                  seen_scale = true;
+                } else if (token.starts_with("SPEED_")) {
+                  if (seen_speed || !parseFloatToken(token.substr(6), value.speed)) return false;
+                  seen_speed = true;
+                } else if (token.starts_with("ROTATESPEED_")) {
+                  if (seen_rotate || !parseFloatToken(token.substr(12), value.rotate_speed)) return false;
+                  seen_rotate = true;
+                } else if (token.starts_with("LIFETIME_")) {
+                  const auto lifetime = parseSignedToken(token.substr(9));
+                  if (seen_lifetime || !lifetime) return false;
+                  value.lifetime_ms = *lifetime;
+                  seen_lifetime = true;
+                } else if (token.starts_with("FREQUENCY_")) {
+                  if (seen_frequency || !parseFloatToken(token.substr(10), value.frequency)) return false;
+                  seen_frequency = true;
+                } else {
+                  return false;
+                }
+              }
+              return true;
+            }))
+      return ARX_GLB_BAD_LEVEL_FOG;
+    glb::reportConventionLabel("GLB -> Level fog settings", name, label);
     if (!selected) {
       fog = std::move(candidate);
       selected = true;
@@ -150,11 +146,21 @@ ArxReturnCode parseDirection(const cgltf_data& data, const std::vector<math::Mat
     const cgltf_node* child = root.children[i];
     if (child == nullptr) return ARX_GLB_BAD_FORMAT;
     std::string_view name = child->name != nullptr ? child->name : "";
-    if (!name.starts_with(kDirection)) continue;
-    std::vector<std::string_view> tokens;
-    splitDoubleUnderscore(name, tokens);
-    if (tokens.size() != 2 || tokens.front() != "DIRECTION" || tokens.back().empty() || !glb::simpleEmptyNode(*child))
+    if (name != kDirection && !name.starts_with("DIRECTION__")) continue;
+    bool direction = false;
+    glb::ParsedLabel label;
+    if (!glb::parseRecoverableLabel(name,
+                                    direction,
+                                    &label,
+                                    {},
+                                    [](std::span<const std::string_view> tokens, bool& out) {
+                                      if (tokens.size() != 1 || tokens.front() != kDirection) return false;
+                                      out = true;
+                                      return true;
+                                    }) ||
+        !direction || !glb::simpleEmptyNode(*child))
       return ARX_GLB_BAD_LEVEL_FOG;
+    glb::reportConventionLabel("GLB -> Level fog direction", name, label);
     std::ptrdiff_t child_index = child - data.nodes;
     if (child_index < 0 || static_cast<std::size_t>(child_index) >= data.nodes_count) return ARX_GLB_BAD_FORMAT;
     ArxVector3 target = math::translation(world[static_cast<std::size_t>(child_index)]);

@@ -5,6 +5,7 @@
 
 #include "utils/portable_filename.h"
 #include "utils/unique_value.h"
+#include "utils/utf8.h"
 
 #include <algorithm>
 #include <cassert>
@@ -52,7 +53,7 @@ void constrainComponent(std::string& component, ResourcePathRepair& repair) {
   const std::string ending = extension == component.size() ? std::string{} : component.substr(extension);
   const std::size_t prefix_size =
       ending.size() < kPortableNameMax ? kPortableNameMax - ending.size() : kPortableNameMax;
-  component = component.substr(0, prefix_size);
+  component = component.substr(0, utf8::prefixSize(component, prefix_size));
   if (ending.size() < kPortableNameMax) component += ending;
   repair |= ResourcePathRepair::kLength;
 }
@@ -67,7 +68,7 @@ void repairTrailingCharacters(std::string& component, ResourcePathRepair& repair
 void repairReservedName(std::string& component, ResourcePathRepair& repair) {
   if (!isPortableReservedName(component)) return;
   const std::size_t extension = component.find('.');
-  if (component.size() == kPortableNameMax) component.pop_back();
+  if (component.size() == kPortableNameMax) component.resize(utf8::prefixSize(component, component.size() - 1U));
   component.insert(extension == std::string::npos ? component.size() : extension, 1, '-');
   repair |= ResourcePathRepair::kReserved;
 }
@@ -75,6 +76,7 @@ void repairReservedName(std::string& component, ResourcePathRepair& repair) {
 ResourcePathError normalizeComponent(std::string_view source, std::string& out, ResourcePathRepair& repair) {
   if (source.empty() || source == "." || source == ".." || source.find('\0') != std::string_view::npos)
     return ResourcePathError::kBadPath;
+  if (!utf8::valid(source)) return ResourcePathError::kBadPath;
   out.clear();
   out.reserve(std::min(source.size(), kPortableNameMax));
   for (unsigned char input : source) {
@@ -126,10 +128,10 @@ std::optional<std::string> suffixedPath(std::string_view path, std::size_t ordin
   const std::string suffix = "_" + std::to_string(ordinal);
   std::string_view ending = component.substr(extension);
   const std::size_t ending_limit = kPortableNameMax > suffix.size() ? kPortableNameMax - suffix.size() : 0;
-  ending = ending.substr(0, ending_limit);
+  ending = ending.substr(0, utf8::prefixSize(ending, ending_limit));
   const std::size_t prefix_limit = kPortableNameMax - suffix.size() - ending.size();
   std::string result(path.substr(0, component_begin));
-  result += component.substr(0, std::min(extension, prefix_limit));
+  result += component.substr(0, utf8::prefixSize(component, std::min(extension, prefix_limit)));
   result += suffix;
   result += ending;
   return result;
@@ -160,7 +162,8 @@ ResourcePathNormalization normalizeResourceDirectory(std::string_view requested)
 
 bool isPortableResourcePathComponent(std::string_view component) noexcept {
   if (component.empty() || component == "." || component == ".." || component.size() > kPortableNameMax ||
-      component.back() == '.' || component.back() == ' ' || isPortableReservedName(component))
+      component.back() == '.' || component.back() == ' ' || isPortableReservedName(component) ||
+      !utf8::valid(component))
     return false;
   for (unsigned char value : component) {
     if (value == '/' || value == '\\' || forbiddenComponentCharacter(value)) return false;

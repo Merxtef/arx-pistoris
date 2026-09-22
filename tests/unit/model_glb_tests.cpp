@@ -898,7 +898,7 @@ TEST_SUITE("Model GLB") {
     REQUIRE(source.validate() == ARX_OK);
 
     pistoris::NativeModelBundle native;
-    REQUIRE(source.bakeNativeBundle({.include_files = false}, native) == ARX_OK);
+    REQUIRE(source.bakeNativeBundle({.include_texture_files = false}, native) == ARX_OK);
     pistoris::Model native_roundtrip;
     REQUIRE(pistoris::Model::importNative(native_roundtrip, native.ftl) == ARX_OK);
     std::array<ArxModelBone, 3> bones{};
@@ -1084,6 +1084,13 @@ TEST_SUITE("Model GLB") {
     REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(model.faceCount() == faces);
 
+    gltf["nodes"][model_root]["name"] = "arx_model_origin";
+    {
+      ModelGlbLogCapture logs;
+      REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      CHECK(logs.contains("arx_model_origin' has no final label"));
+    }
+
     gltf["nodes"][model_root]["name"] = "arx_model_origin__origin__extra";
     CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_HIERARCHY);
 
@@ -1171,8 +1178,9 @@ TEST_SUITE("Model GLB") {
       CHECK(model.faceCount() == 1);
     }
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, attachMeshToTerminalNode(base, "arx_action__preview")) ==
-          ARX_GLB_BAD_MODEL_ACTION_POINT);
+    ModelGlbLogCapture logs;
+    REQUIRE(pistoris::Model::importGlb(model, attachMeshToTerminalNode(base, "arx_action__preview")) == ARX_OK);
+    CHECK(logs.contains("arx_action__preview' has no final label"));
   }
 
   TEST_CASE("Keeps distinct glTF image paths and shares identical external images") {
@@ -2020,6 +2028,22 @@ TEST_SUITE("Model GLB") {
       REQUIRE(pistoris::Model::importGlb(imported_model, imported, encoded) == ARX_OK);
       REQUIRE(imported.size() == 1);
       CHECK(imported[0]->frameLength() == 7);
+    }
+
+    {
+      const std::vector<std::uint8_t> unlabeled = replaceAnimationSettings(encoded, "SETTINGS__EXTRA_FRAME__STEPS_6");
+      ModelGlbLogCapture logs;
+      pistoris::Model imported_model;
+      std::vector<std::unique_ptr<pistoris::Animation>> imported;
+      REQUIRE(pistoris::Model::importGlb(imported_model, imported, unlabeled) == ARX_OK);
+      CHECK(logs.contains("SETTINGS__EXTRA_FRAME__STEPS_6' has no final label"));
+    }
+
+    for (std::string_view settings : {"SETTINGS__settings", "SETTINGS"}) {
+      const std::vector<std::uint8_t> without_options = replaceAnimationSettings(encoded, std::string(settings));
+      pistoris::Model imported_model;
+      std::vector<std::unique_ptr<pistoris::Animation>> imported;
+      REQUIRE(pistoris::Model::importGlb(imported_model, imported, without_options) == ARX_OK);
     }
 
     {

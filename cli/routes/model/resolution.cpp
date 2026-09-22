@@ -96,34 +96,31 @@ bool resolveTextureRebase(const RouteResolveContext& context, Invocation& invoca
       native ? SidecarRebaseDirection::kNone
              : automaticSidecarRebase(sidecarEndpoint(context.inputs[invocation.input], ARX_RESOURCE_KIND_MODEL),
                                       sidecarEndpoint(invocation.output, ARX_RESOURCE_KIND_MODEL));
-  return resolveSidecarRebase({.explicit_requested = context.conversion.rebase_textures,
-                               .explicit_directory = context.conversion.texture_directory,
+  return resolveSidecarRebase({.explicit_requested = context.conversion.textures.requested,
+                               .explicit_directory = context.conversion.textures.directory,
                                .automatic = automatic,
                                .to_loose_directory = kLooseTextureDirectory,
                                .to_game_directory = pistoris::paths::textureDirectory()},
                               "texture",
                               context.io,
-                              invocation.rebase_textures,
-                              invocation.texture_rebase_directory);
+                              invocation.texture_rebase);
 }
 
 bool resolveSoundRebase(const RouteResolveContext& context, Invocation& invocation, bool native) {
   const SidecarRebaseDirection automatic =
       native ? SidecarRebaseDirection::kNone
              : automaticSidecarRebaseTarget(sidecarEndpoint(invocation.output, ARX_RESOURCE_KIND_MODEL));
-  bool enabled = false;
-  if (!resolveSidecarRebase({.explicit_requested = context.conversion.rebase_sounds,
-                             .explicit_directory = context.conversion.sound_directory,
+  if (!resolveSidecarRebase({.explicit_requested = context.conversion.sounds.requested,
+                             .explicit_directory = context.conversion.sounds.directory,
                              .automatic = automatic,
                              .to_loose_directory = kLooseSoundDirectory,
                              .to_game_directory = pistoris::paths::soundDirectory()},
                             "sound",
                             context.io,
-                            enabled,
-                            invocation.sound_rebase_directory)) {
+                            invocation.sound_rebase)) {
     return false;
   }
-  if (context.conversion.rebase_sounds)
+  if (context.conversion.sounds.requested)
     invocation.sound_rebase_mode = AnimationSoundRebaseMode::kExplicit;
   else if (automatic != SidecarRebaseDirection::kNone)
     invocation.sound_rebase_mode = AnimationSoundRebaseMode::kAutomatic;
@@ -333,7 +330,7 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
       reportRequiredReadFailure(result, "Reference FTL", invocation.options.reference_ftl);
       return false;
     }
-    if (!loadReferenceModel(reference, resolved_path, *intermediate)) return false;
+    if (!loadReferenceModel(reference, resolved_path, invocation.native_text_mode, *intermediate)) return false;
   }
   return true;
 }

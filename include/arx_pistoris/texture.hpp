@@ -11,11 +11,6 @@
 
 namespace pistoris {
 
-struct NativeTextureBakeOptions {
-  // Include encoded sidecars in output bundle
-  bool include_files = true;
-};
-
 struct NativeTextureFile {
   TextureIndex source_texture = kNoTexture;
   std::string resource_path;

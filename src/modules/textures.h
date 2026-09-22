@@ -57,6 +57,7 @@ struct ImagePreparationOptions {
   image::FormatFlags accepted_formats = image::kFormatsAll;
   image::Format fallback_format = image::Format::kPng;
   bool require_power_of_two = false;
+  image::BmpColorKey bmp_color_key = image::BmpColorKey::kAntialiased;
 };
 
 struct ImagePreparationRequest {

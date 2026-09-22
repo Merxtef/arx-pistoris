@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 
@@ -158,11 +160,12 @@ def expect_code(cli: Path, expected_returncode: int, expected_text: str, *args: 
         raise AssertionError(f"{args}: expected {expected_text!r} in output\n{text}")
 
 
-def expect_success(cli: Path, *args: str | Path) -> None:
+def expect_success(cli: Path, *args: str | Path) -> subprocess.CompletedProcess[str]:
     proc = run(cli, *args)
     text = proc.stdout + proc.stderr
     if proc.returncode != 0:
         raise AssertionError(f"{args}: expected success, got {proc.returncode}\n{text}")
+    return proc
 
 
 def expect_success_contains(cli: Path, expected_text: str, *args: str | Path) -> None:
@@ -233,16 +236,17 @@ def make_level_fts_json(level: int) -> dict[str, object]:
     }
 
 
-def make_amb_track(sample_path: str, *, master: bool, loop_minus_one: int = 0) -> bytes:
+def make_amb_track(sample_path: str | bytes, *, master: bool, loop_minus_one: int = 0) -> bytes:
     setting = lambda value: struct.pack("<ffII", value, value, 0, 0)
     key = struct.pack("<IIIII", 0, 0, loop_minus_one, 0, 0)
     key += setting(1.0) + setting(1.0)
     key += setting(0.0) * 4
     flags = 1 | (4 if master else 0)
-    return sample_path.encode("utf-8") + b"\0" + struct.pack("<II", flags, 1) + key
+    encoded_path = sample_path.encode("utf-8") if isinstance(sample_path, str) else sample_path
+    return encoded_path + b"\0" + struct.pack("<II", flags, 1) + key
 
 
-def make_amb_bytes(sample_path: str = "sfx/ambiance/test.wav") -> bytes:
+def make_amb_bytes(sample_path: str | bytes = "sfx/ambiance/test.wav") -> bytes:
     return struct.pack("<III", 0x424D4147, 0x01000001, 1) + make_amb_track(sample_path, master=True)
 
 
@@ -275,6 +279,184 @@ def make_wav_bytes(sample_count: int = 1) -> bytes:
         + b"data"
         + struct.pack("<I", len(sample))
         + sample
+    )
+
+
+def make_cinematic_glb() -> bytes:
+    def png_chunk(kind: bytes, payload: bytes) -> bytes:
+        body = kind + payload
+        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body))
+
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+        + png_chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00\xff"))
+        + png_chunk(b"IEND", b"")
+    )
+    positions = struct.pack(
+        "<12f", -0.5, 0, -0.5, 0.5, 0, -0.5, 0.5, 0, 0.5, -0.5, 0, 0.5
+    )
+    texcoords = struct.pack("<8f", 0, 0, 1, 0, 1, 1, 0, 1)
+    indices = struct.pack("<6H", 0, 2, 1, 0, 3, 2)
+    binary = positions + texcoords + indices
+    camera_rotation = [-0.7071067811865476, 0, 0, 0.7071067811865476]
+    nodes = [
+        {"name": "arx_cinematic__cinematic", "children": [1]},
+        {"name": "arx_illustration__0__illustration", "mesh": 0, "children": [2, 5, 8]},
+        {"name": "KEY_0__key", "rotation": camera_rotation, "children": [3]},
+        {"name": "SOUND__EFFECT__sound", "children": [4]},
+        {"name": "PATH_effects/hit.mp3__path"},
+        {"name": "KEY_5__key", "rotation": camera_rotation, "children": [6]},
+        {"name": "SOUND__SPEECH__sound", "children": [7]},
+        {"name": "PATH_hero/line[English].mp3__path"},
+        {"name": "KEY_10__key", "rotation": camera_rotation},
+    ]
+    document = {
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": nodes,
+        "buffers": [{"byteLength": len(binary)}],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": len(positions)},
+            {"buffer": 0, "byteOffset": len(positions), "byteLength": len(texcoords)},
+            {"buffer": 0, "byteOffset": len(positions) + len(texcoords), "byteLength": len(indices)},
+        ],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC2"},
+            {"bufferView": 2, "componentType": 5123, "count": 6, "type": "SCALAR"},
+        ],
+        "images": [
+            {"name": "story/scene.png", "uri": "data:image/png;base64," + base64.b64encode(png).decode("ascii")}
+        ],
+        "textures": [{"source": 0}],
+        "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        "meshes": [
+            {"primitives": [{"attributes": {"POSITION": 0, "TEXCOORD_0": 1}, "indices": 2, "material": 0}]}
+        ],
+    }
+    json_chunk = json.dumps(document, separators=(",", ":")).encode("utf-8")
+    json_chunk += b" " * (-len(json_chunk) % 4)
+    return (
+        struct.pack("<4sII", b"glTF", 2, 28 + len(json_chunk) + len(binary))
+        + struct.pack("<II", len(json_chunk), 0x4E4F534A)
+        + json_chunk
+        + struct.pack("<II", len(binary), 0x004E4942)
+        + binary
+    )
+
+
+def check_cinematic_route(cli: Path, tmp: Path) -> None:
+    project = tmp / "cinematic-project"
+    project.mkdir()
+    source_glb = project / "intro.glb"
+    source_glb.write_bytes(make_cinematic_glb())
+    effect = project / "effects" / "hit.wav"
+    effect.parent.mkdir()
+    effect.write_bytes(make_wav_bytes(2))
+    speech = project / "hero"
+    speech.mkdir()
+    (speech / "line[english].wav").write_bytes(make_wav_bytes(3))
+    (speech / "line[french].wav").write_bytes(make_wav_bytes(4))
+
+    game = tmp / "cinematic-game"
+    game.mkdir()
+    expect_success(cli, "--write-mount", game, source_glb, "cinematic:contract")
+    native = game / "graph" / "interface" / "illustrations" / "contract.cin"
+    expected_game_files = (
+        native,
+        game / "graph" / "interface" / "illustrations" / "scene.bmp",
+        game / "sfx" / "hit.wav",
+        game / "speech" / "english" / "line.wav",
+        game / "speech" / "french" / "line.wav",
+    )
+    for path in expected_game_files:
+        if not path.is_file():
+            produced = [str(file.relative_to(game)) for file in game.rglob("*") if file.is_file()]
+            raise AssertionError(f"Cinematic game output is missing {path}; produced {produced}")
+
+    loose = tmp / "cinematic-loose"
+    loose.mkdir()
+    direct_native = loose / "direct.cin"
+    expect_success(cli, "--mount", game, "cinematic:contract", direct_native)
+    if direct_native.read_bytes() != native.read_bytes():
+        raise AssertionError("Direct CIN conversion must preserve the native carrier")
+    for path in (
+        loose / "graph" / "interface" / "illustrations" / "scene.bmp",
+        loose / "sfx" / "hit.wav",
+        loose / "speech" / "english" / "line.wav",
+        loose / "speech" / "french" / "line.wav",
+    ):
+        if not path.is_file():
+            raise AssertionError(f"Direct CIN conversion is missing sidecar {path}")
+
+    roundtrip_glb = loose / "intro.glb"
+    expect_success(cli, "--mount", game, "cinematic:contract", roundtrip_glb)
+    for path in (
+        loose / "sounds" / "hit.wav",
+        loose / "speech" / "line[english].wav",
+        loose / "speech" / "line[french].wav",
+    ):
+        if not path.is_file():
+            raise AssertionError(f"Cinematic loose output is missing {path}")
+    roundtrip = glb_document(roundtrip_glb)
+    names = {node.get("name") for node in roundtrip["nodes"]}
+    for path in ("PATH_sounds/hit__path", "PATH_speech/line__path"):
+        if path not in names:
+            raise AssertionError(f"Cinematic selector rebase is missing {path}")
+    if not roundtrip.get("images") or "bufferView" not in roundtrip["images"][0]:
+        raise AssertionError("Cinematic GLB must embed its illustration image")
+
+    absolute_glb = loose / "absolute-cin.glb"
+    expect_success(
+        cli,
+        "--input-texture-folder", game,
+        "--input-sound-folder", game,
+        native,
+        absolute_glb,
+    )
+    for path in (
+        loose / "hit.wav",
+        loose / "line[english].wav",
+        loose / "line[french].wav",
+    ):
+        if not path.is_file():
+            raise AssertionError(f"Absolute loose CIN lookup did not produce {path}")
+
+    skipped = tmp / "cinematic-skipped"
+    skipped.mkdir()
+    expect_success(cli, "--write-mount", skipped, "--skip-sound-export", source_glb, "cinematic:skipped")
+    if not (skipped / "graph" / "interface" / "illustrations" / "skipped.cin").is_file():
+        raise AssertionError("Skipping Cinematic audio must still write CIN")
+    if tuple(skipped.rglob("*.wav")):
+        raise AssertionError("Skipping Cinematic audio must not write sound sidecars")
+
+    targeted = tmp / "cinematic-targeted"
+    targeted.mkdir()
+    expect_success(
+        cli,
+        "--write-mount", targeted,
+        "--rebase-sfx", "custom/effects",
+        "--rebase-speech", "custom/speech",
+        source_glb,
+        "cinematic:targeted",
+    )
+    for path in (
+        targeted / "sfx" / "custom" / "effects" / "hit.wav",
+        targeted / "speech" / "english" / "custom" / "speech" / "line.wav",
+        targeted / "speech" / "french" / "custom" / "speech" / "line.wav",
+    ):
+        if not path.is_file():
+            raise AssertionError(f"Cinematic targeted rebase is missing {path}")
+    expect_code(
+        cli,
+        1,
+        "[CLI_INCOMPATIBLE_MODULES]",
+        "--rebase-sounds", "shared",
+        "--rebase-sfx", "effects",
+        source_glb,
+        "cinematic:conflicting",
     )
 
 
@@ -316,6 +498,49 @@ def make_zero_group_animation_json(
             {"flags": -1, "frame": 24, "groups": []},
         ],
     }
+
+
+def check_native_text_route(cli: Path, tmp: Path) -> None:
+    project = tmp / "native-text-project"
+    project.mkdir()
+    source = project / "latin1.amb"
+    source.write_bytes(make_amb_bytes(b"caf\xe9.wav"))
+    audio = make_wav_bytes(3)
+    (project / "caf\u00e9.wav").write_bytes(audio)
+
+    output = tmp / "native-text-output"
+    output.mkdir()
+    output_json = output / "latin1.json"
+    expect_success(cli, "--native-text", "latin1", source, output_json)
+    payload = json.loads(output_json.read_text(encoding="utf-8"))
+    if payload["tracks"][0]["filename"] != "caf\u00e9.wav":
+        raise AssertionError("Latin-1 native text must decode to UTF-8 JSON")
+    exported_audio = output / "caf\u00e9.wav"
+    if not exported_audio.is_file() or exported_audio.read_bytes() != audio:
+        raise AssertionError("Latin-1 native references must resolve UTF-8 sidecar filenames")
+
+    payload["tracks"][0]["filename"] = "price\u20ac.wav"
+    unencodable_json = project / "unencodable.amb.json"
+    unencodable_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    expect_success(
+        cli,
+        "--native-text", "utf8",
+        "--skip-sound-export",
+        unencodable_json,
+        output / "utf8.amb",
+    )
+    latin1_output = output / "latin1.amb"
+    expect_code(
+        cli,
+        1,
+        "[CLI_AMBIANCE_INPUT_FAILED]",
+        "--native-text", "latin1",
+        "--skip-sound-export",
+        unencodable_json,
+        latin1_output,
+    )
+    if latin1_output.exists():
+        raise AssertionError("Failed Latin-1 native output must not be published")
 
 
 def main() -> int:
@@ -635,6 +860,7 @@ def main() -> int:
         for formats in (
             "Primary inputs    TEA, JSON",
             "Primary inputs    AMB, JSON, GLB",
+            "Primary inputs    CIN, GLB",
             "Primary inputs    FTL, OBJ, JSON, GLB",
             "Primary inputs    FTS, DLF, JSON, GLB",
         ):
@@ -647,11 +873,13 @@ def main() -> int:
         model_help = help_output(cli, "model")
         animation_help = help_output(cli, "animation")
         ambiance_help = help_output(cli, "ambiance")
+        cinematic_help = help_output(cli, "cinematic")
         for page, heading in (
             (level_help, "LEVEL / GENERAL"),
             (model_help, "MODEL / GENERAL"),
             (animation_help, "ANIMATION / GENERAL"),
             (ambiance_help, "AMBIANCE / GENERAL"),
+            (cinematic_help, "CINEMATIC / GENERAL"),
         ):
             if not page.startswith(heading + "\n"):
                 raise AssertionError(f"route help must start with {heading!r}\n{page}")
@@ -750,6 +978,24 @@ def main() -> int:
             if absent in ambiance_help:
                 raise AssertionError(f"Ambiance help unexpectedly contains {absent!r}\n{ambiance_help}")
 
+        for expected in (
+            "Convert native CIN and editable GLB Cinematics.",
+            "--skip-texture-export",
+            "--skip-sound-export",
+            "--input-texture-folder <PATH>",
+            "--input-sound-folder <PATH>",
+            "--rebase-textures <RESOURCE-DIRECTORY>",
+            "--rebase-sounds <RESOURCE-DIRECTORY>",
+            "--rebase-sfx <RESOURCE-DIRECTORY>",
+            "--rebase-speech <RESOURCE-DIRECTORY>",
+            "cinematic:intro intro.glb",
+        ):
+            if expected not in cinematic_help:
+                raise AssertionError(f"Cinematic help is missing {expected!r}\n{cinematic_help}")
+        for absent in ("--glb-arx-units-per-unit", "--glb-offset"):
+            if absent in cinematic_help:
+                raise AssertionError(f"Cinematic help unexpectedly contains {absent!r}\n{cinematic_help}")
+
         for page, expected in (
             (model_help, "model:npc:human_base anim:npc:human_normal_walk human_base.glb"),
             (animation_help, "anim:npc:human_normal_walk human_normal_walk.json"),
@@ -847,6 +1093,10 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--write-mount")
         expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--write-mount", "", MODEL_FTL, out_glb)
         expect_code(cli, 1, "[CLI_DUPLICATE_MODULE]", "--write-mount", ".", "--write-mount", ".")
+        expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--native-text")
+        expect_code(cli, 1, "[CLI_INVALID_MODE]", "--native-text", "other", MODEL_FTL, out_glb)
+        expect_code(cli, 1, "[CLI_DUPLICATE_MODULE]", "--native-text", "auto", "--native-text", "utf8")
+        expect_success(cli, "--native-text", "latin", MODEL_FTL, tmp / "native-text.glb")
         expect_code(cli, 1, "[CLI_MISSING_ARGUMENT]", "--log-level")
         expect_code(cli, 1, "[CLI_LOG_LEVEL_INVALID]", "--log-level", "verbose")
         expect_code(cli, 1, "[CLI_DUPLICATE_MODULE]", "--log-level", "info", "--log-level", "warn")
@@ -960,6 +1210,8 @@ def main() -> int:
         if ambiance_payload.get("$schema") != "https://arx-tools.github.io/schemas/amb.schema.json":
             raise AssertionError(f"AMB JSON schema mismatch: {ambiance_payload.get('$schema')}")
         expect_success(cli, ambiance_json, tmp / "ambiance-json-roundtrip.amb")
+        check_native_text_route(cli, tmp)
+        check_cinematic_route(cli, tmp)
 
         one_track_trimmed = tmp / "ambiance-one-track-trimmed.json"
         expect_success(cli, "--trim-to-master", "--skip-sound-export", ambiance_amb, one_track_trimmed)
@@ -1616,7 +1868,7 @@ def main() -> int:
             if custom_scene.returncode != 0:
                 raise AssertionError(f"custom FTS scene directory failed\n{custom_scene.stdout}{custom_scene.stderr}")
             custom_scene_dlf = custom_scene_fts.with_suffix(".dlf")
-            if b"custom-scenes/new-scene/\0" not in custom_scene_dlf.read_bytes():
+            if b"custom-scenes/new-scene\0" not in custom_scene_dlf.read_bytes():
                 raise AssertionError("custom FTS scene directory was not written into DLF")
             if "loose Level output uses physical FTS" not in custom_scene.stderr:
                 raise AssertionError("loose native output must report its detached runtime FTS reference")
@@ -2475,7 +2727,7 @@ def main() -> int:
             raise AssertionError("loose Model Animation input must use the canonical selector Sound directory")
 
         standalone_game_mount = tmp / "standalone-game-rebase"
-        expect_success(
+        standalone_game = expect_success(
             cli,
             "--write-mount",
             standalone_game_mount,
@@ -2488,7 +2740,16 @@ def main() -> int:
         )
         standalone_game_teas = list(standalone_game_mount.rglob("*.tea"))
         if len(standalone_game_teas) != 1 or not (standalone_game_mount / "sfx" / "contract.wav").is_file():
-            raise AssertionError("loose standalone Animation input must use the canonical selector Sound directory")
+            written = sorted(
+                str(path.relative_to(standalone_game_mount))
+                for path in standalone_game_mount.rglob("*")
+                if path.is_file()
+            )
+            raise AssertionError(
+                "loose standalone Animation input must use the canonical selector Sound directory; "
+                f"written files: {written}; source sound exists: {(tmp / 'contract.wav').is_file()}\n"
+                f"{standalone_game.stdout}{standalone_game.stderr}"
+            )
 
         standalone_same_game_mount = tmp / "standalone-same-game"
         expect_success(

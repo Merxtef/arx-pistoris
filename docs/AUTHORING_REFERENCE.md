@@ -29,3 +29,11 @@ Tracks, keys, automation, positioned and panned sound, and reference Models:
 
 - [Ambiance Authoring Reference](authoring/AMBIANCE_REFERENCE.md)
 - [Ambiance Authoring Guide](authoring/AMBIANCE_GUIDE.md)
+
+## Cinematic
+
+Illustration planes, timeline keys, presentation effects, lights, and effect
+or speech references:
+
+- [Cinematic Authoring Reference](authoring/CINEMATIC_REFERENCE.md)
+- [Cinematic Authoring Guide](authoring/CINEMATIC_GUIDE.md)

@@ -40,6 +40,11 @@ struct SidecarRebasePolicy {
   std::string_view to_game_directory;
 };
 
+struct ResolvedSidecarRebase {
+  bool enabled = false;
+  std::string directory;
+};
+
 SidecarEndpoint sidecarEndpoint(const ClassifiedPath& input, ArxResourceKind selector_kind) noexcept;
 SidecarEndpoint sidecarEndpoint(const OutputTarget& output, ArxResourceKind selector_kind) noexcept;
 SidecarRebaseDirection automaticSidecarRebaseTarget(SidecarEndpoint output) noexcept;
@@ -47,8 +52,8 @@ SidecarRebaseDirection automaticSidecarRebase(SidecarEndpoint input, SidecarEndp
 bool resolveSidecarInputBase(const ClassifiedPath& input, bool use_format_sources, bool input_folder_specified,
                              std::string_view input_folder, std::string_view owner, std::string_view resource,
                              IoService& io, PathLocation& out);
-bool resolveSidecarRebase(const SidecarRebasePolicy& policy, std::string_view resource, IoService& io, bool& enabled,
-                          std::string& out);
+bool resolveSidecarRebase(const SidecarRebasePolicy& policy, std::string_view resource, IoService& io,
+                          ResolvedSidecarRebase& out);
 bool resolveSidecarOutputBase(const OutputTarget& output, std::string_view owner, std::string_view resource,
                               IoService& io, PathLocation& out);
 

@@ -9,6 +9,7 @@
 #include "pipeline/options.h"
 #include "resources/inventory_icon_io.h"
 #include "resources/model_input_io.h"
+#include "resources/sidecar_io.h"
 #include "resources/sound_io.h"
 #include "resources/texture_io.h"
 #include "routes/descriptor.h"
@@ -50,10 +51,9 @@ struct Invocation final : RouteInvocation {
   SoundIoOptions sound_options;
   std::vector<SoundInput> sound_inputs;
   SoundOutput sound_output;
-  bool rebase_textures = false;
-  std::string texture_rebase_directory;
+  ResolvedSidecarRebase texture_rebase;
   AnimationSoundRebaseMode sound_rebase_mode = AnimationSoundRebaseMode::kPreserve;
-  std::string sound_rebase_directory;
+  ResolvedSidecarRebase sound_rebase;
   std::string animation_fallback_type;
   std::string preview_asset_name;
   std::vector<ModelMaterialLibraryInput> obj_material_libraries;

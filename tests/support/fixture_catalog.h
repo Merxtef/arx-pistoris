@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -52,6 +53,21 @@ struct AmbianceFixture {
   GlbFixture glb;
 };
 
+struct CinematicAudioCoverage {
+  std::size_t effect_references = 0;
+  std::size_t speech_references = 0;
+  std::vector<std::string> languages;
+  std::size_t encodings = 0;
+};
+
+struct CinematicFixture {
+  std::string name;
+  std::string selector;
+  std::filesystem::path glb;
+  std::filesystem::path cin;
+  CinematicAudioCoverage audio;
+};
+
 struct JsonFixture {
   std::string format;
   std::filesystem::path path;
@@ -67,6 +83,7 @@ struct FixtureCatalog {
   std::vector<ModelFixture> models;
   std::vector<AnimationFixture> animations;
   std::vector<AmbianceFixture> ambiances;
+  std::vector<CinematicFixture> cinematics;
   std::vector<std::filesystem::path> native_image_sidecars;
   std::vector<std::filesystem::path> native_audio_sidecars;
   std::vector<NativeAliasGroup> native_aliases;
@@ -123,6 +140,17 @@ inline const FixtureCatalog& fixtureCatalog() {
                                   entry.value("reference_model", std::string{}),
                                   fixturePath(entry, "amb"),
                                   fixtureGlb(entry)});
+    }
+    for (const nlohmann::json& entry : source.at("cinematics")) {
+      const nlohmann::json& audio = entry.at("audio");
+      result.cinematics.push_back({entry.at("name").get<std::string>(),
+                                   entry.at("selector").get<std::string>(),
+                                   fixturePath(entry, "glb"),
+                                   fixturePath(entry, "cin"),
+                                   {audio.at("effect_references").get<std::size_t>(),
+                                    audio.at("speech_references").get<std::size_t>(),
+                                    audio.at("languages").get<std::vector<std::string>>(),
+                                    audio.at("encodings").get<std::size_t>()}});
     }
     const nlohmann::json& native_sidecars = source.at("native_sidecars");
     for (const nlohmann::json& path : native_sidecars.at("images"))

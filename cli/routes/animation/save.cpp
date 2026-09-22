@@ -7,6 +7,7 @@
 #include "arx_pistoris/animation/bake.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/sound.hpp"
 
@@ -19,6 +20,7 @@
 #include "resources/sound_io.h"
 #include "routes/animation/invocation.h"
 #include "routes/animation/state.h"
+#include "routes/native_text.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -40,7 +42,7 @@ bool outputFailure(const char* what, ArxReturnCode rc) {
 }
 
 bool writeNativeFile(const pistoris::Tea& animation, const ExecutionContext& execution, const Invocation& invocation,
-                     bool json, std::span<const pistoris::SoundFile> sound_files) {
+                     bool json, pistoris::NativeTextMode text_mode, std::span<const pistoris::SoundFile> sound_files) {
   ResourceOutputPlan resource_outputs;
   resource_outputs.reserveOutput(invocation.output);
   if (!sound_files.empty()) {
@@ -59,7 +61,7 @@ bool writeNativeFile(const pistoris::Tea& animation, const ExecutionContext& exe
   bool success = false;
   if (json) {
     std::string text;
-    const ArxReturnCode rc = pistoris::toJson(animation, text, invocation.format.pretty);
+    const ArxReturnCode rc = pistoris::toJson(animation, text, invocation.format.pretty, text_mode);
     if (rc != ARX_OK) {
       outputFailure("Animation JSON output", rc);
     } else {
@@ -80,26 +82,30 @@ bool writeNativeFile(const pistoris::Tea& animation, const ExecutionContext& exe
 
 bool writeTeaNative(NativeAnimation& source, const ExecutionContext& execution, const Invocation& invocation) {
   if (invocation.sound_options.export_files)
-    loadNativeSoundFiles(source.animation, execution.io(), invocation.sound_input, source.sound_files);
-  return writeNativeFile(source.animation, execution, invocation, false, source.sound_files);
+    loadNativeSoundFiles(
+        source.animation, source.text_mode, execution.io(), invocation.sound_input, source.sound_files);
+  return writeNativeFile(source.animation, execution, invocation, false, source.text_mode, source.sound_files);
 }
 
 bool writeJsonNative(NativeAnimation& source, const ExecutionContext& execution, const Invocation& invocation) {
   if (invocation.sound_options.export_files)
-    loadNativeSoundFiles(source.animation, execution.io(), invocation.sound_input, source.sound_files);
-  return writeNativeFile(source.animation, execution, invocation, true, source.sound_files);
+    loadNativeSoundFiles(
+        source.animation, source.text_mode, execution.io(), invocation.sound_input, source.sound_files);
+  return writeNativeFile(source.animation, execution, invocation, true, source.text_mode, source.sound_files);
 }
 
 bool bakeIntermediate(IntermediateAnimation& source, const Invocation& invocation, NativeAnimation& out) {
   std::size_t removed = 0;
   ArxReturnCode rc = source.animation.compactSounds(&removed);
   if (rc != ARX_OK) return outputFailure("Animation sound compaction", rc);
-  if (invocation.rebase_sounds) {
-    rc = source.animation.rebaseSoundPaths(invocation.sound_rebase_directory);
+  if (invocation.sound_rebase.enabled) {
+    rc = source.animation.rebaseSoundPaths(invocation.sound_rebase.directory);
     if (rc != ARX_OK) return outputFailure("Animation sound rebasing", rc);
   }
+  out.text_mode = carrierTextMode(invocation.output.format, invocation.native_text_mode);
   pistoris::NativeAnimationBundle bundle;
-  rc = source.animation.bakeNativeBundle({.include_files = invocation.sound_options.export_files}, bundle);
+  rc = source.animation.bakeNativeBundle(
+      {.include_sound_files = invocation.sound_options.export_files, .text_mode = out.text_mode}, bundle);
   if (rc != ARX_OK) return outputFailure("Animation native output", rc);
   out.animation = std::move(bundle.tea);
   out.sound_files = std::move(bundle.sound_files);
@@ -110,14 +116,14 @@ bool writeTeaIntermediate(IntermediateAnimation& source, const ExecutionContext&
                           const Invocation& invocation) {
   NativeAnimation native;
   return bakeIntermediate(source, invocation, native) &&
-         writeNativeFile(native.animation, execution, invocation, false, native.sound_files);
+         writeNativeFile(native.animation, execution, invocation, false, native.text_mode, native.sound_files);
 }
 
 bool writeJsonIntermediate(IntermediateAnimation& source, const ExecutionContext& execution,
                            const Invocation& invocation) {
   NativeAnimation native;
   return bakeIntermediate(source, invocation, native) &&
-         writeNativeFile(native.animation, execution, invocation, true, native.sound_files);
+         writeNativeFile(native.animation, execution, invocation, true, native.text_mode, native.sound_files);
 }
 
 }  // namespace

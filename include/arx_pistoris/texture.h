@@ -28,13 +28,6 @@ typedef struct ArxTextureView {
 #endif
 } ArxTextureView;
 
-typedef struct ArxNativeTextureBakeOptions {
-  // Include encoded sidecars in output bundle
-  uint8_t include_files;
-} ArxNativeTextureBakeOptions;
-
-#define ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT {1U}
-
 typedef struct ArxNativeTextureFile {
   ArxTextureIndex source_texture;
   ArxStringView resource_path;

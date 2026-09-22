@@ -17,7 +17,7 @@ record.
 
 JSON support matches arx-convert schemas. JSON is converted to or from native
 FTL, TEA, FTS, DLF, LLF, and AMB carriers; it is not a separate Pistoris
-intermediate.
+intermediate. CIN has no compatible JSON representation.
 
 Data absent from the compatibility schema cannot roundtrip through JSON.
 Prefer native carriers or the matching GLB authoring format when the JSON
@@ -292,6 +292,54 @@ original WAV, MP3, or Ogg Vorbis encoding. Native Animation baking converts
 attached audio to PCM16 WAV and stores the sample reference below `sfx/`.
 Path-only Sounds remain valid references but are not decoded or validated by
 the library.
+
+## Cinematic and CIN
+
+CIN versions 1.75 and 1.76 import into one Cinematic representation. Native
+writing always emits version 1.76. Version 1.75 sound data is ignored because
+the game does not use it. For version 1.76, only sound slot 3 on each keyframe
+is effective. Other slots, duplicate unreferenced sound-table entries, legacy
+authoring metadata, language tags, and saved playback state are discarded.
+
+Import keeps the effective keyframe at each frame and orders the resulting
+timeline. Keys outside the declared timeline are discarded. Unsupported
+interpolation becomes linear with a warning. Negative crossfade values become
+enabled; values above one use their low bit and warn. The resulting native
+bytes are semantically equivalent, not byte-identical.
+Inactive flash decay and light data are reset to defaults on native read and
+write; active effects, camera and illustration grid transforms, and stored
+timing values still require finite values.
+
+Nonzero CIN illustration grid position and roll are discarded with a warning.
+They are not part of Cinematic editing or GLB authoring; native baking writes
+zero grid transforms. CIN files that depend on those transforms will not retain
+their original framing.
+
+CIN speech paths contain an authored language directory, but keyframes refer
+to one language-independent speech identity. Import drops that directory and
+cannot recover a language registration. Callers may register languages and
+attach localized encodings before bundle baking. Effect and speech paths use
+separate namespaces, so the same logical path can exist in both.
+
+Illustration and audio files remain caller-owned sidecars. Import returns
+lookup information but never opens them. By default, bundle baking retains BMP
+and game-compatible TGA illustrations and converts others to TGA; attached audio
+is converted to PCM16 WAV. Path-only references emit no sidecar. Only
+keyframe-referenced sounds enter the native table, which is limited to 256
+entries.
+Callers can request BMP illustration sidecars when an existing BMP at the same
+logical path would take priority over TGA in the game. Without attached image
+dimensions, native baking cannot prove that a path-only illustration's grid
+fits the renderer; it still rejects subdivision scales unsafe even for the
+smallest image. Dream crossfades also constrain the next illustration's grid.
+
+Cinematic GLB is a semantic illustration-timeline authoring projection. It
+embeds illustration images, maps camera-backed keys through illustration UVs,
+and returns effect and speech references for caller-side audio lookup. Canonical
+export replaces unusual illustration geometry with a centered rectangular
+plane at the image's natural proportions, so GLB geometry is not preserved as
+roundtrip state. Cinematic has no compatible JSON form or OBJ authoring
+projection.
 
 ## Model and OBJ
 

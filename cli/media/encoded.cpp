@@ -26,6 +26,12 @@ constexpr std::array<std::string_view, 5> kImageLookupExtensions = {
     ".tga",
 };
 
+constexpr std::array<std::string_view, 3> kAudioLookupExtensions = {
+    ".wav",
+    ".mp3",
+    ".ogg",
+};
+
 }  // namespace
 
 ArxReturnCode prepareImage(std::vector<std::uint8_t> encoded, PreparedImage& out) noexcept {
@@ -47,6 +53,8 @@ ArxReturnCode prepareAudio(std::vector<std::uint8_t> encoded, PreparedAudio& out
 }
 
 std::span<const std::string_view> imageLookupExtensions() noexcept { return kImageLookupExtensions; }
+
+std::span<const std::string_view> audioLookupExtensions() noexcept { return kAudioLookupExtensions; }
 
 std::string_view imageExtension(ArxImageFormat format) noexcept {
   switch (format) {

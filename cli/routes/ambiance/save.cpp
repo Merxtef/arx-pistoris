@@ -7,6 +7,7 @@
 #include "arx_pistoris/ambiance/bake.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/sound.hpp"
 
@@ -18,6 +19,7 @@
 #include "resources/sound_io.h"
 #include "routes/ambiance/invocation.h"
 #include "routes/ambiance/state.h"
+#include "routes/native_text.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -38,8 +40,8 @@ bool outputFailure(const char* what, ArxReturnCode rc) {
 }
 
 bool prepareIntermediateSounds(IntermediateAmbiance& source, const Invocation& invocation) {
-  if (!invocation.rebase_sounds) return true;
-  const ArxReturnCode rc = source.ambiance.rebaseSoundPaths(invocation.sound_rebase_directory);
+  if (!invocation.sound_rebase.enabled) return true;
+  const ArxReturnCode rc = source.ambiance.rebaseSoundPaths(invocation.sound_rebase.directory);
   if (rc != ARX_OK) return outputFailure("Ambiance sound rebasing", rc);
   return true;
 }
@@ -75,14 +77,15 @@ bool writeAmbFile(const pistoris::Amb& ambiance, std::span<const pistoris::Sound
 bool writeAmbNative(NativeAmbiance& source, const ExecutionContext& execution, const Invocation& invocation) {
   std::vector<pistoris::SoundFile> sounds;
   if (invocation.sound_options.export_files)
-    loadNativeSoundFiles(source.ambiance, execution.io(), invocation.sounds, sounds);
+    loadNativeSoundFiles(source.ambiance, source.text_mode, execution.io(), invocation.sounds, sounds);
   return writeAmbFile(source.ambiance, sounds, execution, invocation);
 }
 
 bool writeJsonFile(const pistoris::Amb& ambiance, std::span<const pistoris::SoundFile> sounds,
-                   const ExecutionContext& execution, const Invocation& invocation) {
+                   pistoris::NativeTextMode text_mode, const ExecutionContext& execution,
+                   const Invocation& invocation) {
   std::string text;
-  const ArxReturnCode rc = pistoris::toJson(ambiance, text, invocation.format.pretty);
+  const ArxReturnCode rc = pistoris::toJson(ambiance, text, invocation.format.pretty, text_mode);
   if (rc != ARX_OK) return outputFailure("AMB JSON output", rc);
   return writeAmbianceFiles(text.data(), text.size(), sounds, execution, invocation);
 }
@@ -90,26 +93,28 @@ bool writeJsonFile(const pistoris::Amb& ambiance, std::span<const pistoris::Soun
 bool writeJsonNative(NativeAmbiance& source, const ExecutionContext& execution, const Invocation& invocation) {
   std::vector<pistoris::SoundFile> sounds;
   if (invocation.sound_options.export_files)
-    loadNativeSoundFiles(source.ambiance, execution.io(), invocation.sounds, sounds);
-  return writeJsonFile(source.ambiance, sounds, execution, invocation);
+    loadNativeSoundFiles(source.ambiance, source.text_mode, execution.io(), invocation.sounds, sounds);
+  return writeJsonFile(source.ambiance, sounds, source.text_mode, execution, invocation);
 }
 
 bool writeAmbIntermediate(IntermediateAmbiance& source, const ExecutionContext& execution,
                           const Invocation& invocation) {
+  const pistoris::NativeTextMode text_mode = carrierTextMode(invocation.output.format, invocation.native_text_mode);
   pistoris::NativeAmbianceBundle bundle;
-  const ArxReturnCode rc =
-      source.ambiance.bakeNativeBundle({.include_files = invocation.sound_options.export_files}, bundle);
+  const ArxReturnCode rc = source.ambiance.bakeNativeBundle(
+      {.include_sound_files = invocation.sound_options.export_files, .text_mode = text_mode}, bundle);
   if (rc != ARX_OK) return outputFailure("Ambiance native output", rc);
   return writeAmbFile(bundle.amb, bundle.sound_files, execution, invocation);
 }
 
 bool writeJsonIntermediate(IntermediateAmbiance& source, const ExecutionContext& execution,
                            const Invocation& invocation) {
+  const pistoris::NativeTextMode text_mode = carrierTextMode(invocation.output.format, invocation.native_text_mode);
   pistoris::NativeAmbianceBundle bundle;
-  const ArxReturnCode rc =
-      source.ambiance.bakeNativeBundle({.include_files = invocation.sound_options.export_files}, bundle);
+  const ArxReturnCode rc = source.ambiance.bakeNativeBundle(
+      {.include_sound_files = invocation.sound_options.export_files, .text_mode = text_mode}, bundle);
   if (rc != ARX_OK) return outputFailure("Ambiance native output", rc);
-  return writeJsonFile(bundle.amb, bundle.sound_files, execution, invocation);
+  return writeJsonFile(bundle.amb, bundle.sound_files, text_mode, execution, invocation);
 }
 
 bool writeGlbIntermediate(IntermediateAmbiance& source, const ExecutionContext& execution,

@@ -12,6 +12,7 @@
 
 namespace pistoris::glb_model {
 
+inline constexpr std::string_view kOriginName = "arx_model_origin";
 inline constexpr std::string_view kOriginPrefix = "arx_model_origin__";
 inline constexpr std::string_view kBonePrefix = "arx_bone__";
 inline constexpr std::string_view kActionPrefix = "arx_action__";

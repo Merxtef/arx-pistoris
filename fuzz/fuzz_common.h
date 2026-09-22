@@ -85,14 +85,18 @@ class OwnedHandle {
 using FtlHandle = OwnedHandle<ArxFtl*, arx_pistoris_ftl_destroy>;
 using TeaHandle = OwnedHandle<ArxTea*, arx_pistoris_tea_destroy>;
 using AmbHandle = OwnedHandle<ArxAmb*, arx_pistoris_amb_destroy>;
+using CinHandle = OwnedHandle<ArxCin*, arx_pistoris_cin_destroy>;
 using ModelHandle = OwnedHandle<ArxModel*, arx_pistoris_model_destroy>;
 using AnimationHandle = OwnedHandle<ArxAnimation*, arx_pistoris_animation_destroy>;
 using AnimationListHandle = OwnedHandle<ArxAnimationList*, arx_pistoris_animation_list_destroy>;
 using AmbianceHandle = OwnedHandle<ArxAmbiance*, arx_pistoris_ambiance_destroy>;
+using CinematicHandle = OwnedHandle<ArxCinematic*, arx_pistoris_cinematic_destroy>;
 
 using TextureSourcePathsHandle = OwnedHandle<ArxTextureSourcePaths*, arx_pistoris_texture_source_paths_destroy>;
 using SoundSourceReferencesHandle =
     OwnedHandle<ArxSoundSourceReferences*, arx_pistoris_sound_source_references_destroy>;
+using CinematicSoundSourceReferencesHandle =
+    OwnedHandle<ArxCinematicSoundSourceReferences*, arx_pistoris_cinematic_sound_source_references_destroy>;
 using AnimationSoundSourceReferencesHandle =
     OwnedHandle<ArxAnimationSoundSourceReferences*, arx_pistoris_animation_sound_source_references_destroy>;
 using ObjMaterialLibraryPathsHandle =
@@ -132,6 +136,39 @@ inline void validateSoundSourceReferences(const ArxSoundSourceReferences* refere
     ArxSoundSourceReference reference{};
     if (arx_pistoris_sound_source_references_get(references, index, &reference) != ARX_OK) std::abort();
     if (reference.sound >= sound_count) std::abort();
+    if (reference.path.size != 0 && !reference.path.data) std::abort();
+  }
+}
+
+inline void validateCinematicSoundSourceReferences(const ArxCinematicSoundSourceReferences* references,
+                                                   const ArxCinematic* cinematic) {
+  if (!references || !cinematic) std::abort();
+  std::size_t effect_count = 0;
+  std::size_t speech_count = 0;
+  if (arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_EFFECT, &effect_count) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_SPEECH, &speech_count) != ARX_OK) std::abort();
+
+  std::size_t reference_count = 0;
+  if (arx_pistoris_cinematic_sound_source_references_count(references, &reference_count) != ARX_OK) std::abort();
+  for (std::size_t index = 0; index < reference_count; ++index) {
+    ArxCinematicSoundSourceReference reference{};
+    if (arx_pistoris_cinematic_sound_source_references_get(references, index, &reference) != ARX_OK) std::abort();
+    ArxSoundKind kind = ARX_SOUND_EFFECT;
+    ArxSoundIndex sound = ARX_NO_SOUND;
+    if (arx_pistoris_sound_handle_kind(reference.sound, &kind) != ARX_OK) std::abort();
+    if (arx_pistoris_sound_handle_index(reference.sound, &sound) != ARX_OK) std::abort();
+    std::size_t sound_count = 0;
+    switch (kind) {
+      case ARX_SOUND_EFFECT:
+        sound_count = effect_count;
+        break;
+      case ARX_SOUND_SPEECH:
+        sound_count = speech_count;
+        break;
+      default:
+        std::abort();
+    }
+    if (sound >= sound_count) std::abort();
     if (reference.path.size != 0 && !reference.path.data) std::abort();
   }
 }
@@ -225,7 +262,8 @@ inline void exerciseLevelFromNative(const ArxFts* fts, const ArxLlf* llf, const 
   if (!fts) return;
   ArxLevel* raw_level = nullptr;
   ArxTextureSourcePaths* raw_sources = nullptr;
-  const ArxReturnCode rc = arx_pistoris_level_import_native(fts, llf, dlf, &raw_level, &raw_sources);
+  const ArxReturnCode rc =
+      arx_pistoris_level_import_native(fts, llf, dlf, &raw_level, &raw_sources, ARX_NATIVE_TEXT_AUTO);
   LevelHandle level(raw_level);
   TextureSourcePathsHandle sources(raw_sources);
   if (rc != ARX_OK) {

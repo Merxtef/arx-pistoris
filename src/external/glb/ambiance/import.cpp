@@ -15,13 +15,14 @@
 #include "external/glb/container.h"
 #include "external/glb/node_graph.h"
 #include "external/glb/object_coordinates.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
+#include "external/glb/utils/sound.h"
 #include "external/glb/utils/tokens.h"
 #include "modules/ambiance.h"
 #include "modules/sounds.h"
 #include "utils/log.h"
 #include "utils/math/mat4.h"
-#include "utils/resource_path.h"
 
 #include <algorithm>
 #include <array>
@@ -33,8 +34,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -42,7 +41,20 @@ namespace pistoris {
 namespace {
 
 constexpr float kPanTolerance = 1.0e-4f;
-constexpr float kTransformTolerance = 1.0e-4f;
+
+ArxReturnCode soundPathImportError(glb::SoundPathImportError error) noexcept {
+  switch (error) {
+    case glb::SoundPathImportError::kNone:
+      return ARX_OK;
+    case glb::SoundPathImportError::kBadPath:
+      return ARX_AMBIANCE_BAD_SOUND_PATH;
+    case glb::SoundPathImportError::kTooManySounds:
+      return ARX_AMBIANCE_TOO_MANY_SOUNDS;
+    case glb::SoundPathImportError::kBadKind:
+      return ARX_INTERNAL_ERROR;
+  }
+  return ARX_INTERNAL_ERROR;
+}
 
 enum class AutomationKind : std::uint8_t {
   kVolume,
@@ -88,13 +100,6 @@ math::Mat4 localTransform(const cgltf_node& node) noexcept {
   return result;
 }
 
-bool hasNonIdentityLocalTransform(const cgltf_node& node) noexcept {
-  const math::Mat4 transform = localTransform(node);
-  for (std::size_t index = 0; index < 16; ++index)
-    if (std::abs(transform.m[index] - math::kIdentityMat4.m[index]) > kTransformTolerance) return true;
-  return false;
-}
-
 bool parseUnsigned(std::string_view value, std::uint32_t& out) {
   const std::optional<std::uint32_t> parsed = glb::parseUnsignedToken(value);
   if (!parsed.has_value()) return false;
@@ -106,43 +111,33 @@ bool ambianceRootCandidate(std::string_view name) noexcept {
   return name == "arx_ambiance" || name.starts_with("arx_ambiance__");
 }
 
-template <std::size_t Capacity>
-bool splitName(std::string_view name, std::array<std::string_view, Capacity>& tokens, std::size_t& count) noexcept {
-  count = 0;
-  std::size_t begin = 0;
-  while (true) {
-    if (count == Capacity) return false;
-    const std::size_t separator = name.find("__", begin);
-    if (separator == std::string_view::npos) {
-      tokens[count++] = name.substr(begin);
-      return true;
-    }
-    tokens[count++] = name.substr(begin, separator - begin);
-    begin = separator + 2;
-  }
-}
-
-bool rootName(std::string_view name, std::optional<std::uint32_t>& master) {
-  std::array<std::string_view, 3> tokens{};
-  std::size_t count = 0;
-  if (!splitName(name, tokens, count)) return false;
-  if (count == 2 && tokens[0] == "arx_ambiance" && !tokens[1].empty()) return true;
-  if (count != 3 || tokens[0] != "arx_ambiance" || tokens[2].empty() || !tokens[1].starts_with("MASTER_")) return false;
-  std::uint32_t ordinal = 0;
-  if (!parseUnsigned(tokens[1].substr(7), ordinal)) return false;
-  master = ordinal;
-  return true;
+bool rootName(std::string_view name, std::optional<std::uint32_t>& master, glb::ParsedLabel& label) {
+  return glb::parseRecoverableLabel(name,
+                                    master,
+                                    &label,
+                                    {{}, {"MASTER_"}},
+                                    [](std::span<const std::string_view> tokens, std::optional<std::uint32_t>& parsed) {
+                                      if (tokens.empty() || tokens.front() != "arx_ambiance" || tokens.size() > 2)
+                                        return false;
+                                      parsed.reset();
+                                      if (tokens.size() == 1) return true;
+                                      if (!tokens[1].starts_with("MASTER_")) return false;
+                                      std::uint32_t ordinal = 0;
+                                      if (!parseUnsigned(tokens[1].substr(7), ordinal)) return false;
+                                      parsed = ordinal;
+                                      return true;
+                                    });
 }
 
 bool trackName(std::string_view name, std::uint32_t& ordinal, std::string_view& sample_path) {
   constexpr std::string_view kPrefix = "TRACK_";
   if (!name.starts_with(kPrefix)) return false;
-  const std::size_t first = name.find("__", kPrefix.size());
-  const std::size_t last = name.rfind("__");
-  if (first == std::string_view::npos || last == std::string_view::npos || first == last || last + 2 == name.size())
-    return false;
+  const std::optional<glb::LabeledValue> labeled = glb::splitRequiredLabel(name);
+  if (!labeled) return false;
+  const std::size_t first = labeled->value.find("__", kPrefix.size());
+  if (first == std::string_view::npos) return false;
   if (!parseUnsigned(name.substr(kPrefix.size(), first - kPrefix.size()), ordinal)) return false;
-  sample_path = name.substr(first + 2, last - first - 2);
+  sample_path = labeled->value.substr(first + 2);
   return !sample_path.empty();
 }
 
@@ -176,39 +171,48 @@ std::optional<AutomationKind> automationNameKind(std::string_view name) {
   return automationKind(name.substr(0, separator));
 }
 
-bool parseAutomationName(std::string_view name, ParsedAutomation& out) {
-  std::array<std::string_view, 6> tokens{};
-  std::size_t count = 0;
-  if (!splitName(name, tokens, count) || count < 2 || tokens[count - 1].empty()) return false;
-  const std::optional<AutomationKind> kind = automationKind(tokens[0]);
-  if (!kind.has_value()) return false;
-  out.kind = kind.value_or(AutomationKind::kVolume);
+bool parseAutomationName(std::string_view name, ParsedAutomation& out, glb::ParsedLabel& label) {
+  return glb::parseRecoverableLabel(
+      name,
+      out,
+      &label,
+      {{"STEP", "RANDOM_STEP", "INTERPOLATED", "RANDOM_INTERPOLATED"}, {"VAL_", "RANGE_", "INTERVAL_"}},
+      [](std::span<const std::string_view> tokens, ParsedAutomation& parsed) {
+        if (tokens.empty()) return false;
+        const std::optional<AutomationKind> kind = automationKind(tokens.front());
+        if (!kind.has_value()) return false;
+        ParsedAutomation result;
+        result.kind = *kind;
 
-  bool interval_seen = false;
-  bool mode_seen = false;
-  for (std::size_t index = 1; index + 1 < count; ++index) {
-    const std::string_view token = tokens[index];
-    if (token.starts_with("VAL_")) {
-      if (out.has_value || !glb::parseFloatToken(token.substr(4), out.value)) return false;
-      out.has_value = true;
-    } else if (token.starts_with("RANGE_")) {
-      if (out.has_range || !glb::parseFloatToken(token.substr(6), out.range) || out.range == 0.0f) return false;
-      out.has_range = true;
-    } else if (token.starts_with("INTERVAL_")) {
-      if (interval_seen || !parseUnsigned(token.substr(9), out.interval_ms)) return false;
-      interval_seen = true;
-    } else {
-      if (mode_seen || !setMode(token, out.mode)) return false;
-      mode_seen = true;
-    }
-  }
+        bool interval_seen = false;
+        bool mode_seen = false;
+        for (std::string_view token : tokens.subspan(1)) {
+          if (token.starts_with("VAL_")) {
+            if (result.has_value || !glb::parseFloatToken(token.substr(4), result.value)) return false;
+            result.has_value = true;
+          } else if (token.starts_with("RANGE_")) {
+            if (result.has_range || !glb::parseFloatToken(token.substr(6), result.range) || result.range == 0.0f)
+              return false;
+            result.has_range = true;
+          } else if (token.starts_with("INTERVAL_")) {
+            if (interval_seen || !parseUnsigned(token.substr(9), result.interval_ms)) return false;
+            interval_seen = true;
+          } else {
+            if (mode_seen || !setMode(token, result.mode)) return false;
+            mode_seen = true;
+          }
+        }
 
-  if ((interval_seen || mode_seen) && !out.has_range) return false;
-  if ((out.kind == AutomationKind::kVolume || out.kind == AutomationKind::kPitch) && !out.has_value) return false;
-  if ((out.kind == AutomationKind::kX || out.kind == AutomationKind::kY || out.kind == AutomationKind::kZ) &&
-      out.has_value)
-    return false;
-  return true;
+        if ((interval_seen || mode_seen) && !result.has_range) return false;
+        if ((result.kind == AutomationKind::kVolume || result.kind == AutomationKind::kPitch) && !result.has_value)
+          return false;
+        if ((result.kind == AutomationKind::kX || result.kind == AutomationKind::kY ||
+             result.kind == AutomationKind::kZ) &&
+            result.has_value)
+          return false;
+        parsed = result;
+        return true;
+      });
 }
 
 bool makeAutomation(float center, float range, const ParsedAutomation& parsed, Automation& out) {
@@ -238,37 +242,48 @@ void normalizeRandomRange(ParsedAutomation& parsed, std::string_view helper_name
   parsed.range = std::abs(parsed.range);
 }
 
-bool keyName(std::string_view name, std::uint32_t& ordinal, AmbianceKeyCommon& common) {
-  std::array<std::string_view, 6> tokens{};
-  std::size_t count = 0;
-  if (!splitName(name, tokens, count) || count < 2 || !tokens[0].starts_with("KEY_") || tokens[count - 1].empty() ||
-      !parseUnsigned(tokens[0].substr(4), ordinal))
-    return false;
+struct ParsedKeyName {
+  std::uint32_t ordinal = 0;
+  AmbianceKeyCommon common;
+};
 
-  bool play_seen = false;
-  bool start_seen = false;
-  bool minimum_seen = false;
-  bool maximum_seen = false;
-  for (std::size_t index = 1; index + 1 < count; ++index) {
-    const std::string_view token = tokens[index];
-    if (token.starts_with("PLAY_COUNT_")) {
-      if (play_seen || !parseUnsigned(token.substr(11), common.play_count) || common.play_count == 0) return false;
-      play_seen = true;
-    } else if (token.starts_with("START_")) {
-      if (start_seen || !parseUnsigned(token.substr(6), common.start_delay_ms)) return false;
-      start_seen = true;
-    } else if (token.starts_with("DELAY_MIN_")) {
-      if (minimum_seen || !parseUnsigned(token.substr(10), common.delay_min_ms)) return false;
-      minimum_seen = true;
-    } else if (token.starts_with("DELAY_MAX_")) {
-      if (maximum_seen || !parseUnsigned(token.substr(10), common.delay_max_ms)) return false;
-      maximum_seen = true;
-    } else {
-      return false;
-    }
-  }
-  if (minimum_seen && !maximum_seen) common.delay_max_ms = common.delay_min_ms;
-  return common.delay_min_ms <= common.delay_max_ms;
+bool keyName(std::string_view name, ParsedKeyName& out, glb::ParsedLabel& label) {
+  return glb::parseRecoverableLabel(
+      name,
+      out,
+      &label,
+      {{}, {"PLAY_COUNT_", "START_", "DELAY_MIN_", "DELAY_MAX_"}},
+      [](std::span<const std::string_view> tokens, ParsedKeyName& parsed) {
+        if (tokens.empty() || !tokens.front().starts_with("KEY_") ||
+            !parseUnsigned(tokens.front().substr(4), parsed.ordinal))
+          return false;
+
+        bool play_seen = false;
+        bool start_seen = false;
+        bool minimum_seen = false;
+        bool maximum_seen = false;
+        for (std::string_view token : tokens.subspan(1)) {
+          if (token.starts_with("PLAY_COUNT_")) {
+            if (play_seen || !parseUnsigned(token.substr(11), parsed.common.play_count) ||
+                parsed.common.play_count == 0)
+              return false;
+            play_seen = true;
+          } else if (token.starts_with("START_")) {
+            if (start_seen || !parseUnsigned(token.substr(6), parsed.common.start_delay_ms)) return false;
+            start_seen = true;
+          } else if (token.starts_with("DELAY_MIN_")) {
+            if (minimum_seen || !parseUnsigned(token.substr(10), parsed.common.delay_min_ms)) return false;
+            minimum_seen = true;
+          } else if (token.starts_with("DELAY_MAX_")) {
+            if (maximum_seen || !parseUnsigned(token.substr(10), parsed.common.delay_max_ms)) return false;
+            maximum_seen = true;
+          } else {
+            return false;
+          }
+        }
+        if (minimum_seen && !maximum_seen) parsed.common.delay_max_ms = parsed.common.delay_min_ms;
+        return parsed.common.delay_min_ms <= parsed.common.delay_max_ms;
+      });
 }
 
 float panFromPosition(const ArxVector3& position, std::string_view sample_path) {
@@ -286,12 +301,19 @@ float panFromPosition(const ArxVector3& position, std::string_view sample_path) 
 
 ArxReturnCode parseKey(const cgltf_node& node, const math::Mat4& transform, std::string_view sample_path, float units,
                        PendingKey& out) {
-  AmbianceKeyCommon common;
-  common.volume = ConstantAutomation{1.0f};
-  common.pitch = ConstantAutomation{1.0f};
-  if (!keyName(nodeName(node), out.ordinal, common) || !glb::simpleEmptyNode(node)) return ARX_GLB_BAD_AMBIANCE_KEY;
+  ParsedKeyName parsed_name;
+  parsed_name.common.volume = ConstantAutomation{1.0f};
+  parsed_name.common.pitch = ConstantAutomation{1.0f};
+  glb::ParsedLabel label;
+  if (!keyName(nodeName(node), parsed_name, label) || !glb::simpleEmptyNode(node)) return ARX_GLB_BAD_AMBIANCE_KEY;
+  out.ordinal = parsed_name.ordinal;
+  glb::reportConventionLabel("GLB -> Ambiance", nodeName(node), label);
 
-  std::array<const cgltf_node*, 6> helpers{};
+  struct AutomationHelper {
+    const cgltf_node* node = nullptr;
+    ParsedAutomation parsed;
+  };
+  std::array<AutomationHelper, 6> helpers{};
   for (std::size_t index = 0; index < node.children_count; ++index) {
     const cgltf_node* child = node.children[index];
     if (child == nullptr) return ARX_GLB_BAD_FORMAT;
@@ -301,27 +323,29 @@ ArxReturnCode parseKey(const cgltf_node& node, const math::Mat4& transform, std:
       continue;
     }
     ParsedAutomation parsed;
-    if (!parseAutomationName(nodeName(*child), parsed)) return ARX_GLB_BAD_AMBIANCE_AUTOMATION;
+    glb::ParsedLabel helper_label;
+    if (!parseAutomationName(nodeName(*child), parsed, helper_label)) return ARX_GLB_BAD_AMBIANCE_AUTOMATION;
     const std::size_t slot = static_cast<std::size_t>(parsed.kind);
-    if (helpers[slot] != nullptr) return ARX_GLB_BAD_AMBIANCE_AUTOMATION;
-    helpers[slot] = child;
+    if (helpers[slot].node != nullptr) return ARX_GLB_BAD_AMBIANCE_AUTOMATION;
+    glb::reportConventionLabel("GLB -> Ambiance", nodeName(*child), helper_label);
+    helpers[slot] = {child, parsed};
   }
 
   const ArxVector3 key_glb_position = math::translation(transform);
   const ArxVector3 key_position = glb_object::toArxPoint(key_glb_position, units);
   PositionedAmbianceKey positioned;
-  static_cast<AmbianceKeyCommon&>(positioned) = common;
+  static_cast<AmbianceKeyCommon&>(positioned) = parsed_name.common;
   positioned.x = ConstantAutomation{key_position.x};
   positioned.y = ConstantAutomation{key_position.y};
   positioned.z = ConstantAutomation{key_position.z};
   PannedAmbianceKey panned;
-  static_cast<AmbianceKeyCommon&>(panned) = common;
+  static_cast<AmbianceKeyCommon&>(panned) = parsed_name.common;
   panned.pan = ConstantAutomation{0.0f};
 
   bool has_spatial_axis = false;
   bool has_pan = false;
   for (std::size_t slot = 0; slot < helpers.size(); ++slot) {
-    const cgltf_node* helper = helpers[slot];
+    const cgltf_node* helper = helpers[slot].node;
     if (helper == nullptr) continue;
     if (!glb::simpleEmptyNode(*helper)) return ARX_GLB_BAD_AMBIANCE_AUTOMATION;
     if (helper->children_count != 0)
@@ -329,14 +353,7 @@ ArxReturnCode parseKey(const cgltf_node& node, const math::Mat4& transform, std:
           "GLB -> Ambiance: descendants of automation '{}' for '{}' ignored",
           nodeName(*helper),
           sample_path);
-    if (hasNonIdentityLocalTransform(*helper))
-      log(ARX_LOG_WARN,
-          "GLB -> Ambiance: automation '{}' for '{}' has a nonidentity transform; transform ignored",
-          nodeName(*helper),
-          sample_path);
-
-    ParsedAutomation parsed;
-    if (!parseAutomationName(nodeName(*helper), parsed)) return ARX_GLB_BAD_AMBIANCE_AUTOMATION;
+    ParsedAutomation parsed = helpers[slot].parsed;
     normalizeRandomRange(parsed, nodeName(*helper), sample_path);
     Automation automation;
     switch (parsed.kind) {
@@ -454,7 +471,8 @@ ArxReturnCode importAmbianceFromGlb(std::span<const std::uint8_t> bytes, const A
   ArxReturnCode rc = glb::parse(bytes, asset);
   if (rc != ARX_OK) return rc;
   cgltf_data& data = *asset.data();
-  if (data.extensions_required_count != 0) return ARX_GLB_UNSUPPORTED_FEATURE;
+  rc = glb::validateRequiredExtensions(data, {});
+  if (rc != ARX_OK) return rc;
 
   glb::NodeGraph graph;
   rc = glb::buildNodeGraph(data, graph);
@@ -477,7 +495,10 @@ ArxReturnCode importAmbianceFromGlb(std::span<const std::uint8_t> bytes, const A
   const cgltf_node& root = data.nodes[root_index];
 
   std::optional<std::uint32_t> master_ordinal;
-  if (!rootName(nodeName(root), master_ordinal) || !glb::simpleEmptyNode(root)) return ARX_GLB_BAD_AMBIANCE_ROOT;
+  glb::ParsedLabel root_label;
+  if (!rootName(nodeName(root), master_ordinal, root_label) || !glb::simpleEmptyNode(root))
+    return ARX_GLB_BAD_AMBIANCE_ROOT;
+  glb::reportConventionLabel("GLB -> Ambiance", nodeName(root), root_label);
   for (std::size_t index : graph.preorder) {
     if (index == root_index || !glb::isDescendantOrSelf(graph, index, root_index)) continue;
     if (nodeName(data.nodes[index]).starts_with("arx_")) return ARX_GLB_BAD_AMBIANCE_ROOT;
@@ -511,29 +532,16 @@ ArxReturnCode importAmbianceFromGlb(std::span<const std::uint8_t> bytes, const A
   AmbianceModules result;
   std::vector<SoundSourceReference> sources;
   if (sound_sources) sources.reserve(tracks.size());
-  std::vector<Sound> imported_sounds;
-  imported_sounds.reserve(tracks.size());
-  std::vector<const std::string*> original_sound_paths;
-  original_sound_paths.reserve(tracks.size());
-  std::unordered_map<std::string, SoundIndex, ResourcePathIdentityHash, ResourcePathIdentityEqual> identities;
-  identities.reserve(tracks.size());
-  std::unordered_set<std::string_view> source_spellings;
-  source_spellings.reserve(tracks.size());
+  std::vector<glb::ImportedSoundSource> imported_sources;
+  glb::SoundPathImporter sound_importer(
+      result.sounds, sound_sources != nullptr ? &imported_sources : nullptr, "GLB -> Ambiance");
   result.ambiance.tracks.reserve(tracks.size());
   bool master_found = !master_ordinal.has_value();
   const std::uint32_t selected_ordinal = master_ordinal.value_or(tracks.front().ordinal);
   for (std::size_t index = 0; index < tracks.size(); ++index) {
-    std::string identity = tracks[index].source_path;
-    normalizeResourcePathIdentity(identity);
-    auto [entry, inserted] = identities.try_emplace(identity, static_cast<SoundIndex>(imported_sounds.size()));
-    if (inserted) {
-      if (imported_sounds.size() >= static_cast<std::size_t>(kNoSound)) return ARX_AMBIANCE_TOO_MANY_SOUNDS;
-      imported_sounds.push_back({identity, {}});
-      original_sound_paths.push_back(&entry->first);
-    }
-    tracks[index].track.sound = entry->second;
-    if (sound_sources && source_spellings.insert(tracks[index].source_path).second)
-      sources.push_back({entry->second, tracks[index].source_path});
+    rc = soundPathImportError(
+        sound_importer.import(SoundKind::kEffect, tracks[index].source_path, tracks[index].track.sound));
+    if (rc != ARX_OK) return rc;
     if (tracks[index].ordinal == selected_ordinal) {
       result.ambiance.master_track = static_cast<AmbianceTrackIndex>(index);
       master_found = true;
@@ -541,28 +549,16 @@ ArxReturnCode importAmbianceFromGlb(std::span<const std::uint8_t> bytes, const A
     result.ambiance.tracks.push_back(std::move(tracks[index].track));
   }
   if (!master_found) return ARX_GLB_BAD_AMBIANCE_ROOT;
-  ResourcePathUniquifier sound_paths;
-  sound_paths.reserve(imported_sounds.size());
-  for (Sound& sound : imported_sounds) sound_paths.add(sound.path);
-  std::vector<ResourcePathRepair> sound_repairs(imported_sounds.size());
-  if (sound_paths.apply(nullptr, sound_repairs) != ResourcePathError::kNone) return ARX_AMBIANCE_BAD_SOUND_PATH;
-  for (std::size_t index = 0; index < sound_repairs.size(); ++index) {
-    const ResourcePathRepair repair = sound_repairs[index];
-    if (!hasResourcePathRepair(repair, ResourcePathRepair::kCharacters) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kTrailing) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kReserved) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kLength) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kDuplicate))
-      continue;
-    log(ARX_LOG_WARN,
-        "GLB -> Ambiance: sound path '{}' normalized to '{}'",
-        *original_sound_paths[index],
-        imported_sounds[index].path);
+  rc = soundPathImportError(sound_importer.finish());
+  if (rc != ARX_OK) return rc;
+  for (glb::ImportedSoundSource& source : imported_sources) {
+    SoundIndex sound = kNoSound;
+    if (!sounds::effectIndex(source.sound, sound)) return ARX_INTERNAL_ERROR;
+    sources.push_back({sound, std::move(source.path)});
   }
-  sounds::replaceSounds(result.sounds, std::move(imported_sounds));
   rc = ambiance_detail::validateStructure(result);
   if (rc != ARX_OK) return rc;
-  rc = ambiance_detail::soundErrorCode(sounds::validateAudio(result.sounds.sounds));
+  rc = ambiance_detail::soundErrorCode(sounds::validateAudio(result.sounds));
   if (rc != ARX_OK) return rc;
   out = std::move(result);
   if (sound_sources) *sound_sources = std::move(sources);

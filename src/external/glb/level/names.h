@@ -4,6 +4,7 @@
 #pragma once
 
 #include "cgltf/cgltf.h"
+#include "external/glb/utils/names.h"
 
 #include <cstdint>
 #include <string_view>
@@ -32,9 +33,9 @@ enum class LevelObjectKind : std::uint8_t {
   kMinimap,
 };
 
-bool isPlayerSpawnRootName(std::string_view name);
-bool isNavSurfaceRootName(std::string_view name);
-bool isMinimapRootName(std::string_view name);
+bool isPlayerSpawnRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
+bool isNavSurfaceRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
+bool isMinimapRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
 LevelObjectKind levelObjectKind(const cgltf_node& node);
 bool directLevelHelper(LevelObjectKind owner, std::string_view name);
 bool levelDiagnosticRootName(std::string_view name);

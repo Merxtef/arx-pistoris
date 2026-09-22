@@ -7,11 +7,15 @@
 #include "arx_pistoris/base/image.h"
 #include "arx_pistoris/base/status.h"
 
+#include "api/status_boundary.h"
 #include "utils/audio.h"
 #include "utils/encoded_image.h"
+#include "utils/text_encoding.h"
 
 #include <cstdint>
 #include <span>
+#include <string>
+#include <string_view>
 
 namespace pistoris::binary {
 
@@ -47,7 +51,46 @@ constexpr ArxImageFormat publicImageFormat(image::Format format) noexcept {
   return ARX_IMAGE_FORMAT_UNKNOWN;
 }
 
+constexpr TextEncoding publicTextEncoding(text_encoding::Encoding encoding) noexcept {
+  switch (encoding) {
+    case text_encoding::Encoding::kAscii:
+      return TextEncoding::kAscii;
+    case text_encoding::Encoding::kUtf8:
+      return TextEncoding::kUtf8;
+    case text_encoding::Encoding::kLatin1:
+      return TextEncoding::kLatin1;
+  }
+  return TextEncoding::kLatin1;
+}
+
+constexpr ArxReturnCode publicTextError(text_encoding::Error error) noexcept {
+  switch (error) {
+    case text_encoding::Error::kNone:
+      return ARX_OK;
+    case text_encoding::Error::kInvalidUtf8:
+      return ARX_TEXT_INVALID_UTF8;
+    case text_encoding::Error::kNotLatin1:
+      return ARX_TEXT_NOT_LATIN1;
+  }
+  return ARX_INTERNAL_ERROR;
+}
+
 }  // namespace
+
+TextEncoding classifyTextEncoding(std::string_view text) noexcept {
+  return publicTextEncoding(text_encoding::classify(text));
+}
+
+ArxReturnCode latin1ToUtf8(std::string_view input, std::string& out) noexcept {
+  return api_detail::statusBoundary([&] {
+    text_encoding::latin1ToUtf8(input, out);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode utf8ToLatin1(std::string_view input, std::string& out) noexcept {
+  return api_detail::statusBoundary([&] { return publicTextError(text_encoding::utf8ToLatin1(input, out)); });
+}
 
 ArxReturnCode validateEncodedAudio(std::span<const std::uint8_t> encoded_audio) noexcept {
   switch (audio::validate(encoded_audio)) {

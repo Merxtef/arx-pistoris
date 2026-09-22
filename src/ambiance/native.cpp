@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.hpp"
 
@@ -16,11 +17,13 @@
 #include "modules/sounds.h"
 #include "native/amb.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/resource_path.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -124,7 +127,7 @@ amb::Key nativeKey(const PositionedAmbianceKey& source) {
 
 AmbianceTrack internalTrack(const amb::Track& source, SoundIndex sound) {
   AmbianceTrack result;
-  result.sound = sound;
+  result.sound = sounds::effectHandle(sound);
   if ((source.flags & amb::kTrackPosition) != 0) {
     std::vector<PositionedAmbianceKey> keys;
     keys.reserve(source.keys.size());
@@ -189,28 +192,33 @@ void appendSoundFile(std::vector<SoundFile>& files, SoundIndex source, std::stri
 
 ArxReturnCode projectSounds(const AmbianceModules& modules, bool include_files, std::vector<ProjectedSound>& paths,
                             std::vector<SoundFile>& files) {
-  std::vector<SoundUse> uses(modules.sounds.sounds.size());
+  const std::size_t sound_count = sounds::count(modules.sounds, SoundKind::kEffect);
+  std::vector<SoundUse> uses(sound_count);
   for (const AmbianceTrack& track : modules.ambiance.tracks) {
-    if (track.sound >= uses.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
+    SoundIndex sound = kNoSound;
+    if (!sounds::effectIndex(track.sound, sound) || sound >= uses.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
     if (zeroPan(track))
-      uses[track.sound].stereo = true;
+      uses[sound].stereo = true;
     else
-      uses[track.sound].mono = true;
+      uses[sound].mono = true;
   }
 
-  paths.resize(modules.sounds.sounds.size());
+  paths.resize(sound_count);
   std::vector<sounds::AudioPreparationRequest> requests;
-  std::vector<AudioPreparations> preparation(modules.sounds.sounds.size());
-  requests.reserve(modules.sounds.sounds.size() * 2U);
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
-    const Sound& sound = modules.sounds.sounds[index];
+  std::vector<AudioPreparations> preparation(sound_count);
+  requests.reserve(sound_count * 2U);
+  for (std::size_t index = 0; index < sound_count; ++index) {
+    const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(index));
+    const std::string_view path = sounds::path(modules.sounds, handle);
+    const std::span<const std::uint8_t> encoded_audio = sounds::encodedAudio(modules.sounds, handle);
     const SoundUse use = uses[index];
-    if (sound.encoded_audio.empty()) continue;
-    const bool preserve_wav = isWavPath(sound.path);
+    if (encoded_audio.empty()) continue;
+    const bool preserve_wav = isWavPath(path);
     const bool include_preserved = use.stereo || (preserve_wav && use.mono);
     if (include_preserved || (!use.stereo && !use.mono)) {
       preparation[index].preserved = requests.size();
-      requests.push_back({static_cast<SoundIndex>(index),
+      requests.push_back({handle,
+                          kSoundEffects,
                           {sounds::audioFormatFlag(sounds::AudioFormat::kWav),
                            sounds::AudioFormat::kWav,
                            sounds::ChannelMode::kPreserve,
@@ -218,7 +226,8 @@ ArxReturnCode projectSounds(const AmbianceModules& modules, bool include_files, 
     }
     if (use.mono) {
       preparation[index].mono = requests.size();
-      requests.push_back({static_cast<SoundIndex>(index),
+      requests.push_back({handle,
+                          kSoundEffects,
                           {sounds::audioFormatFlag(sounds::AudioFormat::kWav),
                            sounds::AudioFormat::kWav,
                            sounds::ChannelMode::kMono,
@@ -229,19 +238,21 @@ ArxReturnCode projectSounds(const AmbianceModules& modules, bool include_files, 
   std::vector<sounds::PreparedAudio> prepared;
   ArxReturnCode rc = ambiance_detail::soundErrorCode(sounds::prepareAudio(modules.sounds, requests, prepared));
   if (rc != ARX_OK) return rc;
-  if (include_files) files.reserve(modules.ambiance.tracks.size() + modules.sounds.sounds.size());
+  if (include_files) files.reserve(modules.ambiance.tracks.size() + sound_count);
 
   constexpr std::uint8_t kPrimary = 1U << 0U;
   constexpr std::uint8_t kSecondary = 1U << 1U;
   constexpr std::uint8_t kShared = 1U << 2U;
-  std::vector<std::uint8_t> projection(modules.sounds.sounds.size(), 0);
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
-    const Sound& sound = modules.sounds.sounds[index];
+  std::vector<std::uint8_t> projection(sound_count, 0);
+  for (std::size_t index = 0; index < sound_count; ++index) {
+    const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(index));
+    const std::string_view path = sounds::path(modules.sounds, handle);
+    const std::span<const std::uint8_t> encoded_audio = sounds::encodedAudio(modules.sounds, handle);
     const SoundUse use = uses[index];
     if (!use.stereo && !use.mono) continue;
 
-    if (sound.encoded_audio.empty()) {
-      paths[index].stereo_path = sound.path;
+    if (encoded_audio.empty()) {
+      paths[index].stereo_path = path;
       projection[index] = kPrimary | kShared;
       continue;
     }
@@ -250,7 +261,7 @@ ArxReturnCode projectSounds(const AmbianceModules& modules, bool include_files, 
     const std::size_t info_index =
         indices.preserved != std::numeric_limits<std::size_t>::max() ? indices.preserved : indices.mono;
     if (info_index >= prepared.size()) return ARX_INTERNAL_ERROR;
-    const std::string base = wavPath(sound.path);
+    const std::string base = wavPath(path);
     if (prepared[info_index].source.channels == 1) {
       paths[index].stereo_path = base;
       projection[index] = kPrimary | kShared;
@@ -268,17 +279,19 @@ ArxReturnCode projectSounds(const AmbianceModules& modules, bool include_files, 
   }
 
   ResourcePathUniquifier uniquifier;
-  uniquifier.reserve(modules.sounds.sounds.size() * 2U, modules.sounds.sounds.size());
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
-    const Sound& sound = modules.sounds.sounds[index];
-    if ((uses[index].stereo || uses[index].mono) || !isWavPath(sound.path)) continue;
-    if (uniquifier.occupy(sound.path) != ResourcePathError::kNone) return ARX_AMBIANCE_BAD_SOUND_PATH;
+  uniquifier.reserve(sound_count * 2U, sound_count);
+  for (std::size_t index = 0; index < sound_count; ++index) {
+    const std::string_view path = sounds::path(modules.sounds, sounds::effectHandle(static_cast<SoundIndex>(index)));
+    if ((uses[index].stereo || uses[index].mono) || !isWavPath(path)) continue;
+    if (uniquifier.occupy(path) != ResourcePathError::kNone) return ARX_AMBIANCE_BAD_SOUND_PATH;
   }
   for (std::size_t index = 0; index < projection.size(); ++index)
-    if ((projection[index] & kPrimary) != 0 && isWavPath(modules.sounds.sounds[index].path))
+    if ((projection[index] & kPrimary) != 0 &&
+        isWavPath(sounds::path(modules.sounds, sounds::effectHandle(static_cast<SoundIndex>(index)))))
       uniquifier.add(paths[index].stereo_path);
   for (std::size_t index = 0; index < projection.size(); ++index)
-    if ((projection[index] & kPrimary) != 0 && !isWavPath(modules.sounds.sounds[index].path))
+    if ((projection[index] & kPrimary) != 0 &&
+        !isWavPath(sounds::path(modules.sounds, sounds::effectHandle(static_cast<SoundIndex>(index)))))
       uniquifier.add(paths[index].stereo_path);
   for (std::size_t index = 0; index < projection.size(); ++index)
     if ((projection[index] & kSecondary) != 0) uniquifier.add(paths[index].mono_path);
@@ -286,7 +299,9 @@ ArxReturnCode projectSounds(const AmbianceModules& modules, bool include_files, 
 
   for (std::size_t index = 0; index < projection.size(); ++index) {
     if ((projection[index] & kShared) != 0) paths[index].mono_path = paths[index].stereo_path;
-    if (!include_files || modules.sounds.sounds[index].encoded_audio.empty()) continue;
+    if (!include_files ||
+        sounds::encodedAudio(modules.sounds, sounds::effectHandle(static_cast<SoundIndex>(index))).empty())
+      continue;
     const AudioPreparations indices = preparation[index];
     const std::size_t info_index =
         indices.preserved != std::numeric_limits<std::size_t>::max() ? indices.preserved : indices.mono;
@@ -321,8 +336,10 @@ amb::Track nativeTrack(const AmbianceTrack& source, bool master, std::string pat
 }  // namespace
 
 ArxReturnCode Ambiance::importNative(Ambiance& out, const amb::Data& native,
-                                     std::vector<SoundSourceReference>* sound_sources) noexcept {
+                                     std::vector<SoundSourceReference>* sound_sources,
+                                     NativeTextMode text_mode) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ArxReturnCode rc = validateAmb(&native);
     if (rc != ARX_OK) return rc;
 
@@ -331,17 +348,25 @@ ArxReturnCode Ambiance::importNative(Ambiance& out, const amb::Data& native,
     sounds.reserve(native.tracks.size());
     std::unordered_map<std::string, SoundIndex, ResourcePathIdentityHash, ResourcePathIdentityEqual> identities;
     identities.reserve(native.tracks.size());
-    std::unordered_set<std::string_view> source_spellings;
+    std::unordered_set<std::string> source_spellings;
     source_spellings.reserve(native.tracks.size());
     std::vector<const std::string*> original_sound_paths;
     original_sound_paths.reserve(native.tracks.size());
+    std::unordered_map<std::string, std::string, ResourcePathIdentityHash, ResourcePathIdentityEqual> decoded_sources;
     std::vector<SoundSourceReference> sources;
     if (sound_sources) sources.reserve(native.tracks.size());
 
     result.data_->ambiance.tracks.reserve(native.tracks.size());
     for (std::size_t index = 0; index < native.tracks.size(); ++index) {
       const amb::Track& track = native.tracks[index];
-      std::string path = track.sample_path;
+      std::string path;
+      if (!native_text::decode(track.sample_path, text_mode, path)) return ARX_AMB_BAD_SAMPLE_PATH;
+      const auto [source, new_source] = decoded_sources.try_emplace(path, track.sample_path);
+      if (!new_source && !ResourcePathIdentityEqual{}(source->second, track.sample_path)) {
+        log(ARX_LOG_ERROR, "AMB -> Ambiance: distinct native sample paths decode to '{}'", path);
+        return ARX_AMBIANCE_BAD_SOUND_PATH;
+      }
+      const std::string decoded_path = path;
       normalizeResourcePathIdentity(path);
       auto [entry, inserted] = identities.try_emplace(path, static_cast<SoundIndex>(sounds.size()));
       if (inserted) {
@@ -350,8 +375,7 @@ ArxReturnCode Ambiance::importNative(Ambiance& out, const amb::Data& native,
       }
       const SoundIndex sound = entry->second;
       result.data_->ambiance.tracks.push_back(internalTrack(track, sound));
-      if (sound_sources && source_spellings.insert(track.sample_path).second)
-        sources.push_back({sound, track.sample_path});
+      if (sound_sources && source_spellings.insert(decoded_path).second) sources.push_back({sound, decoded_path});
       if ((track.flags & amb::kTrackMaster) != 0)
         result.data_->ambiance.master_track = static_cast<AmbianceTrackIndex>(index);
     }
@@ -373,8 +397,6 @@ ArxReturnCode Ambiance::importNative(Ambiance& out, const amb::Data& native,
           *original_sound_paths[index],
           sounds[index].path);
     }
-    rc = ambiance_detail::soundErrorCode(sounds::validate(sounds));
-    if (rc != ARX_OK) return rc;
     sounds::replaceSounds(result.data_->sounds, std::move(sounds));
     rc = result.validate();
     if (rc != ARX_OK) return rc;
@@ -386,29 +408,34 @@ ArxReturnCode Ambiance::importNative(Ambiance& out, const amb::Data& native,
 
 ArxReturnCode Ambiance::bakeNative(amb::Data& out) const noexcept {
   NativeAmbianceBundle bundle;
-  const ArxReturnCode rc = bakeNativeBundle({.include_files = false}, bundle);
+  const ArxReturnCode rc = bakeNativeBundle({.include_sound_files = false}, bundle);
   if (rc != ARX_OK) return rc;
   out = std::move(bundle.amb);
   return ARX_OK;
 }
 
-ArxReturnCode Ambiance::bakeNativeBundle(const NativeSoundBakeOptions& options,
+ArxReturnCode Ambiance::bakeNativeBundle(const NativeAmbianceBakeOptions& options,
                                          NativeAmbianceBundle& out) const noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(options.text_mode)) return ARX_INVALID_OPTIONS;
     ArxReturnCode rc = ambiance_detail::validateStructure(static_cast<const AmbianceModules&>(*data_));
     if (rc != ARX_OK) return rc;
 
     NativeAmbianceBundle result;
     std::vector<ProjectedSound> projected;
     rc = projectSounds(
-        static_cast<const AmbianceModules&>(*data_), options.include_files, projected, result.sound_files);
+        static_cast<const AmbianceModules&>(*data_), options.include_sound_files, projected, result.sound_files);
     if (rc != ARX_OK) return rc;
     result.amb.tracks.reserve(data_->ambiance.tracks.size());
     for (std::size_t index = 0; index < data_->ambiance.tracks.size(); ++index) {
       const AmbianceTrack& track = data_->ambiance.tracks[index];
-      const std::string& path = zeroPan(track) ? projected[track.sound].stereo_path : projected[track.sound].mono_path;
-      if (path.empty()) return ARX_INTERNAL_ERROR;
-      result.amb.tracks.push_back(nativeTrack(track, index == data_->ambiance.master_track, path));
+      SoundIndex sound = kNoSound;
+      if (!sounds::effectIndex(track.sound, sound) || sound >= projected.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
+      const std::string& projected_path = zeroPan(track) ? projected[sound].stereo_path : projected[sound].mono_path;
+      if (projected_path.empty()) return ARX_INTERNAL_ERROR;
+      std::string path;
+      if (!native_text::encode(projected_path, options.text_mode, path)) return ARX_AMBIANCE_BAD_SOUND_PATH;
+      result.amb.tracks.push_back(nativeTrack(track, index == data_->ambiance.master_track, std::move(path)));
     }
     rc = validateAmb(&result.amb);
     if (rc != ARX_OK) return rc;

@@ -6,6 +6,7 @@
 #include "arx_pistoris/ambiance.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/sound.hpp"
@@ -17,6 +18,7 @@
 #include "routes/ambiance/invocation.h"
 #include "routes/ambiance/options.h"
 #include "routes/ambiance/state.h"
+#include "routes/native_text.h"
 #include "routes/types.h"
 
 #include <utility>
@@ -43,14 +45,14 @@ bool applyResourcePath(const ClassifiedPath& input, pistoris::Ambiance& out) {
   return rc == ARX_OK || inputFailure("Ambiance resource identity", rc, input);
 }
 
-bool decodeAmb(const ClassifiedPath& input, pistoris::Amb& out) {
+bool decodeAmb(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Amb& out) {
   ArxReturnCode rc = ARX_OK;
   switch (input.facts.format) {
     case Format::kAmb:
       rc = pistoris::readAmb(input.buffer, out);
       break;
     case Format::kJson:
-      rc = pistoris::fromJson(byteStringView(input.buffer), out);
+      rc = pistoris::fromJson(byteStringView(input.buffer), out, text_mode);
       break;
     default:
       diagnostic(DiagnosticCode::kAmbianceUnsupportedInput, "Unsupported Ambiance input format");
@@ -59,14 +61,18 @@ bool decodeAmb(const ClassifiedPath& input, pistoris::Amb& out) {
   return rc == ARX_OK || inputFailure(formatName(input.facts.format), rc, input);
 }
 
-bool loadNative(const ClassifiedPath& input, NativeAmbiance& out) { return decodeAmb(input, out.ambiance); }
+bool loadNative(const ClassifiedPath& input, const Invocation& invocation, NativeAmbiance& out) {
+  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  return decodeAmb(input, out.text_mode, out.ambiance);
+}
 
-bool loadNativeIntermediate(const ClassifiedPath& input, const AmbianceOptions&, IntermediateAmbiance& out) {
+bool loadNativeIntermediate(const ClassifiedPath& input, const Invocation& invocation, IntermediateAmbiance& out) {
   pistoris::Amb native;
-  if (!decodeAmb(input, native)) return false;
+  const pistoris::NativeTextMode text_mode = carrierTextMode(input.facts.format, invocation.native_text_mode);
+  if (!decodeAmb(input, text_mode, native)) return false;
   pistoris::Ambiance converted;
   std::vector<pistoris::SoundSourceReference> sound_sources;
-  const ArxReturnCode rc = pistoris::Ambiance::importNative(converted, native, &sound_sources);
+  const ArxReturnCode rc = pistoris::Ambiance::importNative(converted, native, &sound_sources, text_mode);
   if (rc != ARX_OK) return inputFailure("AMB Ambiance", rc, input);
   if (!applyResourcePath(input, converted)) return false;
   out.ambiance.swap(converted);
@@ -74,10 +80,11 @@ bool loadNativeIntermediate(const ClassifiedPath& input, const AmbianceOptions&,
   return true;
 }
 
-bool loadGlbIntermediate(const ClassifiedPath& input, const AmbianceOptions& options, IntermediateAmbiance& out) {
+bool loadGlbIntermediate(const ClassifiedPath& input, const Invocation& invocation, IntermediateAmbiance& out) {
   pistoris::Ambiance converted;
   std::vector<pistoris::SoundSourceReference> sound_sources;
-  const ArxReturnCode rc = pistoris::Ambiance::importGlb(converted, input.buffer, options.glb_import, &sound_sources);
+  const ArxReturnCode rc =
+      pistoris::Ambiance::importGlb(converted, input.buffer, invocation.options.glb_import, &sound_sources);
   if (rc != ARX_OK) return inputFailure("GLB Ambiance", rc, input);
   out.ambiance.swap(converted);
   out.sound_sources = std::move(sound_sources);
@@ -106,14 +113,14 @@ bool loadInput(const InputConverterDescriptor& converter, const std::vector<Clas
   if (native) {
     if (!converter.load_native) return false;
     NativeAmbiance& loaded = out.emplace<NativeAmbiance>();
-    if (converter.load_native(input, loaded)) return true;
+    if (converter.load_native(input, invocation, loaded)) return true;
     out.emplace<std::monostate>();
     return false;
   }
 
   if (!converter.load_intermediate) return false;
   IntermediateAmbiance& loaded = out.emplace<IntermediateAmbiance>();
-  if (converter.load_intermediate(input, invocation.options, loaded)) return true;
+  if (converter.load_intermediate(input, invocation, loaded)) return true;
   out.emplace<std::monostate>();
   return false;
 }

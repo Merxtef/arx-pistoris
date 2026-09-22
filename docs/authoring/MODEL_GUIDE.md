@@ -11,6 +11,10 @@ with one or two TEA files first provides the most useful working example.
 Use Model GLB for complete authoring. OBJ represents only static geometry,
 materials, and positional action points.
 
+Keep the final descriptive labels shown in the GLB naming examples. Import can
+recover labels from fixed Model and Animation helper names when omitted, but
+warns; path-bearing helpers still need their label.
+
 ## Coordinates and Origin
 
 Model GLB defaults to 10 Arx units per GLB unit. Create one semantic origin and

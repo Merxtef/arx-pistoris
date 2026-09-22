@@ -35,3 +35,11 @@ and external audio sidecars.
 
 - [Ambiance Authoring Guide](authoring/AMBIANCE_GUIDE.md)
 - [Ambiance Authoring Reference](authoring/AMBIANCE_REFERENCE.md)
+
+## Cinematic
+
+Arrange illustration planes, camera and presentation keys, effects, lights,
+and effect or speech references for a Cinematic timeline.
+
+- [Cinematic Authoring Guide](authoring/CINEMATIC_GUIDE.md)
+- [Cinematic Authoring Reference](authoring/CINEMATIC_REFERENCE.md)

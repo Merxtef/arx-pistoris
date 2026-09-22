@@ -419,7 +419,7 @@ coverage path="":
       Write-Host "HTML report: $Html/index.html"
     }
 
-# Run a fuzzer: just fuzz <ftl|tea|amb|obj|glb|image|audio|model|animation|ambiance|fts|llf|dlf|level> [variant]
+# Run a fuzzer: just fuzz <ftl|tea|amb|cin|obj|glb|image|audio|model|animation|ambiance|cinematic|fts|llf|dlf|level> [variant]
 [unix]
 fuzz format variant="":
     @just fuzz-run "{{ format }}" 0 "{{ variant }}"
@@ -441,14 +441,18 @@ fuzz-run format mine="0" variant="":
       ftl/)          exe=arx_pistoris_ftl_fuzz;           corpus=fuzz-corpus/ftl;           seeds=build-fuzz/fuzz-seeds/ftl; dict=fuzz/ftl.dict ;;
       ftl/roundtrip) exe=arx_pistoris_ftl_roundtrip_fuzz; corpus=fuzz-corpus/ftl-roundtrip; seeds=build-fuzz/fuzz-seeds/ftl; dict=fuzz/ftl.dict ;;
       model/native)  exe=arx_pistoris_model_native_import_fuzz; corpus=fuzz-corpus/model-native; seeds=build-fuzz/fuzz-seeds/ftl; dict=fuzz/ftl.dict ;;
-      model/glb)     exe=arx_pistoris_model_glb_import_fuzz; corpus=fuzz-corpus/model-glb; seeds=build-fuzz/fuzz-seeds/model-glb; dict= ;;
+      model/glb)     exe=arx_pistoris_model_glb_import_fuzz; corpus=fuzz-corpus/model-glb; seeds=build-fuzz/fuzz-seeds/model-glb; dict=fuzz/model-glb.dict ;;
       tea/)          exe=arx_pistoris_tea_fuzz;           corpus=fuzz-corpus/tea;           seeds=build-fuzz/fuzz-seeds/tea; dict=fuzz/tea.dict ;;
       tea/roundtrip) exe=arx_pistoris_tea_roundtrip_fuzz; corpus=fuzz-corpus/tea-roundtrip; seeds=build-fuzz/fuzz-seeds/tea; dict=fuzz/tea.dict ;;
       animation/native) exe=arx_pistoris_animation_native_import_fuzz; corpus=fuzz-corpus/animation-native; seeds=build-fuzz/fuzz-seeds/tea; dict=fuzz/tea.dict ;;
-      amb/)          exe=arx_pistoris_amb_fuzz;           corpus=fuzz-corpus/amb;           seeds=build-fuzz/fuzz-seeds/amb; dict= ;;
-      amb/roundtrip) exe=arx_pistoris_amb_roundtrip_fuzz; corpus=fuzz-corpus/amb-roundtrip; seeds=build-fuzz/fuzz-seeds/amb; dict= ;;
-      ambiance/native) exe=arx_pistoris_ambiance_native_import_fuzz; corpus=fuzz-corpus/ambiance-native; seeds=build-fuzz/fuzz-seeds/amb; dict= ;;
-      ambiance/glb)    exe=arx_pistoris_ambiance_glb_import_fuzz; corpus=fuzz-corpus/ambiance-glb; seeds=build-fuzz/fuzz-seeds/ambiance-glb; dict= ;;
+      amb/)          exe=arx_pistoris_amb_fuzz;           corpus=fuzz-corpus/amb;           seeds=build-fuzz/fuzz-seeds/amb; dict=fuzz/amb.dict ;;
+      amb/roundtrip) exe=arx_pistoris_amb_roundtrip_fuzz; corpus=fuzz-corpus/amb-roundtrip; seeds=build-fuzz/fuzz-seeds/amb; dict=fuzz/amb.dict ;;
+      ambiance/native) exe=arx_pistoris_ambiance_native_import_fuzz; corpus=fuzz-corpus/ambiance-native; seeds=build-fuzz/fuzz-seeds/amb; dict=fuzz/amb.dict ;;
+      ambiance/glb)    exe=arx_pistoris_ambiance_glb_import_fuzz; corpus=fuzz-corpus/ambiance-glb; seeds=build-fuzz/fuzz-seeds/ambiance-glb; dict=fuzz/ambiance-glb.dict ;;
+      cin/)          exe=arx_pistoris_cin_fuzz;           corpus=fuzz-corpus/cin;           seeds=build-fuzz/fuzz-seeds/cin; dict=fuzz/cin.dict ;;
+      cin/roundtrip) exe=arx_pistoris_cin_roundtrip_fuzz; corpus=fuzz-corpus/cin-roundtrip; seeds=build-fuzz/fuzz-seeds/cin; dict=fuzz/cin.dict ;;
+      cinematic/native) exe=arx_pistoris_cinematic_native_import_fuzz; corpus=fuzz-corpus/cinematic-native; seeds=build-fuzz/fuzz-seeds/cin; dict=fuzz/cin.dict ;;
+      cinematic/glb)    exe=arx_pistoris_cinematic_glb_import_fuzz; corpus=fuzz-corpus/cinematic-glb; seeds=build-fuzz/fuzz-seeds/cinematic-glb; dict=fuzz/cinematic-glb.dict ;;
       obj/)          exe=arx_pistoris_obj_fuzz;           corpus=fuzz-corpus/obj;           seeds=build-fuzz/fuzz-seeds/obj; dict=fuzz/obj.dict ;;
       obj/mtl)       exe=arx_pistoris_obj_with_mtl_fuzz;  corpus=fuzz-corpus/obj-with-mtl;  seeds=build-fuzz/fuzz-seeds/obj-mtl; dict=fuzz/obj.dict ;;
       glb/)          exe=arx_pistoris_glb_container_fuzz; corpus=fuzz-corpus/glb-container; seeds=build-fuzz/fuzz-seeds/glb-container; dict= ;;
@@ -478,14 +482,15 @@ fuzz-run format mine="0" variant="":
     if [[ "$mine" == "1" ]]; then
       args+=("-print_final_stats=1" "-use_value_profile=1")
       echo "Mining mode: value profiling enabled; curated dictionaries disabled."
-    elif [[ -n "$dict" && -f "$dict" ]]; then
+    elif [[ -n "$dict" ]]; then
+      [[ -f "$dict" ]] || { echo "error: fuzz dictionary not found: $dict" >&2; exit 1; }
       args+=("-dict=$(pwd)/$dict")
     fi
 
     echo "Running fuzzer: $exe"
     "$exe_path" "${args[@]}"
 
-# Run a fuzzer: just fuzz <ftl|tea|amb|obj|glb|image|audio|model|animation|ambiance|fts|llf|dlf|level> [variant]
+# Run a fuzzer: just fuzz <ftl|tea|amb|cin|obj|glb|image|audio|model|animation|ambiance|cinematic|fts|llf|dlf|level> [variant]
 [windows]
 fuzz format variant="":
     @just fuzz-run "{{ format }}" 0 "{{ variant }}"
@@ -505,14 +510,18 @@ fuzz-run format mine="0" variant="":
       'ftl/'          { $Exe = 'arx_pistoris_ftl_fuzz';           $Corpus = 'fuzz-corpus/ftl';           $Seeds = 'build-fuzz/fuzz-seeds/ftl'; $Dict = 'fuzz/ftl.dict' }
       'ftl/roundtrip' { $Exe = 'arx_pistoris_ftl_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/ftl-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/ftl'; $Dict = 'fuzz/ftl.dict' }
       'model/native'  { $Exe = 'arx_pistoris_model_native_import_fuzz'; $Corpus = 'fuzz-corpus/model-native'; $Seeds = 'build-fuzz/fuzz-seeds/ftl'; $Dict = 'fuzz/ftl.dict' }
-      'model/glb'     { $Exe = 'arx_pistoris_model_glb_import_fuzz'; $Corpus = 'fuzz-corpus/model-glb'; $Seeds = 'build-fuzz/fuzz-seeds/model-glb'; $Dict = $null }
+      'model/glb'     { $Exe = 'arx_pistoris_model_glb_import_fuzz'; $Corpus = 'fuzz-corpus/model-glb'; $Seeds = 'build-fuzz/fuzz-seeds/model-glb'; $Dict = 'fuzz/model-glb.dict' }
       'tea/'          { $Exe = 'arx_pistoris_tea_fuzz';           $Corpus = 'fuzz-corpus/tea';           $Seeds = 'build-fuzz/fuzz-seeds/tea'; $Dict = 'fuzz/tea.dict' }
       'tea/roundtrip' { $Exe = 'arx_pistoris_tea_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/tea-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/tea'; $Dict = 'fuzz/tea.dict' }
       'animation/native' { $Exe = 'arx_pistoris_animation_native_import_fuzz'; $Corpus = 'fuzz-corpus/animation-native'; $Seeds = 'build-fuzz/fuzz-seeds/tea'; $Dict = 'fuzz/tea.dict' }
-      'amb/'          { $Exe = 'arx_pistoris_amb_fuzz';           $Corpus = 'fuzz-corpus/amb';           $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = $null }
-      'amb/roundtrip' { $Exe = 'arx_pistoris_amb_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/amb-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = $null }
-      'ambiance/native' { $Exe = 'arx_pistoris_ambiance_native_import_fuzz'; $Corpus = 'fuzz-corpus/ambiance-native'; $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = $null }
-      'ambiance/glb'    { $Exe = 'arx_pistoris_ambiance_glb_import_fuzz'; $Corpus = 'fuzz-corpus/ambiance-glb'; $Seeds = 'build-fuzz/fuzz-seeds/ambiance-glb'; $Dict = $null }
+      'amb/'          { $Exe = 'arx_pistoris_amb_fuzz';           $Corpus = 'fuzz-corpus/amb';           $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = 'fuzz/amb.dict' }
+      'amb/roundtrip' { $Exe = 'arx_pistoris_amb_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/amb-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = 'fuzz/amb.dict' }
+      'ambiance/native' { $Exe = 'arx_pistoris_ambiance_native_import_fuzz'; $Corpus = 'fuzz-corpus/ambiance-native'; $Seeds = 'build-fuzz/fuzz-seeds/amb'; $Dict = 'fuzz/amb.dict' }
+      'ambiance/glb'    { $Exe = 'arx_pistoris_ambiance_glb_import_fuzz'; $Corpus = 'fuzz-corpus/ambiance-glb'; $Seeds = 'build-fuzz/fuzz-seeds/ambiance-glb'; $Dict = 'fuzz/ambiance-glb.dict' }
+      'cin/'          { $Exe = 'arx_pistoris_cin_fuzz';           $Corpus = 'fuzz-corpus/cin';           $Seeds = 'build-fuzz/fuzz-seeds/cin'; $Dict = 'fuzz/cin.dict' }
+      'cin/roundtrip' { $Exe = 'arx_pistoris_cin_roundtrip_fuzz'; $Corpus = 'fuzz-corpus/cin-roundtrip'; $Seeds = 'build-fuzz/fuzz-seeds/cin'; $Dict = 'fuzz/cin.dict' }
+      'cinematic/native' { $Exe = 'arx_pistoris_cinematic_native_import_fuzz'; $Corpus = 'fuzz-corpus/cinematic-native'; $Seeds = 'build-fuzz/fuzz-seeds/cin'; $Dict = 'fuzz/cin.dict' }
+      'cinematic/glb'    { $Exe = 'arx_pistoris_cinematic_glb_import_fuzz'; $Corpus = 'fuzz-corpus/cinematic-glb'; $Seeds = 'build-fuzz/fuzz-seeds/cinematic-glb'; $Dict = 'fuzz/cinematic-glb.dict' }
       'obj/'          { $Exe = 'arx_pistoris_obj_fuzz';           $Corpus = 'fuzz-corpus/obj';           $Seeds = 'build-fuzz/fuzz-seeds/obj'; $Dict = 'fuzz/obj.dict' }
       'obj/mtl'       { $Exe = 'arx_pistoris_obj_with_mtl_fuzz';  $Corpus = 'fuzz-corpus/obj-with-mtl';  $Seeds = 'build-fuzz/fuzz-seeds/obj-mtl'; $Dict = 'fuzz/obj.dict' }
       'glb/'          { $Exe = 'arx_pistoris_glb_container_fuzz'; $Corpus = 'fuzz-corpus/glb-container'; $Seeds = 'build-fuzz/fuzz-seeds/glb-container'; $Dict = $null }
@@ -556,8 +565,12 @@ fuzz-run format mine="0" variant="":
     if ($Mine -eq '1') {
       $FuzzerArgs += @("-print_final_stats=1", "-use_value_profile=1")
       Write-Host "Mining mode: value profiling enabled; curated dictionaries disabled." -ForegroundColor Cyan
-    } elseif ($Dict -and (Test-Path $Dict)) {
-      $FuzzerArgs += "-dict=$((Resolve-Path $Dict).Path)"
+    } elseif ($Dict) {
+      if (-not (Test-Path -LiteralPath $Dict -PathType Leaf)) {
+        Write-Host "error: fuzz dictionary not found: $Dict" -ForegroundColor Red
+        exit 1
+      }
+      $FuzzerArgs += "-dict=$((Resolve-Path -LiteralPath $Dict).Path)"
     }
 
     Write-Host "Running fuzzer: $Exe" -ForegroundColor Cyan

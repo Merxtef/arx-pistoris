@@ -6,6 +6,7 @@
 #include "arx_pistoris/animation.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/runtime.hpp"
 
@@ -15,6 +16,7 @@
 #include "formats/format.h"
 #include "routes/animation/invocation.h"
 #include "routes/animation/state.h"
+#include "routes/native_text.h"
 #include "routes/types.h"
 
 #include <string_view>
@@ -35,14 +37,14 @@ bool inputFailure(const char* what, ArxReturnCode rc, std::string_view path) {
   return false;
 }
 
-bool decodeTea(const ClassifiedPath& input, pistoris::Tea& out) {
+bool decodeTea(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Tea& out) {
   ArxReturnCode rc = ARX_OK;
   switch (input.facts.format) {
     case Format::kTea:
       rc = pistoris::readTea(input.buffer, out);
       break;
     case Format::kJson:
-      rc = pistoris::fromJson(byteStringView(input.buffer), out);
+      rc = pistoris::fromJson(byteStringView(input.buffer), out, text_mode);
       break;
     default:
       diagnostic(DiagnosticCode::kAnimationUnsupportedInput, "Unsupported Animation input format");
@@ -59,15 +61,18 @@ bool applyResourcePath(const ClassifiedPath& input, pistoris::Animation& out) {
 }
 
 bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, NativeAnimation& out) {
-  return decodeTea(inputs[invocation.input], out.animation);
+  const ClassifiedPath& input = inputs[invocation.input];
+  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  return decodeTea(input, out.text_mode, out.animation);
 }
 
 bool loadIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
                       IntermediateAnimation& out) {
   const ClassifiedPath& input = inputs[invocation.input];
+  const pistoris::NativeTextMode text_mode = carrierTextMode(input.facts.format, invocation.native_text_mode);
   pistoris::Tea native;
-  if (!decodeTea(input, native)) return false;
-  const ArxReturnCode rc = pistoris::Animation::importNative(out.animation, native, &out.sound_sources);
+  if (!decodeTea(input, text_mode, native)) return false;
+  const ArxReturnCode rc = pistoris::Animation::importNative(out.animation, native, &out.sound_sources, text_mode);
   if (rc != ARX_OK) return inputFailure("TEA Animation", rc, input.path);
   return applyResourcePath(input, out.animation);
 }

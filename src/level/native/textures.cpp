@@ -27,7 +27,7 @@ ArxReturnCode projectNativeTextures(const TexturesData& texture_data, const Leve
   if (texture_data.textures.size() > kFtsMaxTextures) return ARX_FTS_BAD_TEXTURE_COUNT;
 
   std::vector<textures::ImagePreparationRequest> requests;
-  if (options.textures.include_files) {
+  if (options.include_texture_files) {
     requests.reserve(texture_data.textures.size());
     for (std::size_t index = 0; index < texture_data.textures.size(); ++index) {
       if (texture_data.textures[index].encoded_image.empty()) continue;
@@ -44,7 +44,7 @@ ArxReturnCode projectNativeTextures(const TexturesData& texture_data, const Leve
   if (preparation_error != textures::Error::kNone) return ARX_LEVEL_BAD_TEXTURE_IMAGE;
 
   NativeTextureResources resources;
-  resources.include_texture_files = options.textures.include_files;
+  resources.include_texture_files = options.include_texture_files;
   resources.next_fts_id = static_cast<std::int32_t>(texture_data.textures.size()) + 1;
   resources.families.reserve(texture_data.textures.size());
   resources.unavailable.reserve(texture_data.textures.size() * 4U);
@@ -52,14 +52,12 @@ ArxReturnCode projectNativeTextures(const TexturesData& texture_data, const Leve
   for (std::size_t index = 0; index < texture_data.textures.size(); ++index) {
     const Texture& texture = texture_data.textures[index];
     std::string resource_path = textures::normalizePath(texture.path);
-    if (resource_path.empty() || !textures::validExternalPath(resource_path) ||
-        resource_path.size() + 2U > sizeof(fts::Texture::fic))
-      return ARX_FTS_BAD_TEXTURE_PATH;
+    if (resource_path.empty() || !textures::validExternalPath(resource_path)) return ARX_FTS_BAD_TEXTURE_PATH;
 
     NativeTextureFamily family;
     resources.unavailable.insert(resource_path);
     family.shards.push_back({static_cast<std::int32_t>(index) + 1, std::move(resource_path)});
-    if (options.textures.include_files && !texture.encoded_image.empty()) {
+    if (options.include_texture_files && !texture.encoded_image.empty()) {
       textures::PreparedImage& image = prepared[prepared_index++];
       family.image_extension = pistoris::image::extension(image.info.format);
       if (family.image_extension.empty()) return ARX_LEVEL_BAD_TEXTURE_IMAGE;
@@ -85,7 +83,6 @@ ArxReturnCode addNativeTextureShard(NativeTextureResources& textures, TextureInd
   const std::string& base = family.shards.front().resource_path;
   std::string resource_path = makeUniqueName(base, textures.unavailable);
 
-  if (resource_path.size() + 2U > sizeof(fts::Texture::fic)) return ARX_FTS_BAD_TEXTURE_PATH;
   textures.unavailable.insert(resource_path);
   out_shard = family.shards.size();
   family.shards.push_back({textures.next_fts_id++, std::move(resource_path)});

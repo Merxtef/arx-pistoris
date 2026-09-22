@@ -10,20 +10,74 @@
 
 #include "native/fixed_string.h"
 #include "native/resource_lookup.h"
+#include "native/resource_path.h"
 #include "utils/container_allocation.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <cstdint>
 #include <cstring>
 #include <format>
 #include <limits>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace pistoris {
+namespace {
+
+char lowerAscii(char value) noexcept {
+  return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
+}
+
+template <std::size_t N>
+bool canonicalizeFixedPath(char (&value)[N], bool stem) {
+  if (!isNullTerminated(value)) return false;
+  std::string normalized;
+  const bool valid =
+      stem ? normalizeNativeResourceStem(value, normalized) : normalizeNativeResourcePath(value, normalized);
+  if (!valid || normalized.size() >= N) return false;
+  std::memset(value, 0, N);
+  std::memcpy(value, normalized.data(), normalized.size());
+  return true;
+}
+
+template <std::size_t N>
+void lowercaseFixed(char (&value)[N]) noexcept {
+  for (std::size_t index = 0; index < N && value[index] != '\0'; ++index) value[index] = lowerAscii(value[index]);
+}
+
+template <std::size_t N>
+bool isCanonicalFixedPath(const char (&value)[N], bool stem) {
+  if (!isNullTerminated(value)) return false;
+  std::string normalized;
+  if (!normalizeNativeResourcePath(value, normalized) || normalized != value) return false;
+  if (!stem) return true;
+  std::string encoded;
+  return encodeNativeResourceStem(normalized, N, encoded);
+}
+
+template <std::size_t N>
+bool isLowercaseFixed(const char (&value)[N]) noexcept {
+  if (!isNullTerminated(value)) return false;
+  for (std::size_t index = 0; index < N && value[index] != '\0'; ++index)
+    if (lowerAscii(value[index]) != value[index]) return false;
+  return true;
+}
+
+template <std::size_t N>
+bool writeStem(char (&out)[N], const char (&source)[N]) {
+  std::string encoded;
+  if (!encodeNativeResourceStem(source, N, encoded)) return false;
+  std::memset(out, 0, N);
+  std::memcpy(out, encoded.data(), encoded.size());
+  return true;
+}
+
+}  // namespace
 
 static ArxReturnCode readVertices(ftl::Data* d, ReadCursor& c, std::int32_t n) {
   if (!tryResize(d->vertices, n)) return ARX_BAD_ALLOC;
@@ -66,7 +120,7 @@ static ArxReturnCode readGroups(ftl::Data* d, ReadCursor& c, std::int32_t n) {
   for (std::size_t index = 0; index < d->groups.size(); ++index) {
     ftl::Group& group = d->groups[index];
     c.read(group.name);
-    clampStr(group.name, "FTL: group.name", static_cast<int>(index));
+    canonicalizeFixedString(group.name, "FTL: group.name", static_cast<int>(index));
     c.read(group.origin);
     std::int32_t num_indices = 0;
     c.read(num_indices);
@@ -100,7 +154,7 @@ static ArxReturnCode readSelections(ftl::Data* d, ReadCursor& c, std::int32_t n)
   for (std::size_t index = 0; index < d->selections.size(); ++index) {
     ftl::Selection& selection = d->selections[index];
     c.read(selection.name);
-    clampStr(selection.name, "FTL: selection.name", static_cast<int>(index));
+    canonicalizeFixedString(selection.name, "FTL: selection.name", static_cast<int>(index));
     std::int32_t num_selected = 0;
     c.read(num_selected);
     if (!c) return ARX_UNEXPECTED_EOF;
@@ -168,7 +222,7 @@ ArxReturnCode loadFtl(ftl::Data* d, ReadCursor& c) {
 
   c.read(result.header);
   if (!c) return ARX_UNEXPECTED_EOF;
-  clampStr(result.header.name, "FTL: header.name");
+  canonicalizeFixedString(result.header.name, "FTL: header.name");
 
   if (!tryResize(result.texture_containers, num_textures)) return ARX_BAD_ALLOC;
   if (!tryResize(result.actions, num_actions)) return ARX_BAD_ALLOC;
@@ -177,13 +231,14 @@ ArxReturnCode loadFtl(ftl::Data* d, ReadCursor& c) {
   ARX_RETURN_IF_ERR(readFaces(&result, c, num_faces), c);
   ARX_RETURN_IF_ERR(c.readArray(result.texture_containers));
   for (std::size_t i = 0; i < result.texture_containers.size(); ++i)
-    clampStr(result.texture_containers[i].filename, "FTL: texture.filename", static_cast<int>(i));
+    canonicalizeFixedString(result.texture_containers[i].filename, "FTL: texture.filename", static_cast<int>(i));
   ARX_RETURN_IF_ERR(readGroups(&result, c, num_groups), c);
   ARX_RETURN_IF_ERR(c.readArray(result.actions));
   for (std::size_t i = 0; i < result.actions.size(); ++i)
-    clampStr(result.actions[i].name, "FTL: action.name", static_cast<int>(i));
+    canonicalizeFixedString(result.actions[i].name, "FTL: action.name", static_cast<int>(i));
   ARX_RETURN_IF_ERR(readSelections(&result, c, num_selections), c);
 
+  ARX_RETURN_IF_ERR(canonicalizeFtl(&result));
   ARX_RETURN_IF_ERR(validateFtl(&result));
 
   *d = std::move(result);
@@ -259,7 +314,7 @@ ArxReturnCode saveFtl(const ftl::Data* d, WriteCursor& c) {
       log(ARX_LOG_WARN,
           "FTL saving: texture[{}] path '{}' resolves outside Libertatis default loose roots; it may not be discovered",
           index,
-          path);
+          native_text::diagnostic(path));
     }
   }
 
@@ -288,12 +343,27 @@ ArxReturnCode saveFtl(const ftl::Data* d, WriteCursor& c) {
 
   writeVertices(d, c);
   writeFaces(d, c);
-  c.writeArray(d->texture_containers);
+  for (const ftl::TextureContainer& texture : d->texture_containers) {
+    ftl::TextureContainer encoded = texture;
+    if (!writeStem(encoded.filename, texture.filename)) return ARX_FTL_BAD_TEXTURE_PATH;
+    c.write(encoded);
+  }
   writeGroups(d, c);
   c.writeArray(d->actions);
   writeSelections(d, c);
 
   return c ? ARX_OK : ARX_BAD_ALLOC;
+}
+
+ArxReturnCode canonicalizeFtl(ftl::Data* d) {
+  if (!d) return ARX_INVALID_DATA_POINTER;
+  if (!canonicalizeFixedPath(d->header.name, false)) return ARX_FTL_BAD_SOURCE_PATH;
+  for (ftl::TextureContainer& texture : d->texture_containers)
+    if (!canonicalizeFixedPath(texture.filename, true)) return ARX_FTL_BAD_TEXTURE_PATH;
+  for (ftl::Group& group : d->groups) lowercaseFixed(group.name);
+  for (ftl::Action& action : d->actions) lowercaseFixed(action.name);
+  for (ftl::Selection& selection : d->selections) lowercaseFixed(selection.name);
+  return ARX_OK;
 }
 
 static ArxReturnCode validateFtlData(const ftl::Data* d) {
@@ -308,9 +378,9 @@ static ArxReturnCode validateFtlData(const ftl::Data* d) {
   if (d->groups.size() > kFtlMaxGroups) return ARX_FTL_BAD_GROUP_N;
   if (d->actions.size() > kFtlMaxActions) return ARX_FTL_BAD_ACTION_N;
   if (d->selections.size() > kFtlMaxSelections) return ARX_FTL_BAD_SEL_N;
-  if (!isNullTerminated(d->header.name)) return ARX_FTL_BAD_SOURCE_PATH;
+  if (!isCanonicalFixedPath(d->header.name, false)) return ARX_FTL_BAD_SOURCE_PATH;
   for (const ftl::TextureContainer& texture : d->texture_containers)
-    if (!isNullTerminated(texture.filename)) return ARX_FTL_BAD_TEXTURE_PATH;
+    if (!isCanonicalFixedPath(texture.filename, true)) return ARX_FTL_BAD_TEXTURE_PATH;
 
   if (static_cast<std::size_t>(d->header.origin) >= nv) return ARX_FTL_BAD_ORIGIN;
 
@@ -323,7 +393,7 @@ static ArxReturnCode validateFtlData(const ftl::Data* d) {
   }
 
   for (const auto& group : d->groups) {
-    if (!isNullTerminated(group.name)) return ARX_FTL_BAD_GROUP_NAME;
+    if (!isLowercaseFixed(group.name)) return ARX_FTL_BAD_GROUP_NAME;
     if (group.indices.size() > nv) return ARX_FTL_BAD_GROUP_IDX_N;
     if (static_cast<std::size_t>(group.origin) >= nv) return ARX_FTL_BAD_GROUP_ORIGIN;
     for (auto idx : group.indices) {
@@ -332,12 +402,12 @@ static ArxReturnCode validateFtlData(const ftl::Data* d) {
   }
 
   for (const auto& action : d->actions) {
-    if (!isNullTerminated(action.name)) return ARX_FTL_BAD_ACTION_NAME;
+    if (!isLowercaseFixed(action.name)) return ARX_FTL_BAD_ACTION_NAME;
     if (action.vertex_idx < 0 || static_cast<std::size_t>(action.vertex_idx) >= nv) return ARX_FTL_BAD_ACTION_VERT_IDX;
   }
 
   for (const auto& selection : d->selections) {
-    if (!isNullTerminated(selection.name)) return ARX_FTL_BAD_SELECTION_NAME;
+    if (!isLowercaseFixed(selection.name)) return ARX_FTL_BAD_SELECTION_NAME;
     if (selection.selected.empty() || selection.selected.size() > nv) return ARX_FTL_BAD_SEL_IDX_N;
     for (auto idx : selection.selected) {
       if (idx < 0 || static_cast<std::size_t>(idx) >= nv) return ARX_FTL_BAD_SEL_IDX;

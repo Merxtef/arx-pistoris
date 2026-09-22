@@ -83,9 +83,10 @@ data/arx/
 ```
 
 Readers and independent native roundtrips test every matching file that is
-present. Level bundle tests use only complete canonical FTS/DLF/LLF triplets;
-an incomplete optional game triplet is ignored. Separate readiness tests
-require at least one cataloged Level, Model, Animation, and Ambiance fixture.
+present, including CIN. Level bundle tests use only complete canonical
+FTS/DLF/LLF triplets; an incomplete optional game triplet is ignored. Separate
+readiness tests require at least one cataloged Level, Model, Animation, and
+Ambiance fixture.
 Loose sidecars are resolved relative to their primary format file. Missing
 sidecars are allowed for fixtures that do not test sidecar loading, while
 aggregate corpus checks require loading coverage for each resource type used
@@ -142,6 +143,10 @@ just fuzz amb
 just fuzz amb roundtrip
 just fuzz ambiance native
 just fuzz ambiance glb
+just fuzz cin
+just fuzz cin roundtrip
+just fuzz cinematic native
+just fuzz cinematic glb
 just fuzz obj
 just fuzz obj mtl
 just fuzz glb
@@ -162,22 +167,30 @@ just fuzz level glb
 
 Native parser targets accept arbitrary format bytes. Their `roundtrip`
 variants require every successfully parsed value to write and parse again;
-FTL, TEA, and AMB also require deterministic second writes. The `native`
-Model, Animation, and Ambiance targets continue from a parsed native format
-through its intermediate representation and validation.
+FTL, TEA, AMB, and CIN also require deterministic second writes. The `native`
+Model, Animation, Ambiance, and Cinematic targets continue from a parsed native
+format through its intermediate representation and validation.
 
-`model glb`, `level glb`, and `ambiance glb` preserve GLB container framing
-while fuzzing its JSON and binary payloads so mutations reach format-specific
-import logic. `glb` instead fuzzes the shared GLB container parser with raw
-bytes. `image` and `audio` exercise encoded-data validation and metadata
-inspection.
+`model glb`, `level glb`, `ambiance glb`, and `cinematic glb` preserve GLB
+container framing while fuzzing its JSON and binary payloads so mutations
+reach format-specific import logic. `glb` instead fuzzes the shared GLB
+container parser with raw bytes. `image` and `audio` exercise encoded-data
+validation and metadata inspection.
 
 CI and `just pre-release` replay each generated seed corpus once under the fuzz
 sanitizers. These bounded smoke tests complement, but do not replace, open-ended
 local fuzzing.
 
+Standard fuzz runs use a curated dictionary where stable parser tokens
+materially improve reach. Native-format dictionaries focus on binary
+identifiers and structural values. GLB projection dictionaries contain
+semantic authoring tokens; fixture-derived seeds provide complete structures.
+CMake configuration and standard `just fuzz` runs reject missing assigned
+dictionaries. Smoke tests ask libFuzzer to parse each assigned dictionary
+during seed replay.
+
 Use `just fuzz-mine` with the same arguments to enable value profiling and
-final statistics without a curated dictionary.
+final statistics without the curated dictionary.
 
 Persistent corpora are written below `fuzz-corpus/`. Crash, timeout, leak, and
 OOM artifacts are written below `fuzz-corpus/artifacts/`. Committed fixtures

@@ -7,6 +7,7 @@
 #include "pipeline/execution_context.h"
 #include "pipeline/options.h"
 #include "resources/level_image_io.h"
+#include "resources/sidecar_io.h"
 #include "resources/texture_io.h"
 #include "routes/descriptor.h"
 #include "routes/level/options.h"
@@ -46,8 +47,7 @@ struct Invocation final : RouteInvocation {
   OutputTarget output;
   TextureInput textures;
   TextureIoOptions texture_options;
-  bool rebase_textures = false;
-  std::string texture_rebase_directory;
+  ResolvedSidecarRebase texture_rebase;
   NativeOutput native_output;
   JsonOutput json_output;
   std::vector<std::unique_ptr<pistoris::Model>> model_previews;

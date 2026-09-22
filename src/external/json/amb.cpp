@@ -5,9 +5,11 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/text.hpp"
 
 #include "external/json.h"
 #include "external/json/native_common.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <cstdint>
@@ -68,7 +70,7 @@ bool parseKey(const Json& json, amb::Key& out) {
   return true;
 }
 
-ArxReturnCode importAmb(std::string_view text, amb::Data& out) {
+ArxReturnCode importAmb(std::string_view text, NativeTextMode text_mode, amb::Data& out) {
   Json root;
   ARX_RETURN_IF_ERR(json_detail::parse(text, root));
   if (!root.is_object() || !json_detail::validSchema(root, kAmbSchema)) return ARX_JSON_BAD_SCHEMA;
@@ -81,11 +83,12 @@ ArxReturnCode importAmb(std::string_view text, amb::Data& out) {
     const Json* flags = json_detail::member(json, "flags");
     const Json* keys = nullptr;
     amb::Track track;
-    if (!filename || !flags || !json_detail::getString(*filename, track.sample_path) ||
+    std::string sample_path;
+    if (!filename || !flags || !json_detail::getString(*filename, sample_path) ||
+        !native_text::encode(sample_path, text_mode, track.sample_path) ||
         !json_detail::getUnsigned(*flags, track.flags) || (track.flags & ~kJsonTrackFlagMask) != 0) {
       return ARX_JSON_BAD_SCHEMA;
     }
-    track.sample_path = json_detail::lowerSlashes(track.sample_path);
     ARX_RETURN_IF_ERR(json_detail::arrayMember(json, "keys", keys, UINT32_MAX));
     track.keys.reserve(keys->size());
     for (const Json& key_json : *keys) {
@@ -96,22 +99,25 @@ ArxReturnCode importAmb(std::string_view text, amb::Data& out) {
     out.tracks.push_back(std::move(track));
   }
 
-  canonicalizeAmb(out);
+  ARX_RETURN_IF_ERR(canonicalizeAmb(&out));
   return validateAmb(&out);
 }
 
 }  // namespace
 
-ArxReturnCode exportAmbToJson(const amb::Data& data, bool pretty, std::string& out) {
+ArxReturnCode exportAmbToJson(const amb::Data& data, bool pretty, NativeTextMode text_mode, std::string& out) {
   return json_detail::guarded("AMB export", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ARX_RETURN_IF_ERR(validateAmb(&data));
 
     Json root;
     root["$schema"] = kAmbSchema;
     root["tracks"] = Json::array();
     for (const amb::Track& track : data.tracks) {
+      std::string sample_path;
+      if (!native_text::decode(track.sample_path, text_mode, sample_path)) return ARX_AMB_BAD_SAMPLE_PATH;
       Json json;
-      json["filename"] = json_detail::lowerSlashes(track.sample_path);
+      json["filename"] = json_detail::lowerSlashes(sample_path);
       json["flags"] = track.flags & (amb::kTrackPosition | amb::kTrackMaster);
       json["keys"] = Json::array();
       for (const amb::Key& key : track.keys) {
@@ -135,11 +141,12 @@ ArxReturnCode exportAmbToJson(const amb::Data& data, bool pretty, std::string& o
   });
 }
 
-ArxReturnCode importJsonToAmb(std::string_view text, amb::Data* out) {
+ArxReturnCode importJsonToAmb(std::string_view text, NativeTextMode text_mode, amb::Data* out) {
   if (!out) return ARX_INVALID_DATA_POINTER;
-  return json_detail::guarded("AMB import", [&] {
+  return json_detail::guarded("AMB import", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     amb::Data temporary;
-    const ArxReturnCode rc = importAmb(text, temporary);
+    const ArxReturnCode rc = importAmb(text, text_mode, temporary);
     if (rc == ARX_OK) *out = std::move(temporary);
     return rc;
   });

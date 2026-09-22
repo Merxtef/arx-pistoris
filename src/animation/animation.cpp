@@ -10,6 +10,7 @@
 #include "arx_pistoris/paths/types.h"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.h"
+#include "arx_pistoris/sound.hpp"
 
 #include "animation/data.h"
 #include "animation/internal.h"
@@ -22,6 +23,7 @@
 #include "utils/math/rotation.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -42,8 +44,6 @@ ArxReturnCode validateCopyRange(std::size_t size, std::size_t offset, std::size_
   if (count != 0 && out == nullptr) return ARX_INVALID_DATA_POINTER;
   return ARX_OK;
 }
-
-ArxStringView borrowedString(const std::string& value) noexcept { return {value.data(), value.size()}; }
 
 ArxReturnCode resourceError(resource::Error error) noexcept {
   switch (error) {
@@ -79,6 +79,10 @@ ArxReturnCode soundErrorCode(sounds::Error error) noexcept {
       return ARX_ANIMATION_SOUND_TOO_LARGE;
     case sounds::Error::kDuplicatePath:
       return ARX_ANIMATION_DUPLICATE_SOUND_PATH;
+    case sounds::Error::kBadKind:
+    case sounds::Error::kBadLanguage:
+    case sounds::Error::kDuplicateEncoding:
+      return ARX_INTERNAL_ERROR;
     case sounds::Error::kBadIndex:
       return ARX_INDEX_OUT_OF_RANGE;
     case sounds::Error::kOutOfMemory:
@@ -93,6 +97,10 @@ namespace {
 
 bool validSoundView(const ArxSoundView& sound) noexcept {
   return (sound.path.data || sound.path.size == 0) && (sound.encoded_audio.data || sound.encoded_audio.size == 0);
+}
+
+ArxStringView borrowedString(std::string_view value) noexcept {
+  return {value.data(), value.size()};  // NOLINT(bugprone-suspicious-stringview-data-usage)
 }
 
 Sound internalSound(const ArxSoundView& source) {
@@ -120,7 +128,7 @@ ArxReturnCode prepareInput(const ArxAnimationKeyframeInput& input, AnimationKeyf
   keyframe.root_translation = input.keyframe.root_translation;
   keyframe.root_rotation = input.keyframe.root_rotation;
   keyframe.footstep = input.keyframe.footstep != 0;
-  keyframe.sound = input.keyframe.sound;
+  keyframe.sound = input.keyframe.sound == kNoSound ? kNoSoundHandle : sounds::effectHandle(input.keyframe.sound);
   transforms.reserve(transforms.size() + input.group_count);
   for (std::size_t index = 0; index < input.group_count; ++index)
     transforms.push_back(internalTransform(input.group_transforms[index]));
@@ -208,17 +216,20 @@ ArxReturnCode errorCode(animation::Error error) noexcept {
 ArxReturnCode validateStructure(const AnimationModules& modules) noexcept {
   ArxReturnCode rc = resourceError(resource::validate(modules.resource, ARX_RESOURCE_KIND_ANIMATION));
   if (rc != ARX_OK) return rc;
-  rc = soundErrorCode(sounds::validateStructure(modules.sounds.sounds));
+  rc = soundErrorCode(sounds::validateStructure(modules.sounds));
   if (rc != ARX_OK) return rc;
-  return errorCode(animation::validate(modules.animation, modules.sounds.sounds.size()));
+  return errorCode(animation::validate(modules.animation, sounds::count(modules.sounds, SoundKind::kEffect)));
 }
 
 ArxAnimationKeyframe publicKeyframe(const AnimationKeyframe& source) noexcept {
-  return {source.frame,
-          source.root_translation,
-          source.root_rotation,
-          static_cast<std::uint8_t>(source.footstep),
-          source.sound};
+  SoundIndex sound = kNoSound;
+  if (source.sound != kNoSoundHandle) {
+    const ArxReturnCode rc = soundHandleIndex(source.sound, sound);
+    assert(rc == ARX_OK);
+    (void)rc;
+  }
+  return {
+      source.frame, source.root_translation, source.root_rotation, static_cast<std::uint8_t>(source.footstep), sound};
 }
 
 ArxAnimationGroupTransform publicTransform(const AnimationGroupTransform& source) noexcept {
@@ -248,7 +259,7 @@ ArxReturnCode Animation::validate() const noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     ArxReturnCode rc = animation_detail::validateStructure(static_cast<const AnimationModules&>(*data_));
     if (rc != ARX_OK) return rc;
-    return animation_detail::soundErrorCode(sounds::validateAudio(data_->sounds.sounds));
+    return animation_detail::soundErrorCode(sounds::validateAudio(data_->sounds));
   });
 }
 
@@ -316,14 +327,16 @@ ArxReturnCode Animation::isGroupClaimed(std::size_t group, bool& out) const noex
 
 std::size_t Animation::keyframeCount() const noexcept { return data_->animation.keyframes.size(); }
 
-std::size_t Animation::soundCount() const noexcept { return data_->sounds.sounds.size(); }
+std::size_t Animation::soundCount() const noexcept { return sounds::count(data_->sounds, SoundKind::kEffect); }
 
 ArxReturnCode Animation::copySoundViews(std::size_t offset, std::size_t count, ArxSoundView* out_views) const noexcept {
-  const ArxReturnCode rc = validateCopyRange(data_->sounds.sounds.size(), offset, count, out_views);
+  const ArxReturnCode rc = validateCopyRange(soundCount(), offset, count, out_views);
   if (rc != ARX_OK) return rc;
   for (std::size_t index = 0; index < count; ++index) {
-    const Sound& source = data_->sounds.sounds[offset + index];
-    out_views[index] = {borrowedString(source.path), {source.encoded_audio.data(), source.encoded_audio.size()}};
+    const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(offset + index));
+    const std::string_view source_path = sounds::path(data_->sounds, handle);
+    const std::span<const std::uint8_t> source_audio = sounds::encodedAudio(data_->sounds, handle);
+    out_views[index] = {borrowedString(source_path), {source_audio.data(), source_audio.size()}};
   }
   return ARX_OK;
 }
@@ -364,7 +377,7 @@ ArxReturnCode Animation::setKeyframe(std::size_t index, const ArxAnimationKeyfra
     ArxReturnCode rc = prepareInput(input, replacement, transforms);
     if (rc != ARX_OK) return rc;
     rc = animation_detail::errorCode(
-        animation::validateKeyframeSet(data_->animation, index, replacement, transforms, data_->sounds.sounds.size()));
+        animation::validateKeyframeSet(data_->animation, index, replacement, transforms, soundCount()));
     if (rc != ARX_OK) return rc;
     const std::size_t first = index * data_->animation.group_count;
     updateSetCache(data_->group_state_cache,
@@ -386,7 +399,7 @@ ArxReturnCode Animation::addKeyframe(const ArxAnimationKeyframeInput& input, std
     std::vector<AnimationGroupTransform> transforms;
     rc = prepareInput(input, keyframe, transforms);
     if (rc != ARX_OK) return rc;
-    rc = animation_detail::errorCode(animation::validateKeyframe(keyframe, data_->sounds.sounds.size()));
+    rc = animation_detail::errorCode(animation::validateKeyframe(keyframe, soundCount()));
     if (rc != ARX_OK) return rc;
     for (const AnimationGroupTransform& transform : transforms) {
       rc = animation_detail::errorCode(animation::validateTransform(transform));
@@ -432,7 +445,7 @@ ArxReturnCode Animation::replaceKeyframes(std::uint32_t frame_length, const ArxA
       keyframes.push_back(keyframe);
     }
     rc = animation_detail::errorCode(
-        animation::validateTimeline(frame_length, groups, keyframes, transforms, data_->sounds.sounds.size()));
+        animation::validateTimeline(frame_length, groups, keyframes, transforms, soundCount()));
     if (rc != ARX_OK) return rc;
     animation::replaceKeyframes(data_->animation, frame_length, groups, std::move(keyframes), std::move(transforms));
     invalidateGroupStateCache(data_->group_state_cache);
@@ -467,26 +480,27 @@ ArxReturnCode Animation::voidGroup(std::size_t group) noexcept {
 ArxReturnCode Animation::compactSounds(std::size_t* removed) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (removed) *removed = 0;
-    std::vector<std::uint8_t> used(data_->sounds.sounds.size(), 0);
+    std::vector<std::uint8_t> used(soundCount(), 0);
     for (const AnimationKeyframe& keyframe : data_->animation.keyframes) {
-      if (keyframe.sound == kNoSound) continue;
-      if (keyframe.sound >= used.size()) return ARX_ANIMATION_BAD_KEYFRAME_SOUND;
-      used[keyframe.sound] = 1;
+      if (keyframe.sound == kNoSoundHandle) continue;
+      SoundIndex index = kNoSound;
+      if (soundHandleIndex(keyframe.sound, index) != ARX_OK || index >= used.size())
+        return ARX_ANIMATION_BAD_KEYFRAME_SOUND;
+      used[index] = 1;
     }
-    std::vector<SoundIndex> remap(used.size(), kNoSound);
-    SoundIndex next = 0;
-    for (std::size_t index = 0; index < used.size(); ++index)
-      if (used[index] != 0) remap[index] = next++;
-    std::size_t target = 0;
-    for (std::size_t source = 0; source < used.size(); ++source) {
-      if (used[source] == 0) continue;
-      if (source != target) data_->sounds.sounds[target] = std::move(data_->sounds.sounds[source]);
-      ++target;
+    std::vector<SoundIndex> remap;
+    std::size_t removed_count = 0;
+    const ArxReturnCode rc = animation_detail::soundErrorCode(
+        sounds::compact(data_->sounds, SoundKind::kEffect, used, remap, removed_count));
+    if (rc != ARX_OK) return rc;
+    for (AnimationKeyframe& keyframe : data_->animation.keyframes) {
+      if (keyframe.sound == kNoSoundHandle) continue;
+      SoundIndex index = kNoSound;
+      if (soundHandleIndex(keyframe.sound, index) != ARX_OK || index >= remap.size() || remap[index] == kNoSound)
+        return ARX_INTERNAL_ERROR;
+      keyframe.sound = sounds::effectHandle(remap[index]);
     }
-    data_->sounds.sounds.resize(target);
-    for (AnimationKeyframe& keyframe : data_->animation.keyframes)
-      if (keyframe.sound != kNoSound) keyframe.sound = remap[keyframe.sound];
-    if (removed) *removed = used.size() - target;
+    if (removed) *removed = removed_count;
     return ARX_OK;
   });
 }
@@ -505,7 +519,7 @@ ArxReturnCode Animation::rebaseSoundPaths(std::string_view directory) noexcept {
 ArxReturnCode Animation::setSound(SoundIndex index, const ArxSoundView& sound) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (!validSoundView(sound)) return ARX_INVALID_DATA_POINTER;
-    if (static_cast<std::size_t>(index) >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
+    if (static_cast<std::size_t>(index) >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
     Sound next = internalSound(sound);
     sounds::PathRepairInfo repairs;
     ArxReturnCode rc = animation_detail::soundErrorCode(sounds::repairPath(data_->sounds, next, index, &repairs));
@@ -523,7 +537,7 @@ ArxReturnCode Animation::addSound(const ArxSoundView& sound, SoundIndex& out_ind
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     out_index = kNoSound;
     if (!validSoundView(sound)) return ARX_INVALID_DATA_POINTER;
-    ArxReturnCode rc = animation_detail::soundErrorCode(sounds::validateSoundCount(data_->sounds.sounds.size() + 1U));
+    ArxReturnCode rc = animation_detail::soundErrorCode(sounds::validateSoundCount(soundCount() + 1U));
     if (rc != ARX_OK) return rc;
     Sound next = internalSound(sound);
     sounds::PathRepairInfo repairs;
@@ -541,7 +555,7 @@ ArxReturnCode Animation::addSound(const ArxSoundView& sound, SoundIndex& out_ind
 ArxReturnCode Animation::setSoundData(SoundIndex index, ArxEncodedAudioView encoded_audio) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (!encoded_audio.data && encoded_audio.size != 0) return ARX_INVALID_DATA_POINTER;
-    if (static_cast<std::size_t>(index) >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
+    if (static_cast<std::size_t>(index) >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
     std::vector<std::uint8_t> data;
     if (encoded_audio.size != 0) data.assign(encoded_audio.data, encoded_audio.data + encoded_audio.size);
     const ArxReturnCode rc = animation_detail::soundErrorCode(sounds::validateEncodedAudio(data));
@@ -552,19 +566,25 @@ ArxReturnCode Animation::setSoundData(SoundIndex index, ArxEncodedAudioView enco
 }
 
 ArxReturnCode Animation::clearSoundData(SoundIndex index) noexcept {
-  if (static_cast<std::size_t>(index) >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
+  if (static_cast<std::size_t>(index) >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
   sounds::clearEncodedAudio(data_->sounds, index);
   return ARX_OK;
 }
 
 ArxReturnCode Animation::removeSound(SoundIndex index) noexcept {
-  if (index >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
-  if (std::ranges::any_of(data_->animation.keyframes,
-                          [index](const AnimationKeyframe& keyframe) { return keyframe.sound == index; }))
+  if (index >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
+  const SoundHandle removed_handle = sounds::effectHandle(index);
+  if (std::ranges::any_of(data_->animation.keyframes, [removed_handle](const AnimationKeyframe& keyframe) {
+        return keyframe.sound == removed_handle;
+      }))
     return ARX_ANIMATION_SOUND_IN_USE;
   sounds::removeSound(data_->sounds, index);
-  for (AnimationKeyframe& keyframe : data_->animation.keyframes)
-    if (keyframe.sound != kNoSound && keyframe.sound > index) --keyframe.sound;
+  for (AnimationKeyframe& keyframe : data_->animation.keyframes) {
+    if (keyframe.sound == kNoSoundHandle) continue;
+    SoundIndex current = kNoSound;
+    if (soundHandleIndex(keyframe.sound, current) == ARX_OK && current > index)
+      keyframe.sound = sounds::effectHandle(current - 1U);
+  }
   return ARX_OK;
 }
 

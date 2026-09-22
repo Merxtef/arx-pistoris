@@ -2,9 +2,11 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/ambiance.hpp"
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/runtime/types.h"
+#include "arx_pistoris/sound.hpp"
 
 #include "ambiance/data.h"
 #include "api.h"
@@ -16,6 +18,7 @@
 #include "model/data.h"
 #include "modules/action_points.h"
 #include "modules/ambiance.h"
+#include "modules/sounds.h"
 #include "utils/log.h"
 
 #include <algorithm>
@@ -194,8 +197,11 @@ ArxReturnCode exportAmbianceToGlb(const AmbianceModules& modules, const Ambiance
 
   for (std::size_t track_index = 0; track_index < modules.ambiance.tracks.size(); ++track_index) {
     const AmbianceTrack& track = modules.ambiance.tracks[track_index];
-    if (track.sound >= modules.sounds.sounds.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
-    const std::string& sample_path = modules.sounds.sounds[track.sound].path;
+    SoundIndex sound = kNoSound;
+    if (!sounds::effectIndex(track.sound, sound) ||
+        static_cast<std::size_t>(sound) >= sounds::count(modules.sounds, SoundKind::kEffect))
+      return ARX_AMBIANCE_BAD_TRACK_SOUND;
+    const std::string_view sample_path = sounds::path(modules.sounds, track.sound);
     const int track_node =
         builder.addNode(std::format("TRACK_{:03}__{}__track_{}", track_index, sample_path, track_index));
     builder.addChild(root, track_node);

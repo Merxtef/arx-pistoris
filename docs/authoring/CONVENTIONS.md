@@ -53,6 +53,19 @@ The `arx_` prefix is reserved for documented semantic roots. Use ordinary names
 for organizational nodes. Put arbitrary DCC text in the final label component
 instead of changing semantic names.
 
+Where a naming contract ends in `__<label>`, the label is part of the canonical
+authoring form and must be nonempty. Import can recover a missing label when all
+preceding components have a fixed, self-delimiting grammar; it warns when doing
+so. Semantic option tokens take precedence over label recovery, including when
+the final token is malformed. References whose payload may contain `__` require
+their label because it is the only unambiguous end delimiter.
+
+Semantic option tokens are uppercase and case-sensitive. Use descriptive labels.
+A present label of at least four characters produces an informational notice
+when it contains an uppercase ASCII letter and otherwise consists only of
+uppercase ASCII letters, digits, `_`, and `.`; this catches labels that resemble
+options without changing their meaning.
+
 ## Materials and Face Flags
 
 Level GLB, Model GLB, and Model OBJ use material names for face flags and as a

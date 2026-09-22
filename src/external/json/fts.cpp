@@ -7,10 +7,12 @@
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 
 #include "external/json.h"
 #include "external/json/native_common.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <algorithm>
@@ -110,20 +112,22 @@ bool parsePolygon(const json_detail::Json& json, fts::Poly& out) {
   return true;
 }
 
-std::string textureJsonName(const fts::Texture& texture) {
-  std::string result = json_detail::lowerSlashes(json_detail::fixedString(texture.fic));
+bool textureJsonName(const fts::Texture& texture, NativeTextMode text_mode, std::string& result) {
+  std::string decoded;
+  if (!json_detail::decodeFixed(texture.fic, text_mode, decoded)) return false;
+  result = json_detail::lowerSlashes(decoded);
   constexpr std::string_view kPrefix = "graph/obj3d/textures/";
   if (result.starts_with(kPrefix)) result.erase(0, kPrefix.size());
-  return result;
+  return true;
 }
 
-bool texturePath(std::string_view json_name, fts::Texture& out) {
+bool texturePath(std::string_view json_name, NativeTextMode text_mode, fts::Texture& out) {
   std::string path = "graph\\obj3d\\textures\\";
   std::string normalized = json_detail::lowerSlashes(json_name);
   for (char& value : normalized)
     if (value == '/') value = '\\';
   path += normalized;
-  return json_detail::copyFixed(path, out.fic);
+  return json_detail::encodeFixed(path, text_mode, out.fic);
 }
 
 json_detail::Json portalJson(const fts::Portal& portal) {
@@ -184,7 +188,7 @@ bool parsePortal(const json_detail::Json& json, fts::Portal& out) {
   return true;
 }
 
-ArxReturnCode parseHeader(const json_detail::Json& root, fts::Data& out) {
+ArxReturnCode parseHeader(const json_detail::Json& root, NativeTextMode text_mode, fts::Data& out) {
   const json_detail::Json* header = json_detail::member(root, "header");
   const json_detail::Json* level_index = header ? json_detail::member(*header, "levelIdx") : nullptr;
   const json_detail::Json* scene_position = header ? json_detail::member(*header, "mScenePosition") : nullptr;
@@ -193,7 +197,7 @@ ArxReturnCode parseHeader(const json_detail::Json& root, fts::Data& out) {
       !json_detail::getVector(*scene_position, out.scene.Mscenepos)) {
     return ARX_JSON_BAD_SCHEMA;
   }
-  if (!json_detail::copyFixed(paths::levelFts(level), out.header.path)) return ARX_JSON_BAD_SCHEMA;
+  if (!json_detail::encodeFixed(paths::levelFts(level), text_mode, out.header.path)) return ARX_JSON_BAD_SCHEMA;
   out.header.version = kFtsVersion;
   out.scene.version = kFtsVersion;
   out.scene.sizex = kJsonGridSize;
@@ -201,7 +205,7 @@ ArxReturnCode parseHeader(const json_detail::Json& root, fts::Data& out) {
   return ARX_OK;
 }
 
-ArxReturnCode parseUniqueHeaders(const json_detail::Json& root, fts::Data& out) {
+ArxReturnCode parseUniqueHeaders(const json_detail::Json& root, NativeTextMode text_mode, fts::Data& out) {
   const json_detail::Json* headers = json_detail::member(root, "uniqueHeaders");
   if (!headers) return ARX_OK;
   if (!headers->is_array()) return ARX_JSON_BAD_SCHEMA;
@@ -213,7 +217,7 @@ ArxReturnCode parseUniqueHeaders(const json_detail::Json& root, fts::Data& out) 
     std::string path_value;
     fts::UniqueHeader3 header;
     if (!path || !check || !json_detail::getString(*path, path_value) ||
-        !json_detail::copyFixed(path_value, header.path) || !check->is_array() ||
+        !json_detail::encodeFixed(path_value, text_mode, header.path) || !check->is_array() ||
         check->size() != sizeof(header.check)) {
       return ARX_JSON_BAD_SCHEMA;
     }
@@ -228,7 +232,7 @@ ArxReturnCode parseUniqueHeaders(const json_detail::Json& root, fts::Data& out) 
   return ARX_OK;
 }
 
-ArxReturnCode parseTextures(const json_detail::Json& root, fts::Data& out) {
+ArxReturnCode parseTextures(const json_detail::Json& root, NativeTextMode text_mode, fts::Data& out) {
   const json_detail::Json* textures = nullptr;
   ARX_RETURN_IF_ERR(json_detail::arrayMember(root, "textureContainers", textures, kFtsMaxTextures));
   for (const json_detail::Json& json : *textures) {
@@ -238,7 +242,7 @@ ArxReturnCode parseTextures(const json_detail::Json& root, fts::Data& out) {
     std::string name;
     fts::Texture texture;
     if (!id || !filename || !json_detail::getSigned(*id, texture_id) || !json_detail::getString(*filename, name) ||
-        !texturePath(name, texture) || !out.textures.emplace(texture_id, texture).second) {
+        !texturePath(name, text_mode, texture) || !out.textures.emplace(texture_id, texture).second) {
       return ARX_JSON_BAD_SCHEMA;
     }
   }
@@ -497,13 +501,13 @@ ArxReturnCode placePolygons(std::vector<fts::Poly>& polygons, fts::Data& out) {
   return ARX_OK;
 }
 
-ArxReturnCode importFts(std::string_view text, fts::Data& out) {
+ArxReturnCode importFts(std::string_view text, NativeTextMode text_mode, fts::Data& out) {
   json_detail::Json root;
   ARX_RETURN_IF_ERR(json_detail::parse(text, root));
   if (!root.is_object() || !json_detail::validSchema(root, kFtsSchema)) return ARX_JSON_BAD_SCHEMA;
-  ARX_RETURN_IF_ERR(parseHeader(root, out));
-  ARX_RETURN_IF_ERR(parseUniqueHeaders(root, out));
-  ARX_RETURN_IF_ERR(parseTextures(root, out));
+  ARX_RETURN_IF_ERR(parseHeader(root, text_mode, out));
+  ARX_RETURN_IF_ERR(parseUniqueHeaders(root, text_mode, out));
+  ARX_RETURN_IF_ERR(parseTextures(root, text_mode, out));
   ARX_RETURN_IF_ERR(parseCellAnchors(root, out));
   std::vector<fts::Poly> polygons;
   ARX_RETURN_IF_ERR(parsePolygons(root, polygons));
@@ -512,17 +516,21 @@ ArxReturnCode importFts(std::string_view text, fts::Data& out) {
   ARX_RETURN_IF_ERR(parseRooms(root, out));
   ARX_RETURN_IF_ERR(parseRoomDistances(root, out));
   ARX_RETURN_IF_ERR(placePolygons(polygons, out));
+  ARX_RETURN_IF_ERR(canonicalizeFts(&out));
   return validateFts(&out);
 }
 
 }  // namespace
 
-ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, std::string& out) {
+ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, NativeTextMode text_mode, std::string& out) {
   return json_detail::guarded("FTS export", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ARX_RETURN_IF_ERR(validateFts(&data));
     if (data.scene.sizex != kJsonGridSize || data.scene.sizez != kJsonGridSize) return ARX_JSON_BAD_SCHEMA;
+    std::string decoded;
+    if (!json_detail::decodeFixed(data.header.path, text_mode, decoded)) return ARX_JSON_BAD_SCHEMA;
     std::uint32_t level = 0;
-    if (!paths::levelFromFts(json_detail::fixedString(data.header.path), level)) return ARX_JSON_BAD_SCHEMA;
+    if (!paths::levelFromFts(decoded, level)) return ARX_JSON_BAD_SCHEMA;
 
     json_detail::Json root;
     root["$schema"] = kFtsSchema;
@@ -533,10 +541,11 @@ ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, std::string& o
 
     root["uniqueHeaders"] = json_detail::Json::array();
     for (const fts::UniqueHeader3& header : data.unique_headers) {
+      if (!json_detail::decodeFixed(header.path, text_mode, decoded)) return ARX_JSON_BAD_SCHEMA;
       json_detail::Json check = json_detail::Json::array();
       for (char value : header.check) check.push_back(static_cast<std::uint8_t>(value));
       root["uniqueHeaders"].push_back({
-          {"path", json_detail::fixedString(header.path)},
+          {"path", decoded},
           {"check", std::move(check)},
       });
     }
@@ -548,7 +557,8 @@ ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, std::string& o
         textures.begin(), textures.end(), [](const auto& left, const auto& right) { return left.first < right.first; });
     root["textureContainers"] = json_detail::Json::array();
     for (const auto& [id, texture] : textures) {
-      root["textureContainers"].push_back({{"id", id}, {"filename", textureJsonName(*texture)}});
+      if (!textureJsonName(*texture, text_mode, decoded)) return ARX_FTS_BAD_TEXTURE_PATH;
+      root["textureContainers"].push_back({{"id", id}, {"filename", decoded}});
     }
 
     root["cells"] = json_detail::Json::array();
@@ -608,11 +618,12 @@ ArxReturnCode exportFtsToJson(const fts::Data& data, bool pretty, std::string& o
   });
 }
 
-ArxReturnCode importJsonToFts(std::string_view text, fts::Data* out) {
+ArxReturnCode importJsonToFts(std::string_view text, NativeTextMode text_mode, fts::Data* out) {
   if (!out) return ARX_INVALID_DATA_POINTER;
-  return json_detail::guarded("FTS import", [&] {
+  return json_detail::guarded("FTS import", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     fts::Data temporary;
-    ArxReturnCode rc = importFts(text, temporary);
+    ArxReturnCode rc = importFts(text, text_mode, temporary);
     if (rc == ARX_OK) *out = std::move(temporary);
     return rc;
   });

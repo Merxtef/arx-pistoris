@@ -35,6 +35,7 @@
 #include "routes/model/invocation.h"
 #include "routes/model/options/modules.h"
 #include "routes/model/state.h"
+#include "routes/native_text.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -68,7 +69,7 @@ bool writeAnimationFiles(std::span<const AnimationWriteEntry> animations, const 
     const NativeAnimationFile& animation = *output.file;
     if (json) {
       std::string text;
-      const ArxReturnCode rc = pistoris::toJson(animation.tea, text, invocation.format.pretty);
+      const ArxReturnCode rc = pistoris::toJson(animation.tea, text, invocation.format.pretty, animation.text_mode);
       if (rc != ARX_OK) {
         outputFailure("TEA JSON output", rc);
         success = false;
@@ -126,7 +127,7 @@ bool compactAnimationSounds(pistoris::Animation& animation) {
 }
 
 bool rebaseAnimationSounds(pistoris::Animation& animation, const Invocation& invocation) {
-  const ArxReturnCode rc = animation.rebaseSoundPaths(invocation.sound_rebase_directory);
+  const ArxReturnCode rc = animation.rebaseSoundPaths(invocation.sound_rebase.directory);
   return rc == ARX_OK || outputFailure("Animation sound rebasing", rc);
 }
 
@@ -206,8 +207,8 @@ bool prepareIntermediateTextures(IntermediateModel& source, const Invocation& in
   ArxReturnCode rc = source.model.compactTextures(&removed);
   if (rc != ARX_OK) return outputFailure("Model texture compaction", rc);
   if (removed != 0) log(ARX_LOG_INFO, "removed %zu unused Model texture(s)", removed);
-  if (invocation.rebase_textures) {
-    rc = source.model.rebaseTexturePaths(invocation.texture_rebase_directory);
+  if (invocation.texture_rebase.enabled) {
+    rc = source.model.rebaseTexturePaths(invocation.texture_rebase.directory);
     if (rc != ARX_OK) return outputFailure("Model texture rebasing", rc);
   }
   return true;
@@ -216,8 +217,10 @@ bool prepareIntermediateTextures(IntermediateModel& source, const Invocation& in
 bool bakeIntermediate(IntermediateModel& source, bool include_texture_files, bool include_sound_files,
                       const Invocation& invocation, NativeModelFiles& out,
                       std::vector<pistoris::NativeTextureFile>& texture_files) {
+  out.text_mode = carrierTextMode(invocation.output.format, invocation.native_text_mode);
   pistoris::NativeModelBundle bundle;
-  const pistoris::NativeTextureBakeOptions options{.include_files = include_texture_files};
+  const pistoris::NativeModelBakeOptions options{.include_texture_files = include_texture_files,
+                                                 .text_mode = out.text_mode};
   ArxReturnCode rc = source.model.bakeNativeBundle(options, bundle);
   if (rc != ARX_OK) return outputFailure("Model native output", rc);
   out.ftl = std::move(bundle.ftl);
@@ -231,12 +234,13 @@ bool bakeIntermediate(IntermediateModel& source, bool include_texture_files, boo
     }
     const pistoris::Animation& animation = *source.animations[output.source];
     pistoris::NativeAnimationBundle native;
-    rc = animation.bakeNativeBundle({.include_files = include_sound_files}, native);
+    rc = animation.bakeNativeBundle({.include_sound_files = include_sound_files, .text_mode = out.text_mode}, native);
     if (rc != ARX_OK) return outputFailure("Animation native output", rc);
     NativeAnimationFile file;
     file.tea = std::move(native.tea);
     file.resource_path = std::string(animation.resourcePath());
     file.sound_files = std::move(native.sound_files);
+    file.text_mode = out.text_mode;
     out.animations.push_back(std::move(file));
   }
   return true;
@@ -299,7 +303,7 @@ bool writeFtlFiles(const pistoris::Ftl& ftl, std::span<const AnimationWriteEntry
 void prepareNativeFtlOutput(const NativeModelFiles& files, const ExecutionContext& execution,
                             const Invocation& invocation, std::vector<pistoris::NativeTextureFile>& texture_files) {
   if (invocation.texture_options.export_files)
-    loadNativeTextureFiles(files.ftl, execution.io(), invocation.textures, texture_files);
+    loadNativeTextureFiles(files.ftl, files.text_mode, execution.io(), invocation.textures, texture_files);
 }
 
 void prepareNativeSoundOutput(std::span<AnimationWriteEntry> animations, const ExecutionContext& execution,
@@ -307,8 +311,11 @@ void prepareNativeSoundOutput(std::span<AnimationWriteEntry> animations, const E
   if (!invocation.sound_options.export_files) return;
   for (const AnimationWriteEntry& output : animations) {
     NativeAnimationFile& animation = *output.file;
-    loadNativeSoundFiles(
-        animation.tea, execution.io(), invocation.sound_inputs[animation.input], animation.sound_files);
+    loadNativeSoundFiles(animation.tea,
+                         animation.text_mode,
+                         execution.io(),
+                         invocation.sound_inputs[animation.input],
+                         animation.sound_files);
   }
 }
 
@@ -346,7 +353,7 @@ bool writeJsonNative(NativeModelFiles& files, const ExecutionContext& execution,
   prepareNativeFtlOutput(files, execution, invocation, texture_files);
   prepareNativeSoundOutput(animations, execution, invocation);
   std::string text;
-  const ArxReturnCode rc = pistoris::toJson(files.ftl, text, invocation.format.pretty);
+  const ArxReturnCode rc = pistoris::toJson(files.ftl, text, invocation.format.pretty, files.text_mode);
   if (rc != ARX_OK) return outputFailure("FTL JSON output", rc);
   ResourceOutputPlan resource_outputs;
   reserveNativeModelOutputs(resource_outputs, invocation, animations);
@@ -383,7 +390,7 @@ bool writeJsonIntermediate(IntermediateModel& source, const ExecutionContext& ex
   std::vector<AnimationWriteEntry> animations;
   if (!pairBakedAnimationOutputs(files, invocation, animations)) return false;
   std::string text;
-  const ArxReturnCode rc = pistoris::toJson(files.ftl, text, invocation.format.pretty);
+  const ArxReturnCode rc = pistoris::toJson(files.ftl, text, invocation.format.pretty, files.text_mode);
   if (rc != ARX_OK) return outputFailure("FTL JSON output", rc);
   ResourceOutputPlan resource_outputs;
   reserveNativeModelOutputs(resource_outputs, invocation, animations);

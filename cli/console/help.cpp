@@ -31,6 +31,7 @@ constexpr cli::Format kFormats[] = {
     cli::Format::kLlf,
     cli::Format::kTea,
     cli::Format::kAmb,
+    cli::Format::kCin,
     cli::Format::kObj,
     cli::Format::kJson,
     cli::Format::kGlb,
@@ -54,6 +55,8 @@ DomainPresentation routePresentation(cli::RouteKind kind) {
       return {"ANIMATION", "animation", {.color = cli::ConsoleColor::kMagenta, .bold = true}};
     case cli::RouteKind::kAmbiance:
       return {"AMBIANCE", "ambiance", {.color = cli::ConsoleColor::kYellow, .bold = true}};
+    case cli::RouteKind::kCinematic:
+      return {"CINEMATIC", "cinematic", {.color = cli::ConsoleColor::kCyan, .bold = true}};
     case cli::RouteKind::kUnknown:
       break;
   }
@@ -78,7 +81,7 @@ bool selectorStyle(std::string_view token, cli::ConsoleStyle& style) {
     return true;
   }
   if (token.starts_with("cinematic:")) {
-    style = {.color = cli::ConsoleColor::kCyan, .bold = true};
+    style = routePresentation(cli::RouteKind::kCinematic).style;
     return true;
   }
   return false;
@@ -96,6 +99,8 @@ cli::ConsoleStyle formatStyle(cli::Format format) {
       return {.color = cli::ConsoleColor::kMagenta};
     case cli::Format::kAmb:
       return {.color = cli::ConsoleColor::kYellow};
+    case cli::Format::kCin:
+      return {.color = cli::ConsoleColor::kCyan};
     case cli::Format::kObj:
     case cli::Format::kJson:
     case cli::Format::kGlb:
@@ -379,10 +384,8 @@ void printCliSelectors(const HelpPrinter& printer) {
   animation.keyword = "anim";
   printer.topic(animation, ":<npc|fix_inter>:<name>", "One Animation resource.", kDescriptionColumn);
   printer.topic(routePresentation(cli::RouteKind::kAmbiance), ":<name>", "One Ambiance resource.", kDescriptionColumn);
-  printer.topic({"CINEMATIC", "cinematic", {.color = cli::ConsoleColor::kCyan, .bold = true}},
-                ":<name>",
-                "One Cinematic resource; Cinematic conversion is not available yet.",
-                kDescriptionColumn);
+  printer.topic(
+      routePresentation(cli::RouteKind::kCinematic), ":<name>", "One Cinematic resource.", kDescriptionColumn);
   printModelTypes(printer);
   printer.blank();
   printer.wrapped(

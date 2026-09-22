@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "console/help_request.h"
@@ -52,6 +53,7 @@ struct ParsedOptions {
   std::vector<std::string> read_mounts;
   std::string write_mount;
   bool auto_mount = false;
+  pistoris::NativeTextMode native_text_mode = pistoris::NativeTextMode::kAuto;
   bool version = false;
 
   SharedConversionOptions conversion;

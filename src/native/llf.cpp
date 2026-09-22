@@ -146,7 +146,9 @@ ArxReturnCode saveLlf(const llf::Data* data, std::string_view signer, WriteCurso
   log(ARX_LOG_INFO, "LLF saving: {} lights, {} colors", data->lights.size(), data->colors.size());
 
   NativeHeader header;
-  const NativeWriteMetadata metadata = nativeWriteMetadata(signer);
+  NativeWriteMetadata metadata;
+  rc = nativeWriteMetadata(signer, metadata);
+  if (rc != ARX_OK) return rc;
   header.version = data->version;
   std::memcpy(header.lastuser, metadata.last_user.data(), metadata.last_user.size());
   header.time = metadata.modified_at;

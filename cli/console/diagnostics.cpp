@@ -150,6 +150,14 @@ const char* diagnosticCodeName(DiagnosticCode code) noexcept {
       return "CLI_AMBIANCE_UNSUPPORTED_INPUT";
     case DiagnosticCode::kAmbianceUnsupportedOutput:
       return "CLI_AMBIANCE_UNSUPPORTED_OUTPUT";
+    case DiagnosticCode::kCinematicInputFailed:
+      return "CLI_CINEMATIC_INPUT_FAILED";
+    case DiagnosticCode::kCinematicOutputFailed:
+      return "CLI_CINEMATIC_OUTPUT_FAILED";
+    case DiagnosticCode::kCinematicUnsupportedInput:
+      return "CLI_CINEMATIC_UNSUPPORTED_INPUT";
+    case DiagnosticCode::kCinematicUnsupportedOutput:
+      return "CLI_CINEMATIC_UNSUPPORTED_OUTPUT";
     case DiagnosticCode::kUnhandledException:
       return "CLI_UNHANDLED_EXCEPTION";
   }

@@ -20,7 +20,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
   ArxModel* raw_model = nullptr;
   ArxTextureSourcePaths* raw_sources = nullptr;
-  const ArxReturnCode rc = arx_pistoris_model_import_native(native.get(), &raw_model, &raw_sources);
+  const ArxReturnCode rc =
+      arx_pistoris_model_import_native(native.get(), &raw_model, &raw_sources, ARX_NATIVE_TEXT_AUTO);
   arx_fuzz::ModelHandle model(raw_model);
   arx_fuzz::TextureSourcePathsHandle sources(raw_sources);
   if (rc != ARX_OK) {

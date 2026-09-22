@@ -8,6 +8,7 @@
 
 #include "coordinates.h"
 #include "external/glb/node_graph.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
 #include "external/glb/utils/transform.h"
 #include "external/glb/writer.h"
@@ -44,10 +45,12 @@ ArxReturnCode importPlayerSpawn(const cgltf_data& data, const std::vector<math::
     const cgltf_node& node = data.nodes[i];
     const std::string_view name = node.name != nullptr ? node.name : "";
     log(ARX_LOG_DEBUG, "GLB -> Level: importing player spawn node {}", i);
-    if (!isPlayerSpawnRootName(name)) {
+    glb::ParsedLabel label;
+    if (!isPlayerSpawnRootName(name, &label)) {
       log(ARX_LOG_DEBUG, "GLB -> Level object failure: player spawn node {} has malformed name '{}'", i, name);
       return ARX_GLB_BAD_LEVEL_PLAYER_SPAWN;
     }
+    glb::reportConventionLabel("GLB -> Level player spawn", name, label);
     if (!glb::simpleEmptyNode(node)) {
       log(ARX_LOG_DEBUG, "GLB -> Level object failure: player spawn node {} must be empty", i);
       return ARX_GLB_BAD_LEVEL_PLAYER_SPAWN;

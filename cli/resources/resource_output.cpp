@@ -45,6 +45,8 @@ const char* assetName(ResourceAssetKind kind) noexcept {
       return "Ambiance";
     case ResourceAssetKind::kAnimation:
       return "Animation";
+    case ResourceAssetKind::kCinematic:
+      return "Cinematic";
     case ResourceAssetKind::kLevel:
       return "Level";
     case ResourceAssetKind::kModel:

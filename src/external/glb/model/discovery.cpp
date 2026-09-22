@@ -8,10 +8,11 @@
 #include "cgltf/cgltf.h"
 #include "external/glb/model/internal.h"
 #include "external/glb/node_graph.h"
-#include "utils/name_tokens.h"
+#include "external/glb/utils/names.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -42,13 +43,21 @@ ArxReturnCode discoverModel(const cgltf_data& data, const glb::NodeGraph& graph,
       if (name.starts_with(kBonePrefix)) result.bone_helpers.push_back(node);
       if (name.starts_with(kAnimationPrefix)) result.animation_helpers.push_back(node);
     }
-    if (terminal_ancestor[node] != 0 || source.name == nullptr ||
-        !std::string_view(source.name).starts_with(kOriginPrefix))
-      continue;
-    const std::string_view label = std::string_view(source.name).substr(kOriginPrefix.size());
-    if (result.root != glb::kInvalidNodeIndex || label.empty() || hasDoubleUnderscore(label))
+    if (terminal_ancestor[node] != 0 || source.name == nullptr) continue;
+    const std::string_view name(source.name);
+    if (name != kOriginName && !name.starts_with(kOriginPrefix)) continue;
+    bool origin = false;
+    glb::ParsedLabel label;
+    if (result.root != glb::kInvalidNodeIndex ||
+        !glb::parseRecoverableLabel(
+            name, origin, &label, {}, [](std::span<const std::string_view> tokens, bool& parsed) {
+              if (tokens.size() != 1 || tokens.front() != kOriginName) return false;
+              parsed = true;
+              return true;
+            }))
       return ARX_GLB_BAD_MODEL_HIERARCHY;
     result.root = node;
+    result.root_label = label;
   }
 
   result.active.assign(data.nodes_count, 0);

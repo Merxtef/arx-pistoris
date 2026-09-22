@@ -27,4 +27,40 @@ TEST_SUITE("GLB writer") {
     REQUIRE(asset.data()->nodes[0].name != nullptr);
     CHECK(std::string(asset.data()->nodes[0].name) == name);
   }
+
+  TEST_CASE("Writes perspective cameras attached to nodes") {
+    pistoris::glb::Builder builder;
+    const int node = builder.addNode("view");
+    const int camera = builder.addPerspectiveCamera(
+        "camera", {.vertical_fov = 0.8f, .aspect_ratio = 4.0f / 3.0f, .znear = 0.01f, .zfar = {}});
+    builder.setNodeCamera(node, camera);
+    builder.addRoot(node);
+
+    std::vector<std::uint8_t> encoded;
+    REQUIRE(builder.write(encoded) == ARX_OK);
+    pistoris::glb::Asset asset;
+    REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
+    REQUIRE(asset.data()->cameras_count == 1);
+    REQUIRE(asset.data()->nodes_count == 1);
+    const auto& perspective = asset.data()->cameras[0].data.perspective;
+    CHECK(asset.data()->nodes[0].camera == &asset.data()->cameras[0]);
+    CHECK(asset.data()->cameras[0].type == cgltf_camera_type_perspective);
+    CHECK(perspective.has_aspect_ratio);
+    CHECK(perspective.aspect_ratio == doctest::Approx(4.0f / 3.0f));
+    CHECK(perspective.yfov == doctest::Approx(0.8f));
+    CHECK(perspective.znear == doctest::Approx(0.01f));
+    CHECK_FALSE(perspective.has_zfar);
+  }
+
+  TEST_CASE("Rejects invalid perspective camera options") {
+    pistoris::glb::Builder builder;
+    const int node = builder.addNode("view");
+    builder.setNodeCamera(
+        node,
+        builder.addPerspectiveCamera("camera",
+                                     {.vertical_fov = 0.0f, .aspect_ratio = 4.0f / 3.0f, .znear = 0.01f, .zfar = {}}));
+    builder.addRoot(node);
+    std::vector<std::uint8_t> encoded;
+    CHECK(builder.write(encoded) == ARX_GLB_BAD_FORMAT);
+  }
 }

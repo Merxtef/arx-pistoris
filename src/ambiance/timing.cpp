@@ -5,6 +5,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/runtime/types.h"
+#include "arx_pistoris/sound.hpp"
 
 #include "ambiance/data.h"
 #include "ambiance/internal.h"
@@ -14,6 +15,8 @@
 #include "utils/log.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <span>
 #include <vector>
 
 namespace pistoris {
@@ -25,18 +28,20 @@ struct SoundDurationEntry {
   long double milliseconds = 0.0L;
 };
 
-ArxReturnCode soundDuration(const AmbianceModules& modules, SoundIndex sound, std::vector<SoundDurationEntry>& cache,
+ArxReturnCode soundDuration(const AmbianceModules& modules, SoundHandle handle, std::vector<SoundDurationEntry>& cache,
                             long double& out) noexcept {
-  if (static_cast<std::size_t>(sound) >= modules.sounds.sounds.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
+  SoundIndex sound = kNoSound;
+  if (!sounds::effectIndex(handle, sound) || static_cast<std::size_t>(sound) >= cache.size())
+    return ARX_AMBIANCE_BAD_TRACK_SOUND;
   SoundDurationEntry& entry = cache[sound];
   if (!entry.queried) {
     entry.queried = true;
-    const Sound& source = modules.sounds.sounds[sound];
-    if (source.encoded_audio.empty()) {
+    const std::span<const std::uint8_t> encoded_audio = sounds::encodedAudio(modules.sounds, handle);
+    if (encoded_audio.empty()) {
       entry.status = ARX_AMBIANCE_SOUND_DATA_REQUIRED;
     } else {
       sounds::AudioInfo info;
-      entry.status = ambiance_detail::soundErrorCode(sounds::inspectEncodedAudio(source.encoded_audio, info));
+      entry.status = ambiance_detail::soundErrorCode(sounds::inspectEncodedAudio(encoded_audio, info));
       if (entry.status == ARX_OK)
         entry.milliseconds = static_cast<long double>(info.frame_count) * 1000.0L / info.sample_rate;
     }
@@ -52,7 +57,7 @@ namespace ambiance_detail {
 void warnAboutMasterTiming(const AmbianceModules& modules) noexcept {
   if (log_fn == nullptr || modules.ambiance.tracks.size() <= 1U) return;
   try {
-    std::vector<SoundDurationEntry> cache(modules.sounds.sounds.size());
+    std::vector<SoundDurationEntry> cache(sounds::count(modules.sounds, SoundKind::kEffect));
     const AmbianceTrack& master = modules.ambiance.tracks[modules.ambiance.master_track];
     long double master_sample_ms = 0.0L;
     if (soundDuration(modules, master.sound, cache, master_sample_ms) != ARX_OK) return;
@@ -69,7 +74,7 @@ void warnAboutMasterTiming(const AmbianceModules& modules) noexcept {
           "Ambiance -> AMB: track {} sound '{}' maximum nominal duration {:.3f} s exceeds master track {} minimum "
           "{:.3f} s",
           index,
-          modules.sounds.sounds[track.sound].path,
+          sounds::path(modules.sounds, track.sound),
           static_cast<double>(bounds.maximum_ms / 1000.0L),
           modules.ambiance.master_track,
           static_cast<double>(master_bounds.minimum_ms / 1000.0L));
@@ -89,7 +94,7 @@ ArxReturnCode Ambiance::trimTracksToMaster(std::size_t* trimmed_tracks) noexcept
     if (rc != ARX_OK) return rc;
     if (modules.ambiance.tracks.size() <= 1U) return ARX_OK;
 
-    std::vector<SoundDurationEntry> cache(modules.sounds.sounds.size());
+    std::vector<SoundDurationEntry> cache(sounds::count(modules.sounds, SoundKind::kEffect));
     const AmbianceTrack& master = modules.ambiance.tracks[modules.ambiance.master_track];
     long double master_sample_ms = 0.0L;
     rc = soundDuration(modules, master.sound, cache, master_sample_ms);

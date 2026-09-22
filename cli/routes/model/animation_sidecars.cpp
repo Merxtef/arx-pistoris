@@ -15,6 +15,7 @@
 #include "console/diagnostics.h"
 #include "console/logging.h"
 #include "formats/format.h"
+#include "io/native_text.h"
 #include "resources/animation_output.h"
 #include "resources/layout.h"
 #include "resources/selector.h"
@@ -23,6 +24,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <string>
@@ -82,8 +84,21 @@ bool buildIdentities(const ModelInput& input, std::vector<AnimationOutputIdentit
   identities.clear();
   if (const NativeModelFiles* native = std::get_if<NativeModelFiles>(&input)) {
     identities.reserve(native->animations.size());
-    for (const NativeAnimationFile& animation : native->animations)
-      identities.push_back(nativeAnimationOutputIdentity(animation.tea, animation.resource_path));
+    for (const NativeAnimationFile& animation : native->animations) {
+      const void* terminator = std::memchr(animation.tea.name, '\0', sizeof(animation.tea.name));
+      const std::size_t size =
+          terminator ? static_cast<const char*>(terminator) - animation.tea.name : sizeof(animation.tea.name);
+      std::string name;
+      const ArxReturnCode rc = io_detail::nativeTextToUtf8({animation.tea.name, size}, animation.text_mode, name);
+      if (rc != ARX_OK) {
+        diagnostic(DiagnosticCode::kModelOutputFailed,
+                   "Native Animation name cannot be decoded: %s (code %d)",
+                   pistoris::errorString(rc),
+                   static_cast<int>(rc));
+        return false;
+      }
+      identities.push_back({std::move(name), animation.resource_path});
+    }
     return true;
   }
 
@@ -95,7 +110,7 @@ bool buildIdentities(const ModelInput& input, std::vector<AnimationOutputIdentit
       diagnostic(DiagnosticCode::kModelOutputFailed, "Model contains a null Animation sidecar");
       return false;
     }
-    identities.push_back({animation->name(), animation->resourcePath()});
+    identities.push_back({std::string(animation->name()), std::string(animation->resourcePath())});
   }
   return true;
 }

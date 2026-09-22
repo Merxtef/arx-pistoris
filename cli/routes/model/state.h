@@ -8,6 +8,7 @@
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/tea.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/sound.hpp"
 #include "arx_pistoris/texture.hpp"
 
@@ -25,6 +26,7 @@ struct NativeAnimationFile {
   std::string resource_path;
   std::vector<pistoris::SoundFile> sound_files;
   std::size_t input = 0;
+  pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 
 struct NativeModelFiles {
@@ -32,6 +34,7 @@ struct NativeModelFiles {
   std::vector<std::uint8_t> inventory_icon;
   ArxImageFormat inventory_icon_format = ARX_IMAGE_FORMAT_UNKNOWN;
   std::vector<NativeAnimationFile> animations;
+  pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 
 struct AnimationSource {

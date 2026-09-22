@@ -11,7 +11,7 @@
 
 namespace pistoris {
 
-struct AmbianceModules {
+struct AmbianceModules {  // NOLINT(bugprone-exception-escape): MSVC debug STL container move
   ResourceData resource;
   SoundsData sounds;
   AmbianceData ambiance;

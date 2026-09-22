@@ -45,28 +45,18 @@ std::string nodeName(const Zone& zone, std::size_t ordinal) {
   return std::format("arx_zone__{:03}__{}", ordinal, zone.name);
 }
 
-ArxReturnCode parseSettings(std::string_view payload, Settings& out) {
-  if (payload.empty()) return ARX_GLB_BAD_LEVEL_ZONE;
+ArxReturnCode parseSettings(std::span<const std::string_view> settings, Settings& out) {
+  if (settings.empty()) return ARX_GLB_BAD_LEVEL_ZONE;
   bool color_seen = false;
   bool farclip_seen = false;
   bool volume_seen = false;
-  std::vector<std::string_view> tokens;
-  splitDoubleUnderscore(payload, tokens);
-  for (std::string_view setting : tokens) {
+  for (std::string_view setting : settings) {
     if (setting.empty()) return ARX_GLB_BAD_LEVEL_ZONE;
     if (setting.starts_with("RGB_")) {
       if (color_seen) return ARX_GLB_BAD_LEVEL_ZONE;
       const std::string_view values = setting.substr(4);
-      const std::size_t first = values.find('_');
-      const std::size_t second = first == std::string_view::npos ? first : values.find('_', first + 1);
-      if (first == std::string_view::npos || second == std::string_view::npos ||
-          values.find('_', second + 1) != std::string_view::npos)
-        return ARX_GLB_BAD_LEVEL_ZONE;
       ArxColor3 color{};
-      if (!parseFloatToken(values.substr(0, first), color.r) ||
-          !parseFloatToken(values.substr(first + 1, second - first - 1), color.g) ||
-          !parseFloatToken(values.substr(second + 1), color.b))
-        return ARX_GLB_BAD_LEVEL_ZONE;
+      if (!glb::parseColor3Token(values, color)) return ARX_GLB_BAD_LEVEL_ZONE;
       out.color = color;
       color_seen = true;
     } else if (setting.starts_with("FARCLIP_")) {
@@ -92,9 +82,7 @@ std::string settingsHelperName(const Settings& settings, std::string_view label)
   std::vector<std::string> storage;
   std::vector<std::string_view> tokens = {"SETTINGS"};
   const auto& color = settings.color;
-  if (color)
-    storage.push_back(std::format(
-        "RGB_{}_{}_{}", formatFloatToken(color->r), formatFloatToken(color->g), formatFloatToken(color->b)));
+  if (color) storage.push_back("RGB_" + glb::formatColor3Token(*color));
   const auto& farclip = settings.farclip;
   if (farclip) storage.push_back("FARCLIP_" + formatFloatToken(*farclip));
   const auto& volume = settings.volume;

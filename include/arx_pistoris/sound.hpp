@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/status.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,10 +13,15 @@
 
 namespace pistoris {
 
-struct NativeSoundBakeOptions {
-  // Include encoded sidecars in output bundle
-  bool include_files = true;
+enum class SoundKind : std::uint8_t {
+  kEffect,
+  kSpeech,
 };
+
+// SoundHandle invalidates together with SoundIndex
+[[nodiscard]] ArxReturnCode soundHandle(SoundKind kind, SoundIndex index, SoundHandle& out) noexcept;
+[[nodiscard]] ArxReturnCode soundHandleKind(SoundHandle handle, SoundKind& out) noexcept;
+[[nodiscard]] ArxReturnCode soundHandleIndex(SoundHandle handle, SoundIndex& out) noexcept;
 
 struct SoundFile {
   SoundIndex source_sound = kNoSound;

@@ -13,6 +13,7 @@
 #include "external/glb/level/coordinates.h"
 #include "external/glb/primitive_indices.h"
 #include "external/glb/utils/image.h"
+#include "external/glb/utils/texture.h"
 #include "external/glb/writer.h"
 #include "modules/minimap.h"
 #include "utils/encoded_image.h"
@@ -108,11 +109,12 @@ MinimapImportError embeddedBaseColorImage(const cgltf_material* material, const 
   if (material == nullptr || !material->has_pbr_metallic_roughness || material->extensions_count != 0)
     return MinimapImportError::kBadData;
   const cgltf_texture_view& view = material->pbr_metallic_roughness.base_color_texture;
-  if (view.texture == nullptr || view.texture->image == nullptr || view.has_transform || view.texcoord != 0 ||
-      view.texture->extensions_count != 0 || view.texture->image->extensions_count != 0) {
+  glb::TextureBinding binding;
+  if (glb::decodeTextureBinding(view, binding) != glb::TextureBindingError::kNone || binding.image == nullptr ||
+      binding.transformed || binding.texcoord != 0) {
     return MinimapImportError::kBadData;
   }
-  out = view.texture->image;
+  out = binding.image;
   return MinimapImportError::kNone;
 }
 

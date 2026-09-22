@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/math.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/tea.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.hpp"
@@ -20,9 +21,9 @@
 #include "utils/identifier.h"
 #include "utils/log.h"
 #include "utils/math/quat.h"
+#include "utils/native_text.h"
 #include "utils/resource_path.h"
 
-#include <algorithm>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
@@ -79,12 +80,6 @@ std::string normalizedName(std::string_view source) {
   return result;
 }
 
-void copyFixed(char* out, std::size_t capacity, std::string_view value) {
-  const std::size_t count = std::min(value.size(), capacity - 1U);
-  if (count != 0) std::memcpy(out, value.data(), count);
-  out[count] = '\0';
-}
-
 std::string wavPath(std::string_view source) {
   std::string result(source);
   normalizeResourcePathIdentity(result);
@@ -134,38 +129,43 @@ std::size_t nativeGroupCount(const AnimationData& animation) noexcept {
 
 ArxReturnCode projectNativeSounds(const AnimationModules& modules, bool include_files,
                                   std::vector<std::string>& projected_paths, std::vector<SoundFile>& files) {
-  std::vector<std::uint8_t> used(modules.sounds.sounds.size(), 0);
+  const std::size_t sound_count = sounds::count(modules.sounds, SoundKind::kEffect);
+  std::vector<std::uint8_t> used(sound_count, 0);
   for (const AnimationKeyframe& keyframe : modules.animation.keyframes) {
-    if (keyframe.sound == kNoSound) continue;
-    if (keyframe.sound >= used.size()) return ARX_ANIMATION_BAD_KEYFRAME_SOUND;
-    used[keyframe.sound] = 1;
+    if (keyframe.sound == kNoSoundHandle) continue;
+    SoundIndex sound = kNoSound;
+    if (!sounds::effectIndex(keyframe.sound, sound) || sound >= used.size()) return ARX_ANIMATION_BAD_KEYFRAME_SOUND;
+    used[sound] = 1;
   }
 
-  projected_paths.resize(modules.sounds.sounds.size());
+  projected_paths.resize(sound_count);
   ResourcePathUniquifier uniquifier;
-  uniquifier.reserve(modules.sounds.sounds.size());
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
+  uniquifier.reserve(sound_count);
+  for (std::size_t index = 0; index < sound_count; ++index) {
     if (used[index] == 0) continue;
-    const Sound& sound = modules.sounds.sounds[index];
-    if (!sound.path.ends_with(".wav")) continue;
-    projected_paths[index] = nativeSoundPath(sound.path);
+    const std::string_view path = sounds::path(modules.sounds, sounds::effectHandle(static_cast<SoundIndex>(index)));
+    if (!path.ends_with(".wav")) continue;
+    projected_paths[index] = nativeSoundPath(path);
     uniquifier.add(projected_paths[index]);
   }
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
+  for (std::size_t index = 0; index < sound_count; ++index) {
     if (used[index] == 0) continue;
     if (!projected_paths[index].empty()) continue;
-    projected_paths[index] = nativeSoundPath(modules.sounds.sounds[index].path);
+    projected_paths[index] =
+        nativeSoundPath(sounds::path(modules.sounds, sounds::effectHandle(static_cast<SoundIndex>(index))));
     uniquifier.add(projected_paths[index]);
   }
   if (uniquifier.apply() != ResourcePathError::kNone) return ARX_ANIMATION_BAD_SOUND_PATH;
 
   std::vector<sounds::AudioPreparationRequest> requests;
-  std::vector<std::size_t> preparation(modules.sounds.sounds.size(), std::numeric_limits<std::size_t>::max());
-  requests.reserve(modules.sounds.sounds.size());
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
-    if (used[index] == 0 || modules.sounds.sounds[index].encoded_audio.empty()) continue;
+  std::vector<std::size_t> preparation(sound_count, std::numeric_limits<std::size_t>::max());
+  requests.reserve(sound_count);
+  for (std::size_t index = 0; index < sound_count; ++index) {
+    const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(index));
+    if (used[index] == 0 || sounds::encodedAudio(modules.sounds, handle).empty()) continue;
     preparation[index] = requests.size();
-    requests.push_back({static_cast<SoundIndex>(index),
+    requests.push_back({handle,
+                        kSoundEffects,
                         {sounds::audioFormatFlag(sounds::AudioFormat::kWav),
                          sounds::AudioFormat::kWav,
                          sounds::ChannelMode::kPreserve,
@@ -176,7 +176,7 @@ ArxReturnCode projectNativeSounds(const AnimationModules& modules, bool include_
   if (rc != ARX_OK) return rc;
   if (include_files) files.reserve(requests.size());
 
-  for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
+  for (std::size_t index = 0; index < sound_count; ++index) {
     if (used[index] == 0) continue;
     const std::size_t prepared_index = preparation[index];
     if (!include_files || prepared_index == std::numeric_limits<std::size_t>::max()) continue;
@@ -195,14 +195,20 @@ ArxReturnCode projectNativeSounds(const AnimationModules& modules, bool include_
 }  // namespace
 
 ArxReturnCode Animation::importNative(Animation& out, const tea::Data& native,
-                                      std::vector<SoundSourceReference>* sound_sources) noexcept {
+                                      std::vector<SoundSourceReference>* sound_sources,
+                                      NativeTextMode text_mode) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ArxReturnCode rc = validateTea(&native);
     if (rc != ARX_OK) return rc;
 
     Animation result;
+    std::vector<Sound> imported_sounds;
+    imported_sounds.reserve(native.keyframes.size());
     AnimationData& target = result.data_->animation;
-    target.name = normalizedName(fixedString(native.name));
+    std::string decoded_name;
+    if (!native_text::decode(fixedString(native.name), text_mode, decoded_name)) return ARX_TEA_BAD_NAME;
+    target.name = normalizedName(decoded_name);
     target.frame_length = static_cast<std::uint32_t>(native.num_frames);
     target.group_count = static_cast<std::size_t>(native.num_groups);
     target.keyframes.resize(native.keyframes.size());
@@ -213,10 +219,11 @@ ArxReturnCode Animation::importNative(Animation& out, const tea::Data& native,
     if (sound_sources) sources.reserve(native.keyframes.size());
     std::unordered_map<std::string, SoundIndex, ResourcePathIdentityHash, ResourcePathIdentityEqual> sound_indices;
     sound_indices.reserve(native.keyframes.size());
-    std::unordered_set<std::string_view> source_spellings;
+    std::unordered_set<std::string> source_spellings;
     source_spellings.reserve(native.keyframes.size());
     std::vector<const std::string*> original_sound_paths;
     original_sound_paths.reserve(native.keyframes.size());
+    std::unordered_map<std::string, std::string, ResourcePathIdentityHash, ResourcePathIdentityEqual> decoded_sources;
 
     for (std::size_t frame = 0; frame < native.keyframes.size(); ++frame) {
       const tea::Keyframe& source = native.keyframes[frame];
@@ -227,15 +234,21 @@ ArxReturnCode Animation::importNative(Animation& out, const tea::Data& native,
       keyframe.footstep = source.flag_frame == kTeaFlagFrameStep;
       if (source.sample) {
         const std::string_view raw = fixedString(source.sample->name);
-        const std::string logical = importedNativeSoundPath(raw);
-        auto [entry, inserted] =
-            sound_indices.try_emplace(logical, static_cast<SoundIndex>(result.data_->sounds.sounds.size()));
+        std::string decoded;
+        if (!native_text::decode(raw, text_mode, decoded)) return ARX_TEA_BAD_SAMPLE_PATH;
+        const auto [source_entry, new_source] = decoded_sources.try_emplace(decoded, raw);
+        if (!new_source && !ResourcePathIdentityEqual{}(source_entry->second, raw)) {
+          log(ARX_LOG_ERROR, "TEA -> Animation: distinct native sample paths decode to '{}'", decoded);
+          return ARX_TEA_BAD_SAMPLE_PATH;
+        }
+        const std::string logical = importedNativeSoundPath(decoded);
+        auto [entry, inserted] = sound_indices.try_emplace(logical, static_cast<SoundIndex>(imported_sounds.size()));
         if (inserted) {
-          result.data_->sounds.sounds.push_back({logical, {}});
+          imported_sounds.push_back({logical, {}});
           original_sound_paths.push_back(&entry->first);
         }
-        keyframe.sound = entry->second;
-        if (sound_sources && source_spellings.insert(raw).second) sources.push_back({entry->second, std::string(raw)});
+        keyframe.sound = sounds::effectHandle(entry->second);
+        if (sound_sources && source_spellings.insert(decoded).second) sources.push_back({entry->second, decoded});
       }
       for (std::size_t group = 0; group < target.group_count; ++group) {
         const tea::GroupAnim& input = source.groups[group];
@@ -255,9 +268,9 @@ ArxReturnCode Animation::importNative(Animation& out, const tea::Data& native,
     target.claimed_groups = native_nonidentity & ~stored_nonidentity;
 
     ResourcePathUniquifier sound_paths;
-    sound_paths.reserve(result.data_->sounds.sounds.size());
-    for (Sound& sound : result.data_->sounds.sounds) sound_paths.add(sound.path);
-    std::vector<ResourcePathRepair> sound_repairs(result.data_->sounds.sounds.size());
+    sound_paths.reserve(imported_sounds.size());
+    for (Sound& sound : imported_sounds) sound_paths.add(sound.path);
+    std::vector<ResourcePathRepair> sound_repairs(imported_sounds.size());
     if (sound_paths.apply(nullptr, sound_repairs) != ResourcePathError::kNone) return ARX_ANIMATION_BAD_SOUND_PATH;
     for (std::size_t index = 0; index < sound_repairs.size(); ++index) {
       const ResourcePathRepair repair = sound_repairs[index];
@@ -270,8 +283,9 @@ ArxReturnCode Animation::importNative(Animation& out, const tea::Data& native,
       log(ARX_LOG_WARN,
           "TEA -> Animation: sound path '{}' normalized to '{}'",
           *original_sound_paths[index],
-          result.data_->sounds.sounds[index].path);
+          imported_sounds[index].path);
     }
+    sounds::replaceSounds(result.data_->sounds, std::move(imported_sounds));
 
     fillRootGaps(
         native,
@@ -303,14 +317,15 @@ ArxReturnCode Animation::importNative(Animation& out, const tea::Data& native,
 
 ArxReturnCode Animation::bakeNative(tea::Data& out) const noexcept {
   NativeAnimationBundle bundle;
-  const ArxReturnCode rc = bakeNativeBundle({.include_files = false}, bundle);
+  const ArxReturnCode rc = bakeNativeBundle({.include_sound_files = false}, bundle);
   if (rc == ARX_OK) out = std::move(bundle.tea);
   return rc;
 }
 
-ArxReturnCode Animation::bakeNativeBundle(const NativeSoundBakeOptions& options,
+ArxReturnCode Animation::bakeNativeBundle(const NativeAnimationBakeOptions& options,
                                           NativeAnimationBundle& out) const noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(options.text_mode)) return ARX_INVALID_OPTIONS;
     ArxReturnCode rc = validate();
     if (rc != ARX_OK) return rc;
     const std::size_t group_count = nativeGroupCount(data_->animation);
@@ -320,13 +335,13 @@ ArxReturnCode Animation::bakeNativeBundle(const NativeSoundBakeOptions& options,
     std::vector<std::string> sound_paths;
     std::vector<SoundFile> sound_files;
     rc = projectNativeSounds(
-        static_cast<const AnimationModules&>(*data_), options.include_files, sound_paths, sound_files);
+        static_cast<const AnimationModules&>(*data_), options.include_sound_files, sound_paths, sound_files);
     if (rc != ARX_OK) return rc;
-
     tea::Data result;
     result.num_frames = static_cast<std::int32_t>(data_->animation.frame_length);
     result.num_groups = static_cast<std::int32_t>(group_count);
-    copyFixed(result.name, sizeof(result.name), "arx-pistoris/" + data_->animation.name);
+    if (!native_text::encodeTruncated("arx-pistoris/" + data_->animation.name, options.text_mode, result.name))
+      return ARX_TEA_BAD_NAME;
     result.keyframes.resize(data_->animation.keyframes.size());
     std::bitset<animation::kMaxGroups> guard_candidates = data_->animation.claimed_groups;
     for (std::size_t frame = 0; frame < data_->animation.keyframes.size(); ++frame) {
@@ -347,13 +362,13 @@ ArxReturnCode Animation::bakeNativeBundle(const NativeSoundBakeOptions& options,
         transform.zoom = {input.scale.x - 1.0f, input.scale.y - 1.0f, input.scale.z - 1.0f};
         if (!animation::isIdentityTransform(input)) guard_candidates.reset(group);
       }
-      if (source.sound != kNoSound) {
-        if (source.sound >= sound_paths.size() || sound_paths[source.sound].empty())
+      if (source.sound != kNoSoundHandle) {
+        SoundIndex sound = kNoSound;
+        if (!sounds::effectIndex(source.sound, sound) || sound >= sound_paths.size() || sound_paths[sound].empty())
           return ARX_ANIMATION_BAD_KEYFRAME_SOUND;
-        const std::string sample_name = nativeSampleName(sound_paths[source.sound]);
-        if (sample_name.size() > 255U) return ARX_ANIMATION_BAD_SOUND_PATH;
         tea::Sample sample;
-        copyFixed(sample.name, sizeof(sample.name), sample_name);
+        if (!native_text::encodeFixed(nativeSampleName(sound_paths[sound]), options.text_mode, sample.name))
+          return ARX_ANIMATION_BAD_SOUND_PATH;
         keyframe.sample = sample;
       }
     }

@@ -4,6 +4,7 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/arx_pistoris.h"
+#include "arx_pistoris/native/text.h"
 
 #include "helpers.h"
 
@@ -31,7 +32,7 @@ std::string makeMinimalFtsJson() {
 TEST_SUITE("json") {
   TEST_CASE("JsonToJsonNullHandle") {
     char* out = nullptr;
-    ArxReturnCode rc = arx_pistoris_ftl_to_json(nullptr, 0, &out);
+    ArxReturnCode rc = arx_pistoris_ftl_to_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &out);
     CHECK(rc == ARX_INVALID_HANDLE);
   }
 
@@ -40,7 +41,7 @@ TEST_SUITE("json") {
     ArxFtl* h = nullptr;
     arx_pistoris_ftl_read(buf.data(), buf.size(), &h);
 
-    ArxReturnCode rc = arx_pistoris_ftl_to_json(h, 0, nullptr);
+    ArxReturnCode rc = arx_pistoris_ftl_to_json(h, 0, ARX_NATIVE_TEXT_UTF8, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
     arx_pistoris_ftl_destroy(h);
@@ -48,13 +49,13 @@ TEST_SUITE("json") {
 
   TEST_CASE("JsonFromJsonNullData") {
     ArxFtl* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_ftl_from_json(nullptr, 0, &h);
+    ArxReturnCode rc = arx_pistoris_ftl_from_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &h);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
 
   TEST_CASE("JsonFromJsonNullOut") {
     const uint8_t data[] = "{}";
-    ArxReturnCode rc = arx_pistoris_ftl_from_json(data, sizeof(data) - 1, nullptr);
+    ArxReturnCode rc = arx_pistoris_ftl_from_json(data, sizeof(data) - 1, ARX_NATIVE_TEXT_UTF8, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
 
@@ -64,13 +65,13 @@ TEST_SUITE("json") {
     CHECK(arx_pistoris_ftl_read(buf.data(), buf.size(), &h) == ARX_OK);
 
     char* json_str = nullptr;
-    ArxReturnCode rc1 = arx_pistoris_ftl_to_json(h, 0, &json_str);
+    ArxReturnCode rc1 = arx_pistoris_ftl_to_json(h, 0, ARX_NATIVE_TEXT_UTF8, &json_str);
     CHECK(rc1 == ARX_OK);
     CHECK(json_str != nullptr);
 
     ArxFtl* h2 = nullptr;
-    ArxReturnCode rc2 =
-        arx_pistoris_ftl_from_json(reinterpret_cast<const uint8_t*>(json_str), std::strlen(json_str), &h2);
+    ArxReturnCode rc2 = arx_pistoris_ftl_from_json(
+        reinterpret_cast<const uint8_t*>(json_str), std::strlen(json_str), ARX_NATIVE_TEXT_UTF8, &h2);
     CHECK(rc2 == ARX_OK);
     CHECK(h2 != nullptr);
 
@@ -82,7 +83,8 @@ TEST_SUITE("json") {
   TEST_CASE("JsonBadFormat") {
     const char* bad = "not json";
     ArxFtl* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_ftl_from_json(reinterpret_cast<const uint8_t*>(bad), std::strlen(bad), &h);
+    ArxReturnCode rc =
+        arx_pistoris_ftl_from_json(reinterpret_cast<const uint8_t*>(bad), std::strlen(bad), ARX_NATIVE_TEXT_UTF8, &h);
     CHECK(rc == ARX_JSON_BAD_FORMAT);
     CHECK(h == nullptr);
   }
@@ -90,7 +92,7 @@ TEST_SUITE("json") {
   TEST_CASE("JsonEmptyBadFormat") {
     const uint8_t empty = 0;
     ArxFtl* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_ftl_from_json(&empty, 0, &h);
+    ArxReturnCode rc = arx_pistoris_ftl_from_json(&empty, 0, ARX_NATIVE_TEXT_UTF8, &h);
     CHECK(rc == ARX_JSON_BAD_FORMAT);
     CHECK(h == nullptr);
   }
@@ -98,15 +100,17 @@ TEST_SUITE("json") {
   TEST_CASE("NativeFtsJsonRoundtrip") {
     const std::string source = makeMinimalFtsJson();
     ArxFts* fts = nullptr;
-    REQUIRE(arx_pistoris_fts_from_json(reinterpret_cast<const uint8_t*>(source.data()), source.size(), &fts) == ARX_OK);
+    REQUIRE(arx_pistoris_fts_from_json(
+                reinterpret_cast<const uint8_t*>(source.data()), source.size(), ARX_NATIVE_TEXT_UTF8, &fts) == ARX_OK);
     CHECK(arx_pistoris_fts_validate(fts) == ARX_OK);
 
     char* exported = nullptr;
-    REQUIRE(arx_pistoris_fts_to_json(fts, 1, &exported) == ARX_OK);
+    REQUIRE(arx_pistoris_fts_to_json(fts, 1, ARX_NATIVE_TEXT_UTF8, &exported) == ARX_OK);
     CHECK(std::strstr(exported, "\"levelIdx\": 7") != nullptr);
 
     ArxFts* roundtrip = nullptr;
-    REQUIRE(arx_pistoris_fts_from_json(reinterpret_cast<const uint8_t*>(exported), std::strlen(exported), &roundtrip) ==
+    REQUIRE(arx_pistoris_fts_from_json(
+                reinterpret_cast<const uint8_t*>(exported), std::strlen(exported), ARX_NATIVE_TEXT_UTF8, &roundtrip) ==
             ARX_OK);
     CHECK(arx_pistoris_fts_validate(roundtrip) == ARX_OK);
 
@@ -117,7 +121,7 @@ TEST_SUITE("json") {
 
   TEST_CASE("TeaJsonToJsonNullHandle") {
     char* out = nullptr;
-    ArxReturnCode rc = arx_pistoris_tea_to_json(nullptr, 0, &out);
+    ArxReturnCode rc = arx_pistoris_tea_to_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &out);
     CHECK(rc == ARX_INVALID_HANDLE);
   }
 
@@ -126,7 +130,7 @@ TEST_SUITE("json") {
     ArxTea* h = nullptr;
     arx_pistoris_tea_read(buf.data(), buf.size(), &h);
 
-    ArxReturnCode rc = arx_pistoris_tea_to_json(h, 0, nullptr);
+    ArxReturnCode rc = arx_pistoris_tea_to_json(h, 0, ARX_NATIVE_TEXT_UTF8, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
     arx_pistoris_tea_destroy(h);
@@ -134,13 +138,13 @@ TEST_SUITE("json") {
 
   TEST_CASE("TeaJsonFromJsonNullData") {
     ArxTea* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_tea_from_json(nullptr, 0, &h);
+    ArxReturnCode rc = arx_pistoris_tea_from_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &h);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
 
   TEST_CASE("TeaJsonFromJsonNullOut") {
     const uint8_t data[] = "{}";
-    ArxReturnCode rc = arx_pistoris_tea_from_json(data, sizeof(data) - 1, nullptr);
+    ArxReturnCode rc = arx_pistoris_tea_from_json(data, sizeof(data) - 1, ARX_NATIVE_TEXT_UTF8, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
 
@@ -150,13 +154,13 @@ TEST_SUITE("json") {
     CHECK(arx_pistoris_tea_read(buf.data(), buf.size(), &h) == ARX_OK);
 
     char* json_str = nullptr;
-    ArxReturnCode rc1 = arx_pistoris_tea_to_json(h, 0, &json_str);
+    ArxReturnCode rc1 = arx_pistoris_tea_to_json(h, 0, ARX_NATIVE_TEXT_UTF8, &json_str);
     CHECK(rc1 == ARX_OK);
     CHECK(json_str != nullptr);
 
     ArxTea* h2 = nullptr;
-    ArxReturnCode rc2 =
-        arx_pistoris_tea_from_json(reinterpret_cast<const uint8_t*>(json_str), std::strlen(json_str), &h2);
+    ArxReturnCode rc2 = arx_pistoris_tea_from_json(
+        reinterpret_cast<const uint8_t*>(json_str), std::strlen(json_str), ARX_NATIVE_TEXT_UTF8, &h2);
     CHECK(rc2 == ARX_OK);
     CHECK(h2 != nullptr);
 
@@ -168,7 +172,8 @@ TEST_SUITE("json") {
   TEST_CASE("TeaJsonBadFormat") {
     const char* bad = "not json";
     ArxTea* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_tea_from_json(reinterpret_cast<const uint8_t*>(bad), std::strlen(bad), &h);
+    ArxReturnCode rc =
+        arx_pistoris_tea_from_json(reinterpret_cast<const uint8_t*>(bad), std::strlen(bad), ARX_NATIVE_TEXT_UTF8, &h);
     CHECK(rc == ARX_JSON_BAD_FORMAT);
     CHECK(h == nullptr);
   }

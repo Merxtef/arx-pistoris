@@ -11,6 +11,7 @@
 #include "arx_pistoris/level.hpp"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths/types.h"
 #include "arx_pistoris/sound.hpp"
 #include "arx_pistoris/texture.hpp"
@@ -21,6 +22,7 @@
 #include "../../cli/resources/level_image_io.h"
 #include "../../cli/resources/sound_io.h"
 #include "../../cli/resources/texture_io.h"
+#include "audio_helpers.h"
 #include "base/resource_path.h"
 #include "formats/classification.h"
 #include "formats/format.h"
@@ -253,6 +255,39 @@ TEST_SUITE("CLI mounts") {
     CHECK(files.size() == 2);
   }
 
+  TEST_CASE("Bounded file enumeration returns deterministic relative paths") {
+    TemporaryDirectory temp;
+    writeBytes(temp.path() / "audio" / "root.wav", makePcm16Wav(1));
+    writeBytes(temp.path() / "audio" / "nested" / "line.wav", makePcm16Wav(1));
+    writeBytes(temp.path() / "audio" / "nested" / "deeper" / "ignored.wav", makePcm16Wav(1));
+    cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, mountPaths(temp.path()));
+
+    std::vector<cli::EnumeratedFile> files;
+    REQUIRE(io.enumerateFiles({.path = "audio", .address = cli::PathAddress::kMountRelative}, 2, files) ==
+            cli::ResourceEnumerationResult::kSuccess);
+    REQUIRE(files.size() == 2);
+    CHECK(files[0].relative_path == "nested/line.wav");
+    CHECK(files[1].relative_path == "root.wav");
+    CHECK(files[0].location.path == "audio/nested/line.wav");
+
+    for (const char* directory : {"audio/", "audio//", "audio\\"}) {
+      REQUIRE(io.enumerateFiles({.path = directory, .address = cli::PathAddress::kMountRelative}, 2, files) ==
+              cli::ResourceEnumerationResult::kSuccess);
+      REQUIRE(files.size() == 2);
+      CHECK(files[0].relative_path == "nested/line.wav");
+      CHECK(files[1].relative_path == "root.wav");
+      CHECK(files[0].location.path == "audio/nested/line.wav");
+    }
+
+    REQUIRE(io.enumerateFiles({.path = (temp.path() / "audio").string(), .address = cli::PathAddress::kAbsolute},
+                              2,
+                              files) == cli::ResourceEnumerationResult::kSuccess);
+    REQUIRE(files.size() == 2);
+    CHECK(files[0].relative_path == "nested/line.wav");
+    CHECK(files[1].relative_path == "root.wav");
+    CHECK(files[0].location.address == cli::PathAddress::kAbsolute);
+  }
+
   TEST_CASE("Loose Level minimap discovery prefers the plain sidecar name") {
     TemporaryDirectory temp;
     const std::vector<std::uint8_t> plain = makeTestBmp();
@@ -448,6 +483,28 @@ TEST_SUITE("CLI mounts") {
     const std::vector<pistoris::SoundSourceReference> sources = {{0, "sound.wav"}};
 
     CHECK_FALSE(cli::loadSoundData(animation, io, {}, sources));
+  }
+
+  TEST_CASE("Audio lookup honors a preferred format and falls back to supported formats") {
+    TemporaryDirectory temp;
+    const std::vector<std::uint8_t> preferred = makePcm16Wav(1);
+    std::vector<std::uint8_t> fallback = makePcm16Wav(2);
+    writeBytes(temp.path() / "audio" / "preferred.ogg", preferred);
+    writeBytes(temp.path() / "audio" / "fallback.wav", fallback);
+
+    cli::IoService io(cli::OverwriteMode::kAsk, false, {});
+    const cli::PathLocation base{.path = temp.path().string(), .address = cli::PathAddress::kAbsolute};
+    std::vector<std::uint8_t> actual;
+    std::string selected;
+    CHECK(io.readAudio(base, "audio/preferred.ogg", cli::AudioLookupMode::kFormatPriority, actual, &selected) ==
+          cli::ResourceReadResult::kSuccess);
+    CHECK(selected == "audio/preferred.ogg");
+    CHECK(actual == preferred);
+
+    CHECK(io.readAudio(base, "audio/fallback.ogg", cli::AudioLookupMode::kFormatPriority, actual, &selected) ==
+          cli::ResourceReadResult::kSuccess);
+    CHECK(selected == "audio/fallback.wav");
+    CHECK(actual == fallback);
   }
 
   TEST_CASE("Mounted resources resolve path components case insensitively") {
@@ -790,6 +847,32 @@ TEST_SUITE("CLI mounts") {
     CHECK(test::texture(level, 0).encoded_image == bmp);
   }
 
+  TEST_CASE("Loose texture lookup prioritizes authored, logical, then mounted paths") {
+    TemporaryDirectory temp;
+    const std::vector<std::uint8_t> authored = makeTestBmp(0, 255, 0);
+    const std::vector<std::uint8_t> local = makeTestBmp(255, 0, 0);
+    const std::vector<std::uint8_t> mounted = makeTestBmp(0, 0, 255);
+    writeBytes(temp.path() / "project" / "authored.bmp", authored);
+    writeBytes(temp.path() / "project" / "graph" / "obj3d" / "textures" / "stone.bmp", local);
+    writeBytes(temp.path() / "mount" / "graph" / "obj3d" / "textures" / "stone.bmp", mounted);
+
+    pistoris::Level level = textureLevel("graph/obj3d/textures/stone");
+    cli::IoService io(cli::OverwriteMode::kAsk, false, mountPaths(temp.path() / "mount"));
+    cli::TextureInput input{
+        .use_format_sources = true,
+        .source_lookup = cli::ImageLookupMode::kExact,
+        .source_base = {.path = (temp.path() / "project").string(), .address = cli::PathAddress::kAbsolute},
+    };
+    const std::vector<std::string> authored_source = {"authored.bmp", {}};
+    REQUIRE(cli::loadTextureImages(level, io, input, authored_source));
+    CHECK(test::texture(level, 0).encoded_image == authored);
+
+    pistoris::Level fallback = textureLevel("graph/obj3d/textures/stone");
+    const std::vector<std::string> missing_source = {"missing.bmp", {}};
+    REQUIRE(cli::loadTextureImages(fallback, io, input, missing_source));
+    CHECK(test::texture(fallback, 0).encoded_image == local);
+  }
+
   TEST_CASE("Direct native texture lookup collapses extension aliases") {
     TemporaryDirectory temp;
     const std::vector<std::uint8_t> bmp = makeTestBmp();
@@ -804,7 +887,7 @@ TEST_SUITE("CLI mounts") {
 
     cli::IoService io(cli::OverwriteMode::kAsk, false, mountPaths(temp.path()));
     std::vector<pistoris::NativeTextureFile> files;
-    cli::loadNativeTextureFiles(ftl, io, {}, files);
+    cli::loadNativeTextureFiles(ftl, pistoris::NativeTextMode::kUtf8, io, {}, files);
 
     REQUIRE(files.size() == 1);
     CHECK(files[0].resource_path == "graph/obj3d/textures/stone.png");

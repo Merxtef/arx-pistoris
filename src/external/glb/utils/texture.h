@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/indices.h"
 
 #include "cgltf/cgltf.h"
+#include "external/glb/accessor.h"
 #include "modules/textures.h"
 #include "utils/encoded_image.h"
 #include "utils/resource_path.h"
@@ -46,6 +47,21 @@ enum class TextureImportError : std::uint8_t {
   kOutOfMemory,
 };
 
+enum class TextureBindingError : std::uint8_t {
+  kNone,
+  kBadBinding,
+  kUnsupportedFeature,
+};
+
+struct TextureBinding {
+  const cgltf_image* image = nullptr;
+  std::int32_t texcoord = 0;
+  bool transformed = false;
+  Vec2 offset{};
+  Vec2 scale{1.0f, 1.0f};
+  float rotation = 0.0f;
+};
+
 class TextureImporter {
  public:
   TextureImporter(TexturesData& textures, std::vector<std::string>* source_paths, std::string_view log_prefix);
@@ -67,6 +83,8 @@ class TextureImporter {
   PathMap fallbacks_;
 };
 
+TextureBindingError decodeTextureBinding(const cgltf_texture_view& view, TextureBinding& out) noexcept;
+Vec2 transformTexcoord(const TextureBinding& binding, Vec2 value) noexcept;
 void exportTexture(Builder& builder, const Texture& texture, const textures::PreparedImage* prepared,
                    ExportedTexture& out);
 std::string embeddedTexturePath(const cgltf_image& image, std::string_view fallback, pistoris::image::Format format);

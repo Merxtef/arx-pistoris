@@ -15,10 +15,13 @@ namespace pistoris::paths {
 
 using namespace detail;
 
+std::string_view cinematicIllustrationDirectory() noexcept { return "graph/interface/illustrations"; }
+
 bool cinematicCin(CinematicPathView cinematic, std::string& out) {
   std::string_view name;
   if (!normalizeName(cinematic.name, {".cin"}, name)) return false;
-  std::string result = "graph/interface/illustrations/";
+  std::string result(cinematicIllustrationDirectory());
+  result.push_back('/');
   result.append(name);
   result += ".cin";
   out = std::move(result);
@@ -57,6 +60,6 @@ bool cinematicFromSelector(std::string_view selector, CinematicPathView& out) no
   return true;
 }
 
-ResourceSearchLocation cinematicSearchLocation() noexcept { return {"graph/interface/illustrations", 1}; }
+ResourceSearchLocation cinematicSearchLocation() noexcept { return {cinematicIllustrationDirectory(), 1}; }
 
 }  // namespace pistoris::paths

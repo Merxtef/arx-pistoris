@@ -28,6 +28,7 @@
 #include "modules/rooms.h"
 #include "modules/scene.h"
 #include "modules/textures.h"
+#include "native/fixed_string.h"
 #include "nlohmann/json.hpp"
 #include "stb/stb_image_write.h"
 #include "utils/encoded_image.h"
@@ -54,13 +55,28 @@
 
 namespace {
 
+template <std::size_t N>
+void setNativeText(char (&out)[N], std::string_view value) {
+  REQUIRE(pistoris::copyFixedString(value, out));
+}
+
+pistoris::dlf::Entity nativeEntity(std::string_view class_path, std::int32_t ident, pistoris::ArxVector3 position = {},
+                                   pistoris::ArxAngle angle = {}) {
+  pistoris::dlf::Entity result;
+  setNativeText(result.class_path, class_path);
+  result.ident = ident;
+  result.position = position;
+  result.angle = angle;
+  return result;
+}
+
 pistoris::fts::Data makeTriangleFtsScene() {
   pistoris::fts::Data d = makeMinimalFtsData();
   d.scene.num_rooms = 1;
   d.rooms.resize(2);
   d.room_distances.resize(4);
   auto& texture = d.textures[24275104];
-  std::snprintf(texture.fic, sizeof(texture.fic), "graph/levels/test.bmp");
+  std::snprintf(texture.fic, sizeof(texture.fic), "graph/levels/test");
 
   pistoris::fts::Poly poly{};
   poly.tex = 24275104;
@@ -827,7 +843,7 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
-    CHECK(bundle.dlf.scene_path == "graph/levels/output");
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("graph/levels/output") == 0);
     CHECK(bundle.fts.scene.sizex == 160);
     CHECK(bundle.fts.scene.sizez == 160);
     CHECK(bundle.fts.scene.num_rooms == 1);
@@ -1091,26 +1107,26 @@ TEST_SUITE("FtsGlb") {
     level.scene.zones.push_back(std::move(zone));
 
     pistoris::NativeLevelBundle bundle;
-    bundle.dlf.scene_path = "unchanged";
+    setNativeText(bundle.dlf.scene_path, "unchanged");
     CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) ==
           ARX_DLF_BAD_ZONE_HEIGHT);
-    CHECK(bundle.dlf.scene_path == "unchanged");
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
   }
 
   TEST_CASE("LevelNativeBundleBakeValidatesGeneratedDlfScenePathTransactionally") {
     pistoris::LevelModules level = makeSimpleLevel();
     pistoris::NativeLevelBundle bundle;
-    bundle.dlf.scene_path = "unchanged";
+    setNativeText(bundle.dlf.scene_path, "unchanged");
 
     const std::string embedded_nul("bad\0name", 8);
     CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = embedded_nul}, bundle) ==
           ARX_DLF_BAD_SCENE_PATH);
-    CHECK(bundle.dlf.scene_path == "unchanged");
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
 
     const std::string long_name(512, 'x');
     CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = long_name}, bundle) ==
           ARX_DLF_BAD_SCENE_PATH);
-    CHECK(bundle.dlf.scene_path == "unchanged");
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
   }
 
   TEST_CASE("LevelNativeBundleBakeRoundsFiniteZoneHeight") {
@@ -1162,7 +1178,7 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.textures.contains(1));
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/wall.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/wall");
     REQUIRE(bundle.texture_files.size() == 1);
     CHECK(bundle.texture_files[0].source_texture == 0);
     CHECK(bundle.texture_files[0].resource_path == "graph/obj3d/textures/wall.bmp");
@@ -1176,10 +1192,10 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
-                level, {.level_name = "output", .textures = {.include_files = false}}, bundle) == ARX_OK);
+                level, {.level_name = "output", .include_texture_files = false}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.textures.contains(1));
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "source/my_wall.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "source/my_wall");
     CHECK(bundle.texture_files.empty());
   }
 
@@ -1219,9 +1235,9 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 3);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall.jpg.");
-    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall.png.");
-    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_1.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall.jpg");
+    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall.png");
+    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_1");
     REQUIRE(bundle.texture_files.size() == 2);
     CHECK(bundle.texture_files[0].resource_path == "custom/wall.jpg.bmp");
     CHECK(bundle.texture_files[1].resource_path == "custom/wall.png.tga");
@@ -1242,9 +1258,9 @@ TEST_SUITE("FtsGlb") {
                 level, {.level_name = "output", .reconstruct_quads = false}, bundle) == ARX_OK);
 
     REQUIRE(bundle.fts.textures.size() == 3);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall.");
-    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall_1.");
-    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_2.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/wall");
+    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/wall_1");
+    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/wall_2");
     std::size_t base_polygons = 0;
     std::size_t shard_polygons = 0;
     for (const pistoris::fts::EpData& reference : bundle.fts.rooms[1].polygons) {
@@ -1269,11 +1285,11 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle references_only;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
                 level,
-                {.level_name = "output", .textures = {.include_files = false}, .reconstruct_quads = false},
+                {.level_name = "output", .include_texture_files = false, .reconstruct_quads = false},
                 references_only) == ARX_OK);
     CHECK(references_only.texture_files.empty());
     REQUIRE(references_only.fts.textures.size() == 3);
-    CHECK(std::string(references_only.fts.textures.at(3).fic) == "custom/wall_2.");
+    CHECK(std::string(references_only.fts.textures.at(3).fic) == "custom/wall_2");
   }
 
   TEST_CASE("TextureRebaseSanitizesNamesAndResolvesIdentityCollisions") {
@@ -1288,10 +1304,10 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 4);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/con-.");
-    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/my--tex.");
-    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/my_tex.");
-    CHECK(std::string(bundle.fts.textures.at(4).fic) == "custom/my_tex_1.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/con-");
+    CHECK(std::string(bundle.fts.textures.at(2).fic) == "custom/my--tex");
+    CHECK(std::string(bundle.fts.textures.at(3).fic) == "custom/my_tex");
+    CHECK(std::string(bundle.fts.textures.at(4).fic) == "custom/my_tex_1");
     REQUIRE(bundle.texture_files.size() == 2);
     CHECK(bundle.texture_files[0].resource_path == "custom/con-.bmp");
     CHECK(bundle.texture_files[1].resource_path == "custom/my--tex.tga");
@@ -1317,7 +1333,7 @@ TEST_SUITE("FtsGlb") {
 
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_[ice] (rock)&wall.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_[ice] (rock)&wall");
   }
 
   TEST_CASE("LevelNativeBundleBakeAppliesTheFtsExtensionlessTextureLimit") {
@@ -1328,7 +1344,11 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == resource_name + '.');
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == resource_name);
+
+    level.textures.textures[0].path.insert(level.textures.textures[0].path.find('/'), 1, 'd');
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == level.textures.textures[0].path);
 
     level.textures.textures[0].path.insert(level.textures.textures[0].path.find('/'), 1, 'd');
     CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) ==
@@ -1343,7 +1363,7 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_wall_[metal].");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l1_wall_[metal]");
     REQUIRE(bundle.texture_files.size() == 1);
     CHECK(bundle.texture_files[0].resource_path == "graph/obj3d/textures/l1_wall_[metal].bmp");
   }
@@ -1355,12 +1375,12 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle bundle;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l4_dwarf_[stone]__wall01.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "graph/obj3d/textures/l4_dwarf_[stone]__wall01");
 
     REQUIRE(pistoris::textures::rebasePaths(level.textures, "custom/textures") == pistoris::textures::Error::kNone);
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
     REQUIRE(bundle.fts.textures.size() == 1);
-    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/textures/l4_dwarf_[stone]__wall01.");
+    CHECK(std::string(bundle.fts.textures.at(1).fic) == "custom/textures/l4_dwarf_[stone]__wall01");
   }
 
   TEST_CASE("LevelNativeBundleBakePreservesLightingAndDlfModules") {
@@ -1426,7 +1446,8 @@ TEST_SUITE("FtsGlb") {
 
     REQUIRE(bundle.dlf.entities.size() == 1);
     CHECK(bundle.dlf.entities[0].ident == 17);
-    CHECK(bundle.dlf.entities[0].class_path == "graph/obj3d/interactive/fix_inter/timed_lever/timed_lever");
+    CHECK(pistoris::fixedStringView(bundle.dlf.entities[0].class_path)
+              .compare("graph/obj3d/interactive/fix_inter/timed_lever/timed_lever") == 0);
     REQUIRE(bundle.dlf.fogs.size() == 1);
     CHECK(bundle.dlf.fogs[0].directional);
     CHECK(bundle.dlf.fogs[0].lifetime_ms == 800);
@@ -1437,7 +1458,7 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(bundle.dlf.zones[0].points.size() == 3);
     CHECK(bundle.dlf.zones[0].points[1].x == doctest::Approx(3.0f));
     REQUIRE(bundle.dlf.zones[0].ambiance.has_value());
-    CHECK(bundle.dlf.zones[0].ambiance->name == "none");
+    CHECK(pistoris::fixedStringView(bundle.dlf.zones[0].ambiance->name).compare("none") == 0);
     REQUIRE(bundle.dlf.paths.size() == 1);
     CHECK(bundle.dlf.paths[0].position.x == doctest::Approx(9.0f));
     REQUIRE(bundle.dlf.paths[0].nodes.size() == 2);
@@ -1540,7 +1561,7 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(level.geometry.faces.size() == 1);
     REQUIRE(level.textures.textures.size() == 1);
     CHECK(level.textures.textures[0].path == "graph/levels/test");
-    CHECK(level.textures.textures[0].external_image_extension == ".bmp");
+    CHECK(level.textures.textures[0].external_image_extension.empty());
     CHECK(level.lighting.corner_colors.empty());
     CHECK(level.lighting.lights.empty());
     CHECK_FALSE(level.scene.player_spawn.has_value());
@@ -1704,24 +1725,27 @@ TEST_SUITE("FtsGlb") {
     src.scene.Mscenepos = {10.0f, 20.0f, 30.0f};
 
     pistoris::dlf::Data dlf;
-    dlf.scene_path = "graph/levels/level1/";
+    setNativeText(dlf.scene_path, "graph/levels/level1");
     dlf.player_spawn = {{1.0f, 2.0f, 3.0f}, {10.0f, 20.0f, 30.0f}};
-    dlf.entities.push_back(
-        {"graph/obj3d/interactive/fix_inter/timed_lever/timed_lever", 7, {4.0f, 5.0f, 6.0f}, {1.0f, 2.0f, 3.0f}});
+    dlf.entities.push_back(nativeEntity(
+        "graph/obj3d/interactive/fix_inter/timed_lever/timed_lever", 7, {4.0f, 5.0f, 6.0f}, {1.0f, 2.0f, 3.0f}));
     for (int i = 0; i < 3; ++i)
-      dlf.entities.push_back({"graph/obj3d/interactive/npc/spider_base/spider_base", i, {4.0f, 5.0f, 6.0f}, {}});
+      dlf.entities.push_back(
+          nativeEntity("graph/obj3d/interactive/npc/spider_base/spider_base", i, {4.0f, 5.0f, 6.0f}));
     dlf.fogs.push_back({{7.0f, 8.0f, 9.0f}});
 
     pistoris::dlf::Zone zone;
-    zone.name = "hall";
+    setNativeText(zone.name, "hall");
     zone.position = {1.0f, 2.0f, 3.0f};
     zone.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 2.0f}, {0.0f, 0.0f, 2.0f}, {0.0f, 0.0f, 0.0f}};
     zone.height = 5;
-    zone.ambiance = pistoris::dlf::ZoneAmbiance{"SFX\\ROOM.AMB", 75.0f};
+    zone.ambiance.emplace();
+    setNativeText(zone.ambiance->name, "sfx/room");
+    zone.ambiance->volume = 75.0f;
     dlf.zones.push_back(zone);
 
     pistoris::dlf::Path path;
-    path.name = "guard";
+    setNativeText(path.name, "guard");
     path.position = {2.0f, 3.0f, 4.0f};
     path.nodes = {{{0.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kBezier, 0},
                   {{1.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kControlPoint, 100},
@@ -1763,11 +1787,14 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("NativeLevelConvertsEntityAnglesToRenderedRotations") {
     pistoris::dlf::Data dlf;
-    dlf.scene_path = "graph/levels/level1";
-    dlf.entities.push_back({"graph/obj3d/interactive/fix_inter/door/door", 1, {}, {12.0f, 40.0f, -18.0f}});
-    dlf.entities.push_back({"graph/obj3d/interactive/npc/human_base/human_base", 2, {}, {25.0f, 70.0f, 15.0f}});
-    dlf.entities.push_back({"graph/obj3d/interactive/items/npc_token/npc_token", 3, {}, {8.0f, 95.0f, 3.0f}});
-    dlf.entities.push_back({"graph/obj3d/interactive/npc/goblin_base/goblin_base", 4, {}, {35.0f, 90.0f, -12.0f}});
+    setNativeText(dlf.scene_path, "graph/levels/level1");
+    dlf.entities.push_back(nativeEntity("graph/obj3d/interactive/fix_inter/door/door", 1, {}, {12.0f, 40.0f, -18.0f}));
+    dlf.entities.push_back(
+        nativeEntity("graph/obj3d/interactive/npc/human_base/human_base", 2, {}, {25.0f, 70.0f, 15.0f}));
+    dlf.entities.push_back(
+        nativeEntity("graph/obj3d/interactive/items/npc_token/npc_token", 3, {}, {8.0f, 95.0f, 3.0f}));
+    dlf.entities.push_back(
+        nativeEntity("graph/obj3d/interactive/npc/goblin_base/goblin_base", 4, {}, {35.0f, 90.0f, -12.0f}));
 
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, makeTriangleFtsScene(), nullptr, &dlf) == ARX_OK);
@@ -1789,10 +1816,10 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("NativeLevelRepairsDuplicatePathNames") {
     pistoris::dlf::Data dlf;
-    dlf.scene_path = "graph/levels/level1/";
-    auto add_path = [&](std::string name) {
+    setNativeText(dlf.scene_path, "graph/levels/level1");
+    auto add_path = [&](const std::string& name) {
       pistoris::dlf::Path path;
-      path.name = std::move(name);
+      setNativeText(path.name, name);
       path.nodes.push_back({});
       dlf.paths.push_back(std::move(path));
     };
@@ -1812,20 +1839,21 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("NativeLevelPreservesNoneZoneAmbiance") {
     pistoris::dlf::Data dlf;
-    dlf.scene_path = "graph/levels/level1/";
+    setNativeText(dlf.scene_path, "graph/levels/level1");
     pistoris::dlf::Zone zone;
-    zone.name = "silent";
+    setNativeText(zone.name, "silent");
     zone.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}};
     zone.height = 5;
-    zone.ambiance = pistoris::dlf::ZoneAmbiance{"NONE", 100.0f};
+    zone.ambiance.emplace();
+    setNativeText(zone.ambiance->name, "none");
     dlf.zones.push_back(std::move(zone));
 
     pistoris::dlf::Zone empty;
-    empty.name = "empty";
+    setNativeText(empty.name, "empty");
     empty.position = {4.0f, 0.0f, 0.0f};
     empty.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}};
     empty.height = 5;
-    empty.ambiance = pistoris::dlf::ZoneAmbiance{"", 100.0f};
+    empty.ambiance.emplace();
     dlf.zones.push_back(std::move(empty));
 
     LogCapture logs;
@@ -1840,23 +1868,24 @@ TEST_SUITE("FtsGlb") {
     pistoris::NativeLevelBundle baked;
     REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, baked) == ARX_OK);
     REQUIRE(baked.dlf.zones[0].ambiance.has_value());
-    CHECK(baked.dlf.zones[0].ambiance->name == "none");
+    CHECK(pistoris::fixedStringView(baked.dlf.zones[0].ambiance->name).compare("none") == 0);
   }
 
   TEST_CASE("NativeLevelPreservesDottedZoneAmbianceNames") {
     pistoris::dlf::Data dlf;
-    dlf.scene_path = "graph/levels/level1";
-    auto add_zone = [&](std::string name, std::string ambiance) {
+    setNativeText(dlf.scene_path, "graph/levels/level1");
+    auto add_zone = [&](const std::string& name, const std::string& ambiance) {
       pistoris::dlf::Zone zone;
-      zone.name = std::move(name);
+      setNativeText(zone.name, name);
       zone.points = {{0.0f, 0.0f, 0.0f}, {2.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 2.0f}};
       zone.height = 5;
-      zone.ambiance = pistoris::dlf::ZoneAmbiance{std::move(ambiance), 100.0f};
+      zone.ambiance.emplace();
+      setNativeText(zone.ambiance->name, ambiance);
       dlf.zones.push_back(std::move(zone));
     };
-    add_zone("protected", "cave/water.v2.");
-    add_zone("explicit", "cave/water.v2.amb");
-    add_zone("unprotected", "cave/water.v2");
+    add_zone("first", "cave/water.v2");
+    add_zone("second", "cave/another.v2");
+    add_zone("plain", "cave/water");
 
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, makeTriangleFtsScene(), nullptr, &dlf) == ARX_OK);
@@ -1865,7 +1894,7 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(level.scene.zones[1].ambiance.has_value());
     REQUIRE(level.scene.zones[2].ambiance.has_value());
     CHECK(level.scene.zones[0].ambiance->name == "cave/water.v2");
-    CHECK(level.scene.zones[1].ambiance->name == "cave/water.v2");
+    CHECK(level.scene.zones[1].ambiance->name == "cave/another.v2");
     CHECK(level.scene.zones[2].ambiance->name == "cave/water");
 
     pistoris::NativeLevelBundle baked;
@@ -1874,16 +1903,16 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(baked.dlf.zones[0].ambiance.has_value());
     REQUIRE(baked.dlf.zones[1].ambiance.has_value());
     REQUIRE(baked.dlf.zones[2].ambiance.has_value());
-    CHECK(baked.dlf.zones[0].ambiance->name == "cave/water.v2.");
-    CHECK(baked.dlf.zones[1].ambiance->name == "cave/water.v2.");
-    CHECK(baked.dlf.zones[2].ambiance->name == "cave/water.");
+    CHECK(pistoris::fixedStringView(baked.dlf.zones[0].ambiance->name).compare("cave/water.v2") == 0);
+    CHECK(pistoris::fixedStringView(baked.dlf.zones[1].ambiance->name).compare("cave/another.v2") == 0);
+    CHECK(pistoris::fixedStringView(baked.dlf.zones[2].ambiance->name).compare("cave/water") == 0);
   }
 
   TEST_CASE("NativeLevelMapsTheSewerCompatibilityPathToAnInfiniteZone") {
     pistoris::dlf::Data dlf;
-    dlf.scene_path = "graph/levels/level11/";
+    setNativeText(dlf.scene_path, "graph/levels/level11");
     pistoris::dlf::Path path;
-    path.name = "level11_sewer1";
+    setNativeText(path.name, "level11_sewer1");
     path.nodes = {{{0.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kStandard, 0},
                   {{1.0f, 0.0f, 0.0f}, pistoris::dlf::PathNodeType::kStandard, 0},
                   {{0.0f, 0.0f, 1.0f}, pistoris::dlf::PathNodeType::kStandard, 0}};
@@ -2291,7 +2320,7 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("FtsToLevelPreservesRepeatedUnderscoresInTexturePaths") {
     pistoris::fts::Data src = makeTriangleFtsScene();
     auto& texture = src.textures.at(24275104);
-    std::snprintf(texture.fic, sizeof(texture.fic), R"(GRAPH\TEXTURES\STONE__MOSS.BMP)");
+    std::snprintf(texture.fic, sizeof(texture.fic), "graph/textures/stone__moss");
 
     pistoris::LevelModules level;
     REQUIRE(buildLevelModules(level, src) == ARX_OK);
@@ -2304,7 +2333,7 @@ TEST_SUITE("FtsGlb") {
     pistoris::fts::Data src = makeTwoRoomFtsScene();
     src.textures.at(24275104).fic[0] = '\0';
     auto& texture = src.textures[1];
-    std::snprintf(texture.fic, sizeof(texture.fic), "graph/levels/real.bmp");
+    std::snprintf(texture.fic, sizeof(texture.fic), "graph/levels/real");
     src.scene.num_textures = 2;
     src.cells[0].polygons[1].tex = 1;
 
@@ -3553,9 +3582,12 @@ TEST_SUITE("FtsGlb") {
     parsed.gltf["nodes"][spawn_index]["name"] = "arx_player_spawn";
     parsed.gltf["nodes"][nav_surface_index]["name"] = "arx_nav_surface";
     pistoris::LevelModules dst;
+    LogCapture logs;
     REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
     REQUIRE(dst.scene.player_spawn.has_value());
     REQUIRE(dst.navigation.surface.has_value());
+    CHECK(logs.contains("arx_player_spawn' has no final label"));
+    CHECK(logs.contains("arx_nav_surface' has no final label"));
 
     parsed.gltf["nodes"][spawn_index]["name"] = "arx_player_spawn__spawn.001";
     parsed.gltf["nodes"][nav_surface_index]["name"] = "arx_nav_surface__surface.001";
@@ -3718,6 +3750,12 @@ TEST_SUITE("FtsGlb") {
     const std::size_t nonitem_selector = testNodeIndex(parsed, "CLASS_model:fix_inter:door__door");
     REQUIRE(nonitem_selector < parsed.gltf["nodes"].size());
     parsed.gltf["nodes"][nonitem_selector]["name"] = "CLASS_model:fix_inter::door__door";
+    CHECK(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_GLB_BAD_LEVEL_ENTITY);
+
+    parsed = parseTestGlb(glb);
+    const std::size_t unlabeled_selector = testNodeIndex(parsed, "CLASS_model:fix_inter:door__door");
+    REQUIRE(unlabeled_selector < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][unlabeled_selector]["name"] = "CLASS_model:fix_inter:door";
     CHECK(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_GLB_BAD_LEVEL_ENTITY);
   }
 
@@ -3986,6 +4024,21 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.scene.fogs[0].lifetime_ms == 2000);
     CHECK(dst.scene.fogs[0].frequency == doctest::Approx(500.0f));
 
+    {
+      ParsedTestGlb unlabeled = parsed;
+      std::string settings_name = unlabeled.gltf["nodes"][settings]["name"].get<std::string>();
+      const std::size_t separator = settings_name.rfind("__");
+      REQUIRE(separator != std::string::npos);
+      settings_name.resize(separator);
+      unlabeled.gltf["nodes"][settings]["name"] = settings_name;
+      unlabeled.gltf["nodes"][direction]["name"] = "DIRECTION";
+      LogCapture logs;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(unlabeled)), dst) == ARX_OK);
+      CHECK(logs.contains("fog settings"));
+      CHECK(logs.contains("fog direction"));
+      CHECK(logs.contains("has no final label"));
+    }
+
     const std::size_t duplicate_settings = parsed.gltf["nodes"].size();
     parsed.gltf["nodes"].push_back(
         {{"name", "SETTINGS__RGB_1_0_0__SIZE_10__SCALE_1__SPEED_2__ROTATESPEED_3__LIFETIME_4__FREQUENCY_5__other"}});
@@ -4077,7 +4130,11 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.scene.paths[0].nodes[2].time_ms == 750);
 
     parsed.gltf["nodes"][control_index]["name"] = "001__STANDARD__TIME_500";
-    CHECK(importLevelGlb(writeTestGlb(parsed), dst) == ARX_GLB_BAD_LEVEL_PATH);
+    {
+      LogCapture logs;
+      REQUIRE(importLevelGlb(writeTestGlb(parsed), dst) == ARX_OK);
+      CHECK(logs.contains("001__STANDARD__TIME_500' has no final label"));
+    }
 
     parsed = parseTestGlb(glb);
     parsed.gltf["nodes"][control_index]["name"] = "001__CONTROL__TIME_500__patrol";
@@ -4187,6 +4244,25 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.scene.zones[0].perimeter_xz[1].x == doctest::Approx(dst.scene.zones[0].perimeter_xz[3].x));
     CHECK(dst.scene.zones[1].name == "sewer");
     CHECK(dst.scene.zones[1].height_mode == pistoris::ZoneHeightMode::kInfinite);
+
+    {
+      ParsedTestGlb unlabeled = parsed;
+      std::string settings_name = unlabeled.gltf["nodes"][settings_index]["name"].get<std::string>();
+      const std::size_t separator = settings_name.rfind("__");
+      REQUIRE(separator != std::string::npos);
+      settings_name.resize(separator);
+      unlabeled.gltf["nodes"][settings_index]["name"] = settings_name;
+      LogCapture logs;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(unlabeled)), dst) == ARX_OK);
+      CHECK(logs.contains("zone settings"));
+      CHECK(logs.contains("has no final label"));
+    }
+
+    {
+      ParsedTestGlb unlabeled = parsed;
+      unlabeled.gltf["nodes"][ambiance_index]["name"] = "AMBIANCE_ambiance:cave/water";
+      CHECK(importLevelGlb(writeTestGlb(std::move(unlabeled)), dst) == ARX_GLB_BAD_LEVEL_ZONE);
+    }
 
     constexpr std::array kAcceptedReferences = {
         std::pair{"AMBIANCE_sfx/ambiance/cave/water.v2.amb__path", "cave/water.v2"},
@@ -5654,6 +5730,23 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.lighting.lights[0].effect_speed == doctest::Approx(2.0f));
     CHECK(dst.lighting.lights[0].flare_size == doctest::Approx(80.0f));
 
+    {
+      ParsedTestGlb unlabeled = parsed;
+      for (std::size_t helper : {settings_index, helper_index, effect_index}) {
+        std::string helper_name = unlabeled.gltf["nodes"][helper]["name"].get<std::string>();
+        const std::size_t separator = helper_name.rfind("__");
+        REQUIRE(separator != std::string::npos);
+        helper_name.resize(separator);
+        unlabeled.gltf["nodes"][helper]["name"] = helper_name;
+      }
+      LogCapture logs;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(unlabeled)), dst) == ARX_OK);
+      CHECK(logs.contains("light settings"));
+      CHECK(logs.contains("light flags"));
+      CHECK(logs.contains("light effect"));
+      CHECK(logs.contains("has no final label"));
+    }
+
     parsed.gltf["nodes"][light_index]["name"] = "arx_light__FALLSTART_3__FALLEND_10__Hall_torch.001";
     parsed.gltf["nodes"][settings_index]["name"] = "SETTINGS__RGB_0.25_0.5_0.75__INTENSITY_2__Hall_torch.001";
     parsed.gltf["nodes"][helper_index]["name"] = "FLAGS__SEMIDYNAMIC__SPAWNFIRE__Hall_torch.001";
@@ -6707,7 +6800,11 @@ TEST_SUITE("FtsGlb") {
     pistoris::LevelModules dst;
     REQUIRE(importLevelGlb(glb, dst) == ARX_OK);
     CHECK(dst.geometry.faces.size() == 1);
-    CHECK(dst.textures.textures == source_level.textures.textures);
+    REQUIRE(dst.textures.textures.size() == 1);
+    REQUIRE(source_level.textures.textures.size() == 1);
+    CHECK(dst.textures.textures[0].path == source_level.textures.textures[0].path);
+    CHECK(dst.textures.textures[0].external_image_extension == ".png");
+    CHECK(source_level.textures.textures[0].external_image_extension.empty());
     CHECK(dst.geometry.faces[0].texture == 0);
     CHECK((dst.geometry.faces[0].flags & pistoris::kFaceBitStone) != 0);
   }

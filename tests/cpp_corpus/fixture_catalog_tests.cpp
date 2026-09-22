@@ -58,6 +58,8 @@ TEST_SUITE("fixture_catalog") {
 
   TEST_CASE("Ambiance fixture set is present") { CHECK_FALSE(test_support::fixtureCatalog().ambiances.empty()); }
 
+  TEST_CASE("Cinematic fixture set is present") { CHECK_FALSE(test_support::fixtureCatalog().cinematics.empty()); }
+
   TEST_CASE("Catalog paths exist") {
     const test_support::FixtureCatalog& catalog = test_support::fixtureCatalog();
     for (const test_support::LevelFixture& fixture : catalog.levels) {
@@ -83,6 +85,15 @@ TEST_SUITE("fixture_catalog") {
     for (const test_support::AmbianceFixture& fixture : catalog.ambiances) {
       checkFixturePath(fixture.amb);
       checkGlbFixture(fixture.glb);
+    }
+    for (const test_support::CinematicFixture& fixture : catalog.cinematics) {
+      checkFixturePath(fixture.glb);
+      checkFixturePath(fixture.cin);
+      std::unordered_set<std::string> languages;
+      for (const std::string& language : fixture.audio.languages) {
+        CHECK_FALSE(language.empty());
+        CHECK(languages.insert(language).second);
+      }
     }
     REQUIRE_FALSE(catalog.native_image_sidecars.empty());
     REQUIRE_FALSE(catalog.native_audio_sidecars.empty());
@@ -142,6 +153,7 @@ TEST_SUITE("fixture_catalog") {
     checkUniqueFixtureIdentity(catalog.models);
     checkUniqueFixtureIdentity(catalog.animations);
     checkUniqueFixtureIdentity(catalog.ambiances);
+    checkUniqueFixtureIdentity(catalog.cinematics);
 
     std::unordered_set<std::string> model_names;
     for (const test_support::ModelFixture& fixture : catalog.models) {
@@ -162,6 +174,11 @@ TEST_SUITE("fixture_catalog") {
       CHECK(pistoris::paths::ambianceFromSelector(fixture.selector, parsed));
       const bool reference_exists = fixture.reference_model.empty() || model_names.contains(fixture.reference_model);
       CHECK(reference_exists);
+    }
+    for (const test_support::CinematicFixture& fixture : catalog.cinematics) {
+      CAPTURE(fixture.name);
+      pistoris::paths::CinematicPathView parsed;
+      CHECK(pistoris::paths::cinematicFromSelector(fixture.selector, parsed));
     }
 
     for (const test_support::LevelFixture& fixture : catalog.levels) {

@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "api/status_boundary.h"
@@ -21,6 +22,7 @@
 #include "native/ftl.h"
 #include "utils/identifier.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/resource_path.h"
 
 #include <algorithm>
@@ -75,9 +77,10 @@ FtlRig deriveFtlRig(const ftl::Data& native) {
 
 }  // namespace
 
-ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
-                                  std::vector<std::string>* texture_source_paths) noexcept {
+ArxReturnCode Model::importNative(Model& out, const ftl::Data& native, std::vector<std::string>* texture_source_paths,
+                                  NativeTextMode text_mode) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ArxReturnCode rc = validateFtl(&native);
     if (rc != ARX_OK) return rc;
     if (native.groups.size() > skeleton::kMaxBones) return ARX_MODEL_TOO_MANY_BONES;
@@ -97,8 +100,10 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
       const SelectionId id = static_cast<SelectionId>(index);
       const ftl::Selection& source = native.selections[index];
       Selection& selection = result.data_->selections.slots[id];
+      std::string decoded_name;
+      if (!native_text::decode(fixedString(source.name), text_mode, decoded_name)) return ARX_FTL_BAD_SELECTION_NAME;
       IdentifierNormalization normalized = normalizeIdentifier(
-          fixedString(source.name), {.letter_case = IdentifierCase::kLower, .max_length = selections::kMaxNameLength});
+          decoded_name, {.letter_case = IdentifierCase::kLower, .max_length = selections::kMaxNameLength});
       if (hasIdentifierRepair(normalized.repair, IdentifierRepair::kEmpty)) normalized.value = "selection";
       selection.name = std::move(normalized.value);
       selection_repairs[id] = normalized.repair;
@@ -114,11 +119,12 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
       const SelectionId id = static_cast<SelectionId>(index);
       Selection& selection = result.data_->selections.slots[id];
       selection_repairs[id] |= selection_uniqueness_repairs[id];
-      if (reportableIdentifierRepair(selection_repairs[id]))
-        log(ARX_LOG_INFO,
-            "FTL -> Model: selection '{}' normalized to '{}'",
-            fixedString(native.selections[index].name),
-            selection.name);
+      if (reportableIdentifierRepair(selection_repairs[id])) {
+        std::string decoded_name;
+        if (!native_text::decode(fixedString(native.selections[index].name), text_mode, decoded_name))
+          return ARX_FTL_BAD_SELECTION_NAME;
+        log(ARX_LOG_INFO, "FTL -> Model: selection '{}' normalized to '{}'", decoded_name, selection.name);
+      }
       if (cutSelection(selection.name)) {
         const std::size_t leading = static_cast<std::size_t>(native.selections[index].selected.front());
         selection.leading_vertex =
@@ -140,16 +146,21 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
 
     std::vector<TextureIndex> texture_remap(native.texture_containers.size(), kNoTexture);
     std::unordered_map<std::string, TextureIndex, ResourcePathIdentityHash, ResourcePathIdentityEqual> textures_by_path;
+    std::unordered_map<std::string, std::string, ResourcePathIdentityHash, ResourcePathIdentityEqual> decoded_sources;
     textures_by_path.reserve(native.texture_containers.size());
     for (std::size_t index = 0; index < native.texture_containers.size(); ++index) {
       const std::string_view source_path = fixedString(native.texture_containers[index].filename);
       if (source_path.empty()) continue;
-      Texture parsed = textures::fromImagePath(source_path);
+      std::string decoded_path;
+      if (!native_text::decode(source_path, text_mode, decoded_path)) return ARX_FTL_BAD_TEXTURE_PATH;
+      const auto [source, inserted_source] = decoded_sources.try_emplace(decoded_path, source_path);
+      if (!inserted_source && !ResourcePathIdentityEqual{}(source->second, source_path)) {
+        log(ARX_LOG_ERROR, "FTL -> Model: distinct native texture paths decode to '{}'", decoded_path);
+        return ARX_FTL_BAD_TEXTURE_PATH;
+      }
+      Texture parsed(decoded_path);
       auto existing = textures_by_path.find(std::string_view(parsed.path));
       if (existing != textures_by_path.end()) {
-        Texture& retained = result.data_->textures.textures[existing->second];
-        if (retained.external_image_extension.empty())
-          retained.external_image_extension = std::move(parsed.external_image_extension);
         texture_remap[index] = existing->second;
         continue;
       }
@@ -157,7 +168,7 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
       result.data_->textures.textures.push_back(std::move(parsed));
       textures_by_path.emplace(result.data_->textures.textures.back().path, texture);
       texture_remap[index] = texture;
-      if (texture_source_paths) source_paths.emplace_back(source_path);
+      if (texture_source_paths) source_paths.push_back(std::move(decoded_path));
     }
     textures::PathRepairInfo texture_repairs;
     rc = model_detail::textureError(textures::repairPaths(result.data_->textures.textures, &texture_repairs));
@@ -227,7 +238,7 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
     for (std::size_t index = 0; index < native.groups.size(); ++index) {
       const ftl::Group& source = native.groups[index];
       Bone bone;
-      bone.name = fixedString(source.name);
+      if (!native_text::decode(fixedString(source.name), text_mode, bone.name)) return ARX_FTL_BAD_GROUP_NAME;
       bone.position = native.vertices[source.origin].position - native_origin;
       bone.parent = rig.parents[index];
       if (!std::isfinite(source.blob_shadow_size)) return ARX_MODEL_BAD_BONE_BLOB_SHADOW_SIZE;
@@ -246,11 +257,15 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
     std::vector<IdentifierRepair> bone_repairs(result.data_->skeleton.bones.size());
     if (bone_names.apply(bone_repairs).exhausted) return ARX_MODEL_DUPLICATE_BONE_NAME;
     for (std::size_t index = 0; index < bone_repairs.size(); ++index)
-      if (reportableIdentifierRepair(bone_repairs[index]))
+      if (reportableIdentifierRepair(bone_repairs[index])) {
+        std::string decoded_name;
+        if (!native_text::decode(fixedString(native.groups[index].name), text_mode, decoded_name))
+          return ARX_FTL_BAD_GROUP_NAME;
         log(ARX_LOG_INFO,
             "FTL -> Model: bone '{}' normalized to '{}'",
-            fixedString(native.groups[index].name),
+            decoded_name,
             result.data_->skeleton.bones[index].name);
+      }
     result.data_->skeleton.origin_bone = rig.vertex_bones[native.header.origin];
     result.data_->selections.origin_mask = native_selection_masks[native.header.origin];
 
@@ -259,7 +274,8 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
       const std::size_t vertex = static_cast<std::size_t>(source.vertex_idx);
       const std::string_view source_name = fixedString(source.name);
       ActionPoint point;
-      point.name = source_name;
+      if (!native_text::decode(source_name, text_mode, point.name)) return ARX_FTL_BAD_ACTION_NAME;
+      const std::string decoded_name = point.name;
       const IdentifierRepair name_repair = action_points::repairName(point.name);
       point.position = native.vertices[vertex].position - native_origin;
       point.bone = rig.vertex_bones[vertex];
@@ -268,7 +284,7 @@ ArxReturnCode Model::importNative(Model& out, const ftl::Data& native,
       if (reportableIdentifierRepair(name_repair))
         log(ARX_LOG_INFO,
             "FTL -> Model: action point '{}' normalized to '{}'",
-            source_name,
+            decoded_name,
             result.data_->action_points.points[index].name);
     }
 

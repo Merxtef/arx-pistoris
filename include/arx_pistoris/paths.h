@@ -131,6 +131,7 @@ ARX_API ArxReturnCode arx_pistoris_path_animation_from_selector(ArxStringView se
 
 // --- Cinematic ---
 
+ARX_API ArxReturnCode arx_pistoris_path_cinematic_illustration_directory(ArxStringView* out_directory) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_path_cinematic_cin(ArxCinematicPathView cinematic, char* out, size_t capacity,
                                                       size_t* out_size) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_path_cinematic_from_cin(ArxStringView path,
