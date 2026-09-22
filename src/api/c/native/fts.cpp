@@ -5,10 +5,12 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.h"
+#include "arx_pistoris/native/text.h"
 
 #include "api/c/internal.h"
 #include "api/c/native/internal.h"
 #include "api/c/native/json_internal.h"
+#include "api/c/native/text_internal.h"
 #include "external/json.h"
 #include "native/storage.h"
 
@@ -49,12 +51,18 @@ ArxReturnCode arx_pistoris_fts_write(const ArxFts* fts, uint32_t compress, uint8
   });
 }
 
-ArxReturnCode arx_pistoris_fts_to_json(const ArxFts* fts, std::uint32_t pretty, char** out_json) noexcept {
-  return pistoris::c_api::toJson(fts, pretty, out_json, pistoris::exportFtsToJson);
+ArxReturnCode arx_pistoris_fts_to_json(const ArxFts* fts, std::uint32_t pretty, ArxNativeTextMode text_mode,
+                                       char** out_json) noexcept {
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
+  return pistoris::c_api::toJson(
+      fts, pretty, pistoris::c_api::nativeTextMode(text_mode), out_json, pistoris::exportFtsToJson);
 }
 
-ArxReturnCode arx_pistoris_fts_from_json(const std::uint8_t* data, std::size_t size, ArxFts** out_fts) noexcept {
-  return pistoris::c_api::fromJson(data, size, out_fts, pistoris::importJsonToFts);
+ArxReturnCode arx_pistoris_fts_from_json(const std::uint8_t* data, std::size_t size, ArxNativeTextMode text_mode,
+                                         ArxFts** out_fts) noexcept {
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
+  return pistoris::c_api::fromJson(
+      data, size, pistoris::c_api::nativeTextMode(text_mode), out_fts, pistoris::importJsonToFts);
 }
 
 ArxReturnCode arx_pistoris_fts_validate(const ArxFts* fts) noexcept {

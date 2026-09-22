@@ -56,6 +56,12 @@ positive uniform scale.
 Model-origin selection membership and propelled Animation motion require the
 semantic origin.
 
+Canonical Model and Animation semantic helpers include their documented final
+labels. Import can recover a missing label from helpers with a fixed grammar and
+warns. Semantic options take precedence over label recovery. Path-bearing
+helpers keep their required label where the path may contain `__`. Labels that
+resemble convention tokens follow the shared informational-notice rule.
+
 Model GLB uses the same `(x,-y,-z)` basis conversion as Level GLB and defaults
 to 10 Arx units per GLB unit. Unskinned mesh nodes accept rotation, reflection,
 and uniform scale without shear. Joint and default-pose skin transforms require
@@ -246,10 +252,12 @@ FRAME_LENGTH_<frame>
 STEPS_<frame>[_<frame>]...
 ```
 
-Each `SETTINGS` helper contains at least one setting. At most one direct
-Animation `PATH` is allowed. It may be an Animation selector or logical game
-path. The helper name must match the GLB animation name before import
-normalization. Imported Animation names are normalized and made unique.
+Canonical `SETTINGS` helpers contain at least one setting. Import also accepts
+an empty `SETTINGS__<label>` helper as a no-op, and accepts bare `SETTINGS` with
+the usual missing-label warning. At most one direct Animation `PATH` is allowed.
+It may be an Animation selector or logical game path. The helper name must match
+the GLB animation name before import normalization. Imported Animation names
+are normalized and made unique.
 `SETTINGS` and `SOUND` may repeat. Each `SOUND` has exactly one direct `PATH`
 child. Every `PATH` label is mandatory and ignored; parsing uses the final
 `__`, so resource paths may contain `__`. Repeated frame lists are merged, but

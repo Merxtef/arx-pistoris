@@ -111,7 +111,7 @@ std::optional<std::size_t> checkNativeTriplet(const test_support::LevelNativeTri
   const std::string level_name = paths.dlf.stem().string();
   pistoris::Level::NativeBakeOptions options;
   options.level_name = level_name;
-  options.textures.include_files = true;
+  options.include_texture_files = true;
   pistoris::NativeLevelBundle baked;
   if (!test_support::checkCorpusStatus(
           paths.dlf, "bake Level to native bundle", level.bakeNativeBundle(options, baked)))

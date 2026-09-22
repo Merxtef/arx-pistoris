@@ -193,8 +193,25 @@
       "glb": { "path": "ambiance/glb/explore/explore.glb", "arx_units_per_glb_unit": 10 }
     }
   ],
+  "cinematics": [
+    {
+      "name": "numbers",
+      "selector": "cinematic:numbers",
+      "glb": "cinematic/numbers/numbers.glb",
+      "cin": "mount/graph/interface/illustrations/numbers.cin",
+      "audio": {
+        "effect_references": 1,
+        "speech_references": 9,
+        "languages": ["deutsch", "english", "francais"],
+        "encodings": 28
+      }
+    }
+  ],
   "native_sidecars": {
     "images": [
+      "mount/graph/interface/illustrations/numbers_1.bmp",
+      "mount/graph/interface/illustrations/numbers_2.bmp",
+      "mount/graph/interface/illustrations/numbers_3.bmp",
       "mount/graph/levels/level29/loading.png",
       "mount/graph/levels/level29/map.png",
       "mount/graph/levels/level30/loading.png",
@@ -250,8 +267,36 @@
       "mount/sfx/ambiance/metal_sheet_03.wav",
       "mount/sfx/ambiance/metal_sheet_04.wav",
       "mount/sfx/ambiance/qubodup-yd-darkshrineloop-opengameart.wav",
+      "mount/sfx/flash_bang.wav",
       "mount/sfx/misc_04.wav",
-      "mount/sfx/misc_08.wav"
+      "mount/sfx/misc_08.wav",
+      "mount/speech/deutsch/eight.wav",
+      "mount/speech/deutsch/five.wav",
+      "mount/speech/deutsch/four.wav",
+      "mount/speech/deutsch/nine.wav",
+      "mount/speech/deutsch/one.wav",
+      "mount/speech/deutsch/seven.wav",
+      "mount/speech/deutsch/six.wav",
+      "mount/speech/deutsch/three.wav",
+      "mount/speech/deutsch/two.wav",
+      "mount/speech/english/eight.wav",
+      "mount/speech/english/five.wav",
+      "mount/speech/english/four.wav",
+      "mount/speech/english/nine.wav",
+      "mount/speech/english/one.wav",
+      "mount/speech/english/seven.wav",
+      "mount/speech/english/six.wav",
+      "mount/speech/english/three.wav",
+      "mount/speech/english/two.wav",
+      "mount/speech/francais/eight.wav",
+      "mount/speech/francais/five.wav",
+      "mount/speech/francais/four.wav",
+      "mount/speech/francais/nine.wav",
+      "mount/speech/francais/one.wav",
+      "mount/speech/francais/seven.wav",
+      "mount/speech/francais/six.wav",
+      "mount/speech/francais/three.wav",
+      "mount/speech/francais/two.wav"
     ]
   },
   "native_aliases": [

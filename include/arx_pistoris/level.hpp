@@ -8,6 +8,7 @@
 #include "arx_pistoris/base/math.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level/types.h"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/texture.hpp"
 
 #include <cstddef>
@@ -216,7 +217,8 @@ class Level {
   struct NativeBakeOptions {
     // Used when dlf_scene_path is empty
     std::string_view level_name = {};
-    NativeTextureBakeOptions textures = {};
+    bool include_texture_files = true;
+    NativeTextMode text_mode = NativeTextMode::kAuto;
     bool reconstruct_quads = true;
     // Overrides level_name-derived path
     std::string_view dlf_scene_path = {};
@@ -229,6 +231,7 @@ class Level {
     ArxVector3 target_fts_offset = {};
     // Overrides level_name-derived path
     std::string_view dlf_scene_path = {};
+    NativeTextMode text_mode = NativeTextMode::kAuto;
   };
 
   // --- Lifetime ---
@@ -249,7 +252,8 @@ class Level {
 
   [[nodiscard]] static ArxReturnCode importNative(Level& out, const fts::Data& fts, const llf::Data* llf = nullptr,
                                                   const dlf::Data* dlf = nullptr,
-                                                  std::vector<std::string>* texture_source_paths = nullptr) noexcept;
+                                                  std::vector<std::string>* texture_source_paths = nullptr,
+                                                  NativeTextMode text_mode = NativeTextMode::kAuto) noexcept;
   [[nodiscard]] static ArxReturnCode importGlb(Level& out, std::span<const std::uint8_t> data) noexcept;
   [[nodiscard]] static ArxReturnCode importGlb(Level& out, std::span<const std::uint8_t> data,
                                                const GlbImportOptions& options, ArxLevelGlbImportInfo* info = nullptr,

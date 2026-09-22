@@ -10,6 +10,7 @@
 #include "arx_pistoris/paths/types.h"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.h"
+#include "arx_pistoris/sound.hpp"
 
 #include "ambiance/data.h"
 #include "ambiance/internal.h"
@@ -23,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -38,8 +40,6 @@ ArxReturnCode validateCopyRange(std::size_t size, std::size_t offset, std::size_
   if (count != 0 && out == nullptr) return ARX_INVALID_DATA_POINTER;
   return ARX_OK;
 }
-
-ArxStringView borrowedString(const std::string& value) noexcept { return {value.data(), value.size()}; }
 
 ArxReturnCode ambianceResourceError(resource::Error error) noexcept {
   switch (error) {
@@ -75,6 +75,10 @@ ArxReturnCode soundErrorCode(sounds::Error error) noexcept {
       return ARX_AMBIANCE_SOUND_TOO_LARGE;
     case sounds::Error::kDuplicatePath:
       return ARX_AMBIANCE_DUPLICATE_SOUND_PATH;
+    case sounds::Error::kBadKind:
+    case sounds::Error::kBadLanguage:
+    case sounds::Error::kDuplicateEncoding:
+      return ARX_INTERNAL_ERROR;
     case sounds::Error::kBadIndex:
       return ARX_INDEX_OUT_OF_RANGE;
     case sounds::Error::kOutOfMemory:
@@ -86,9 +90,9 @@ ArxReturnCode soundErrorCode(sounds::Error error) noexcept {
 ArxReturnCode validateStructure(const AmbianceModules& modules) noexcept {
   ArxReturnCode rc = ambianceResourceError(resource::validate(modules.resource, ARX_RESOURCE_KIND_AMBIANCE));
   if (rc != ARX_OK) return rc;
-  rc = soundErrorCode(sounds::validateStructure(modules.sounds.sounds));
+  rc = soundErrorCode(sounds::validateStructure(modules.sounds));
   if (rc != ARX_OK) return rc;
-  return errorCode(ambiance::validate(modules.ambiance, modules.sounds.sounds.size()));
+  return errorCode(ambiance::validate(modules.ambiance, sounds::count(modules.sounds, SoundKind::kEffect)));
 }
 
 }  // namespace ambiance_detail
@@ -103,6 +107,10 @@ ArxReturnCode validateTrackInput(const Input& input) noexcept {
 
 bool validSoundView(const ArxSoundView& sound) noexcept {
   return (sound.path.data || sound.path.size == 0) && (sound.encoded_audio.data || sound.encoded_audio.size == 0);
+}
+
+ArxStringView borrowedString(std::string_view value) noexcept {
+  return {value.data(), value.size()};  // NOLINT(bugprone-suspicious-stringview-data-usage)
 }
 
 Sound internalSound(const ArxSoundView& source) {
@@ -205,7 +213,7 @@ ArxAmbianceAutomation publicAutomation(const Automation& source) noexcept {
 
 bool internalTrack(const ArxAmbiancePannedTrackInput& source, AmbianceTrack& out) {
   if (source.key_count != 0 && !source.keys) return false;
-  out.sound = source.sound;
+  out.sound = sounds::effectHandle(source.sound);
   std::vector<PannedAmbianceKey> keys;
   keys.reserve(source.key_count);
   for (std::size_t index = 0; index < source.key_count; ++index) {
@@ -226,7 +234,7 @@ bool internalTrack(const ArxAmbiancePannedTrackInput& source, AmbianceTrack& out
 
 bool internalTrack(const ArxAmbiancePositionedTrackInput& source, AmbianceTrack& out) {
   if (source.key_count != 0 && !source.keys) return false;
-  out.sound = source.sound;
+  out.sound = sounds::effectHandle(source.sound);
   std::vector<PositionedAmbianceKey> keys;
   keys.reserve(source.key_count);
   for (std::size_t index = 0; index < source.key_count; ++index) {
@@ -295,7 +303,7 @@ ArxReturnCode Ambiance::validate() const noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     const ArxReturnCode rc = ambiance_detail::validateStructure(static_cast<const AmbianceModules&>(*data_));
     if (rc != ARX_OK) return rc;
-    return ambiance_detail::soundErrorCode(sounds::validateAudio(data_->sounds.sounds));
+    return ambiance_detail::soundErrorCode(sounds::validateAudio(data_->sounds));
   });
 }
 
@@ -314,7 +322,7 @@ ArxReturnCode Ambiance::setResourcePath(std::string_view resource_path) noexcept
 
 std::size_t Ambiance::trackCount() const noexcept { return data_->ambiance.tracks.size(); }
 
-std::size_t Ambiance::soundCount() const noexcept { return data_->sounds.sounds.size(); }
+std::size_t Ambiance::soundCount() const noexcept { return sounds::count(data_->sounds, SoundKind::kEffect); }
 
 AmbianceTrackIndex Ambiance::masterTrack() const noexcept { return data_->ambiance.master_track; }
 
@@ -333,21 +341,21 @@ ArxReturnCode Ambiance::copyTracks(std::size_t offset, std::size_t count, ArxAmb
     } else {
       return ARX_INTERNAL_ERROR;
     }
-    out_tracks[index] = {
-        source.sound,
-        kind,
-        key_count,
-    };
+    SoundIndex sound = kNoSound;
+    if (soundHandleIndex(source.sound, sound) != ARX_OK) return ARX_INTERNAL_ERROR;
+    out_tracks[index] = {sound, kind, key_count};
   }
   return ARX_OK;
 }
 
 ArxReturnCode Ambiance::copySoundViews(std::size_t offset, std::size_t count, ArxSoundView* out_sounds) const noexcept {
-  const ArxReturnCode rc = validateCopyRange(data_->sounds.sounds.size(), offset, count, out_sounds);
+  const ArxReturnCode rc = validateCopyRange(soundCount(), offset, count, out_sounds);
   if (rc != ARX_OK) return rc;
   for (std::size_t index = 0; index < count; ++index) {
-    const Sound& source = data_->sounds.sounds[offset + index];
-    out_sounds[index] = {borrowedString(source.path), {source.encoded_audio.data(), source.encoded_audio.size()}};
+    const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(offset + index));
+    const std::string_view source_path = sounds::path(data_->sounds, handle);
+    const std::span<const std::uint8_t> source_audio = sounds::encodedAudio(data_->sounds, handle);
+    out_sounds[index] = {borrowedString(source_path), {source_audio.data(), source_audio.size()}};
   }
   return ARX_OK;
 }
@@ -382,7 +390,7 @@ ArxReturnCode Ambiance::setPannedTrack(AmbianceTrackIndex index, const ArxAmbian
     AmbianceTrack value;
     ArxReturnCode rc = internalTrack(track, value);
     if (rc != ARX_OK) return rc;
-    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, data_->sounds.sounds.size()));
+    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, soundCount()));
     if (rc != ARX_OK) return rc;
     ambiance::setTrack(data_->ambiance, index, std::move(value));
     return ARX_OK;
@@ -398,7 +406,7 @@ ArxReturnCode Ambiance::addPannedTrack(const ArxAmbiancePannedTrackInput& track,
     AmbianceTrack value;
     rc = internalTrack(track, value);
     if (rc != ARX_OK) return rc;
-    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, data_->sounds.sounds.size()));
+    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, soundCount()));
     if (rc != ARX_OK) return rc;
     out_index = ambiance::addTrack(data_->ambiance, std::move(value));
     return ARX_OK;
@@ -412,7 +420,7 @@ ArxReturnCode Ambiance::setPositionedTrack(AmbianceTrackIndex index,
     AmbianceTrack value;
     ArxReturnCode rc = internalTrack(track, value);
     if (rc != ARX_OK) return rc;
-    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, data_->sounds.sounds.size()));
+    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, soundCount()));
     if (rc != ARX_OK) return rc;
     ambiance::setTrack(data_->ambiance, index, std::move(value));
     return ARX_OK;
@@ -428,7 +436,7 @@ ArxReturnCode Ambiance::addPositionedTrack(const ArxAmbiancePositionedTrackInput
     AmbianceTrack value;
     rc = internalTrack(track, value);
     if (rc != ARX_OK) return rc;
-    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, data_->sounds.sounds.size()));
+    rc = ambiance_detail::errorCode(ambiance::validateTrack(value, soundCount()));
     if (rc != ARX_OK) return rc;
     out_index = ambiance::addTrack(data_->ambiance, std::move(value));
     return ARX_OK;
@@ -454,25 +462,24 @@ ArxReturnCode Ambiance::setMasterTrack(AmbianceTrackIndex index) noexcept {
 ArxReturnCode Ambiance::compactSounds(std::size_t* removed) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (removed) *removed = 0;
-    std::vector<std::uint8_t> used(data_->sounds.sounds.size(), 0);
+    std::vector<std::uint8_t> used(soundCount(), 0);
     for (const AmbianceTrack& track : data_->ambiance.tracks) {
-      if (track.sound >= used.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
-      used[track.sound] = 1;
+      SoundIndex sound = kNoSound;
+      if (soundHandleIndex(track.sound, sound) != ARX_OK || sound >= used.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
+      used[sound] = 1;
     }
-    std::vector<SoundIndex> remap(used.size(), kNoSound);
-    SoundIndex next = 0;
-    for (std::size_t index = 0; index < used.size(); ++index)
-      if (used[index] != 0) remap[index] = next++;
-
-    std::size_t target = 0;
-    for (std::size_t source = 0; source < used.size(); ++source) {
-      if (used[source] == 0) continue;
-      if (source != target) data_->sounds.sounds[target] = std::move(data_->sounds.sounds[source]);
-      ++target;
+    std::vector<SoundIndex> remap;
+    std::size_t removed_count = 0;
+    const ArxReturnCode rc =
+        ambiance_detail::soundErrorCode(sounds::compact(data_->sounds, SoundKind::kEffect, used, remap, removed_count));
+    if (rc != ARX_OK) return rc;
+    for (AmbianceTrack& track : data_->ambiance.tracks) {
+      SoundIndex sound = kNoSound;
+      if (soundHandleIndex(track.sound, sound) != ARX_OK || sound >= remap.size() || remap[sound] == kNoSound)
+        return ARX_INTERNAL_ERROR;
+      track.sound = sounds::effectHandle(remap[sound]);
     }
-    data_->sounds.sounds.resize(target);
-    for (AmbianceTrack& track : data_->ambiance.tracks) track.sound = remap[track.sound];
-    if (removed) *removed = used.size() - target;
+    if (removed) *removed = removed_count;
     return ARX_OK;
   });
 }
@@ -491,7 +498,7 @@ ArxReturnCode Ambiance::rebaseSoundPaths(std::string_view directory) noexcept {
 ArxReturnCode Ambiance::setSound(SoundIndex index, const ArxSoundView& sound) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (!validSoundView(sound)) return ARX_INVALID_DATA_POINTER;
-    if (static_cast<std::size_t>(index) >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
+    if (static_cast<std::size_t>(index) >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
     Sound next = internalSound(sound);
     sounds::PathRepairInfo repairs;
     ArxReturnCode rc = ambiance_detail::soundErrorCode(sounds::repairPath(data_->sounds, next, index, &repairs));
@@ -509,7 +516,7 @@ ArxReturnCode Ambiance::addSound(const ArxSoundView& sound, SoundIndex& out_inde
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     out_index = kNoSound;
     if (!validSoundView(sound)) return ARX_INVALID_DATA_POINTER;
-    ArxReturnCode rc = ambiance_detail::soundErrorCode(sounds::validateSoundCount(data_->sounds.sounds.size() + 1U));
+    ArxReturnCode rc = ambiance_detail::soundErrorCode(sounds::validateSoundCount(soundCount() + 1U));
     if (rc != ARX_OK) return rc;
     Sound next = internalSound(sound);
     sounds::PathRepairInfo repairs;
@@ -527,7 +534,7 @@ ArxReturnCode Ambiance::addSound(const ArxSoundView& sound, SoundIndex& out_inde
 ArxReturnCode Ambiance::setSoundData(SoundIndex index, ArxEncodedAudioView encoded_audio) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (!encoded_audio.data && encoded_audio.size != 0) return ARX_INVALID_DATA_POINTER;
-    if (static_cast<std::size_t>(index) >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
+    if (static_cast<std::size_t>(index) >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
     std::vector<std::uint8_t> data;
     if (encoded_audio.size != 0) data.assign(encoded_audio.data, encoded_audio.data + encoded_audio.size);
     const ArxReturnCode rc = ambiance_detail::soundErrorCode(sounds::validateEncodedAudio(data));
@@ -538,18 +545,23 @@ ArxReturnCode Ambiance::setSoundData(SoundIndex index, ArxEncodedAudioView encod
 }
 
 ArxReturnCode Ambiance::clearSoundData(SoundIndex index) noexcept {
-  if (static_cast<std::size_t>(index) >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
+  if (static_cast<std::size_t>(index) >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
   sounds::clearEncodedAudio(data_->sounds, index);
   return ARX_OK;
 }
 
 ArxReturnCode Ambiance::removeSound(SoundIndex index) noexcept {
-  if (index >= data_->sounds.sounds.size()) return ARX_INDEX_OUT_OF_RANGE;
-  if (std::ranges::any_of(data_->ambiance.tracks, [index](const AmbianceTrack& track) { return track.sound == index; }))
+  if (index >= soundCount()) return ARX_INDEX_OUT_OF_RANGE;
+  const SoundHandle removed_handle = sounds::effectHandle(index);
+  if (std::ranges::any_of(data_->ambiance.tracks,
+                          [removed_handle](const AmbianceTrack& track) { return track.sound == removed_handle; }))
     return ARX_AMBIANCE_SOUND_IN_USE;
   sounds::removeSound(data_->sounds, index);
-  for (AmbianceTrack& track : data_->ambiance.tracks)
-    if (track.sound > index) --track.sound;
+  for (AmbianceTrack& track : data_->ambiance.tracks) {
+    SoundIndex current = kNoSound;
+    if (soundHandleIndex(track.sound, current) == ARX_OK && current > index)
+      track.sound = sounds::effectHandle(current - 1U);
+  }
   return ARX_OK;
 }
 

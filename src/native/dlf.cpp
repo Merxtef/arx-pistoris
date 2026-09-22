@@ -61,12 +61,14 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "native/lighting_layout.h"
 #include "native/llf.h"
 #include "native/resource_lookup.h"
+#include "native/resource_path.h"
 #include "native/write_metadata.h"
 #include "paths/entity_class.h"
 #include "utils/container_allocation.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
 #include "utils/math/finite.h"
+#include "utils/native_text.h"
 
 #include <cstdint>
 #include <cstring>
@@ -116,14 +118,14 @@ struct NativeHeader {
 static_assert(sizeof(NativeHeader) == 8520);
 
 struct NativeScene {
-  char name[512] = {};
+  char name[kDlfScenePathCapacity] = {};
   std::int32_t pad[16] = {};
   float fpad[16] = {};
 };
 static_assert(sizeof(NativeScene) == 640);
 
 struct NativeEntity {
-  char name[512] = {};
+  char name[kDlfEntityClassPathCapacity] = {};
   ArxVector3 position = {};
   ArxAngle angle = {};
   std::int32_t ident = -1;
@@ -153,7 +155,7 @@ struct NativeFog {
 static_assert(sizeof(NativeFog) == 592);
 
 struct NativePath {
-  char name[64] = {};
+  char name[kDlfPathNameCapacity] = {};
   std::int16_t idx = 0;
   std::int16_t flags = 0;
   ArxVector3 init_position = {};
@@ -166,7 +168,7 @@ struct NativePath {
   float fpad[26] = {};
   std::int32_t height = 0;
   std::int32_t lpad[31] = {};
-  char ambiance[128] = {};
+  char ambiance[kDlfZoneAmbianceCapacity] = {};
   char cpad[128] = {};
 };
 static_assert(sizeof(NativePath) == 608);
@@ -181,33 +183,25 @@ struct NativePathNode {
 };
 static_assert(sizeof(NativePathNode) == 68);
 
-template <std::size_t N>
-std::string fixedString(const char (&value)[N]) {
-  const void* end = std::memchr(value, '\0', N);
-  const std::size_t size =
-      end ? static_cast<std::size_t>(static_cast<const char*>(end) - value) : static_cast<std::size_t>(N);
-  return std::string(value, size);
-}
-
-template <std::size_t N>
-bool copyFixed(char (&destination)[N], std::string_view source) {
-  if (source.empty() || !fitsNativeString<N>(source)) return false;
-  std::memcpy(destination, source.data(), source.size());
-  destination[source.size()] = '\0';
+bool isLowerAscii(std::string_view value) {
+  for (char c : value)
+    if (c >= 'A' && c <= 'Z') return false;
   return true;
 }
 
 template <std::size_t N>
-bool copyFixedAllowEmpty(char (&destination)[N], std::string_view source) {
-  if (!fitsNativeString<N>(source)) return false;
-  if (!source.empty()) std::memcpy(destination, source.data(), source.size());
-  destination[source.size()] = '\0';
-  return true;
+bool copyStem(char (&destination)[N], std::string_view source, bool allow_empty = false) {
+  std::string encoded;
+  if (!encodeNativeResourceStem(source, N, encoded)) return false;
+  return copyFixedString(encoded, destination, allow_empty);
 }
 
-void lowerAscii(std::string& value) {
-  for (char& c : value)
+template <std::size_t N>
+void lowerAscii(char (&value)[N]) {
+  for (char& c : value) {
+    if (c == '\0') break;
     if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  }
 }
 
 bool countFits(std::int32_t count, std::size_t max) { return count >= 0 && static_cast<std::size_t>(count) <= max; }
@@ -292,17 +286,14 @@ ArxReturnCode readEmbeddedLighting(const NativeHeader& header, std::optional<llf
   return ARX_OK;
 }
 
-ArxReturnCode readEntities(const NativeHeader& header, dlf::Data& data, ReadCursor& cursor,
-                           std::uint64_t& normalized_legacy_teo) {
+ArxReturnCode readEntities(const NativeHeader& header, dlf::Data& data, ReadCursor& cursor) {
   if (!tryResize(data.entities, static_cast<std::size_t>(header.num_entities))) return ARX_BAD_ALLOC;
   for (dlf::Entity& entity : data.entities) {
     NativeEntity native;
     cursor.read(native);
     if (!cursor) return ARX_UNEXPECTED_EOF;
-    const std::string source = fixedString(native.name);
-    std::string_view removed_extension;
-    if (!normalizeEntityClassPath(source, entity.class_path, removed_extension)) return ARX_DLF_BAD_ENTITY_CLASS_PATH;
-    if (isLegacyTeoExtension(removed_extension)) ++normalized_legacy_teo;
+    canonicalizeFixedString(native.name, "DLF: entity.name");
+    std::memcpy(entity.class_path, native.name, sizeof(entity.class_path));
     entity.ident = native.ident;
     entity.position = native.position;
     entity.angle = native.angle;
@@ -347,11 +338,10 @@ ArxReturnCode readPaths(const NativeHeader& header, dlf::Data& data, ReadCursor&
     const std::size_t node_count = static_cast<std::size_t>(native.num_pathways);
     if (node_count > cursor.remaining() / sizeof(NativePathNode)) return ARX_UNEXPECTED_EOF;
 
-    std::string name = fixedString(native.name);
-    lowerAscii(name);
+    canonicalizeFixedString(native.name, "DLF: path.name", i);
     if (native.height != 0) {
       dlf::Zone zone;
-      zone.name = std::move(name);
+      std::memcpy(zone.name, native.name, sizeof(zone.name));
       zone.position = native.position;
       zone.height = native.height;
       if (!tryResize(zone.points, node_count)) return ARX_BAD_ALLOC;
@@ -363,15 +353,15 @@ ArxReturnCode readPaths(const NativeHeader& header, dlf::Data& data, ReadCursor&
       if ((native.flags & kZoneFlagColor) != 0) zone.color = native.color;
       if ((native.flags & kZoneFlagFarclip) != 0) zone.farclip = native.farclip;
       if ((native.flags & kZoneFlagAmbiance) != 0) {
-        std::string ambiance = fixedString(native.ambiance);
-        lowerAscii(ambiance);
-        zone.ambiance =
-            dlf::ZoneAmbiance{std::move(ambiance), native.ambiance_volume <= 1.0f ? 100.0f : native.ambiance_volume};
+        canonicalizeFixedString(native.ambiance, "DLF: path.ambiance", i);
+        zone.ambiance.emplace();
+        std::memcpy(zone.ambiance->name, native.ambiance, sizeof(zone.ambiance->name));
+        zone.ambiance->volume = native.ambiance_volume <= 1.0f ? 100.0f : native.ambiance_volume;
       }
       data.zones.push_back(std::move(zone));
     } else {
       dlf::Path path;
-      path.name = std::move(name);
+      std::memcpy(path.name, native.name, sizeof(path.name));
       path.position = native.position;
       if (!tryResize(path.nodes, node_count)) return ARX_BAD_ALLOC;
       for (dlf::PathNode& target : path.nodes) {
@@ -406,7 +396,7 @@ ArxReturnCode writeEmbeddedLighting(const llf::Data* lighting, WriteCursor& curs
 ArxReturnCode writeEntities(const dlf::Data& data, WriteCursor& cursor) {
   for (const dlf::Entity& entity : data.entities) {
     NativeEntity native;
-    if (!copyFixed(native.name, entity.class_path)) return ARX_DLF_BAD_ENTITY_CLASS_PATH;
+    if (!copyStem(native.name, fixedStringView(entity.class_path))) return ARX_DLF_BAD_ENTITY_CLASS_PATH;
     native.position = entity.position;
     native.angle = entity.angle;
     native.ident = entity.ident;
@@ -435,7 +425,7 @@ ArxReturnCode writeFogs(const dlf::Data& data, WriteCursor& cursor) {
 
 ArxReturnCode writeZone(const dlf::Zone& zone, WriteCursor& cursor) {
   NativePath native;
-  if (!copyFixed(native.name, zone.name)) return ARX_DLF_BAD_ZONE_NAME;
+  if (!copyFixedString(fixedStringView(zone.name), native.name, false)) return ARX_DLF_BAD_ZONE_NAME;
   native.position = zone.position;
   native.num_pathways = static_cast<std::int32_t>(zone.points.size());
   native.height = zone.height;
@@ -452,7 +442,7 @@ ArxReturnCode writeZone(const dlf::Zone& zone, WriteCursor& cursor) {
   const auto& ambiance = zone.ambiance;
   if (ambiance) {
     native.flags |= kZoneFlagAmbiance;
-    if (!copyFixedAllowEmpty(native.ambiance, ambiance->name)) return ARX_DLF_BAD_ZONE_AMBIANCE;
+    if (!copyStem(native.ambiance, fixedStringView(ambiance->name), true)) return ARX_DLF_BAD_ZONE_AMBIANCE;
     native.ambiance_volume = ambiance->volume;
   }
   cursor.write(native);
@@ -466,7 +456,7 @@ ArxReturnCode writeZone(const dlf::Zone& zone, WriteCursor& cursor) {
 
 ArxReturnCode writePath(const dlf::Path& path, WriteCursor& cursor) {
   NativePath native;
-  if (!copyFixed(native.name, path.name)) return ARX_DLF_BAD_PATH_NAME;
+  if (!copyFixedString(fixedStringView(path.name), native.name, false)) return ARX_DLF_BAD_PATH_NAME;
   native.position = path.position;
   native.num_pathways = static_cast<std::int32_t>(path.nodes.size());
   cursor.write(native);
@@ -482,8 +472,10 @@ ArxReturnCode writePath(const dlf::Path& path, WriteCursor& cursor) {
 
 }  // namespace
 
-bool validDlfScenePath(std::string_view scene_path) noexcept {
-  return !scene_path.empty() && fitsNativeString<sizeof(NativeScene::name)>(scene_path);
+bool validDlfScenePath(std::string_view scene_path) {
+  if (scene_path.empty() || !fitsNativeString<sizeof(NativeScene::name)>(scene_path)) return false;
+  std::string canonical;
+  return normalizeNativeResourcePath(scene_path, canonical) && canonical == scene_path;
 }
 
 ArxReturnCode loadDlf(dlf::Data* data, std::optional<llf::Data>* embedded_lighting, ReadCursor& cursor) {
@@ -515,10 +507,10 @@ ArxReturnCode loadDlf(dlf::Data* data, std::optional<llf::Data>* embedded_lighti
   NativeScene scene;
   payload.read(scene);
   if (!payload) return ARX_UNEXPECTED_EOF;
-  tmp.scene_path = fixedString(scene.name);
+  canonicalizeFixedString(scene.name, "DLF: scene.name");
+  std::memcpy(tmp.scene_path, scene.name, sizeof(tmp.scene_path));
 
-  std::uint64_t normalized_legacy_teo = 0;
-  ArxReturnCode rc = readEntities(header, tmp, payload, normalized_legacy_teo);
+  ArxReturnCode rc = readEntities(header, tmp, payload);
   if (rc != ARX_OK) return rc;
 
   std::optional<llf::Data> lighting;
@@ -539,12 +531,10 @@ ArxReturnCode loadDlf(dlf::Data* data, std::optional<llf::Data>* embedded_lighti
 
   rc = readPaths(header, tmp, payload);
   if (rc != ARX_OK) return rc;
+  rc = canonicalizeDlf(&tmp);
+  if (rc != ARX_OK) return rc;
   rc = validateDlf(&tmp);
   if (rc != ARX_OK) return rc;
-
-  if (normalized_legacy_teo != 0) {
-    log(ARX_LOG_WARN, "DLF import: normalized {} legacy .teo entity class path(s)", normalized_legacy_teo);
-  }
   log(ARX_LOG_INFO,
       "DLF loaded: {} entities, {} fogs, {} zones, {} paths",
       tmp.entities.size(),
@@ -565,36 +555,39 @@ ArxReturnCode saveDlf(const dlf::Data* data, const llf::Data* embedded_lighting,
     if (rc != ARX_OK) return rc;
   }
 
-  if (!resolvesThroughDefaultLooseRoot("game", data->scene_path)) {
+  const std::string_view scene_path = fixedStringView(data->scene_path);
+  if (!resolvesThroughDefaultLooseRoot("game", scene_path)) {
     log(ARX_LOG_WARN,
         "DLF saving: scene path '{}' resolves outside Libertatis default loose roots; it may not be discovered",
-        data->scene_path);
+        native_text::diagnostic(scene_path));
   }
   for (std::size_t index = 0; index < data->entities.size(); ++index) {
-    const std::string& path = data->entities[index].class_path;
+    const std::string_view path = fixedStringView(data->entities[index].class_path);
     if (!resolvesThroughDefaultLooseRoot({}, path)) {
       log(ARX_LOG_WARN,
           "DLF saving: entity[{}] class path '{}' resolves outside Libertatis default loose roots; "
           "associated script or legacy object may not be discovered",
           index,
-          path);
+          native_text::diagnostic(path));
     }
   }
   for (std::size_t index = 0; index < data->zones.size(); ++index) {
     const auto& ambiance = data->zones[index].ambiance;
     if (!ambiance) continue;
-    const std::string& path = ambiance->name;
+    const std::string_view path = fixedStringView(ambiance->name);
     if (!path.empty() && !resolvesThroughDefaultLooseRoot("sfx/ambiance", path)) {
       log(ARX_LOG_WARN,
           "DLF saving: zone[{}] ambiance path '{}' resolves outside Libertatis default loose roots; "
           "it may not be discovered",
           index,
-          path);
+          native_text::diagnostic(path));
     }
   }
 
   NativeHeader header;
-  const NativeWriteMetadata metadata = nativeWriteMetadata(signer);
+  NativeWriteMetadata metadata;
+  rc = nativeWriteMetadata(signer, metadata);
+  if (rc != ARX_OK) return rc;
   std::memcpy(header.ident, kDlfIdentity, sizeof(kDlfIdentity));
   std::memcpy(header.lastuser, metadata.last_user.data(), metadata.last_user.size());
   header.time = metadata.modified_at;
@@ -610,7 +603,7 @@ ArxReturnCode saveDlf(const dlf::Data* data, const llf::Data* embedded_lighting,
   cursor.write(header);
 
   NativeScene scene;
-  if (!copyFixed(scene.name, data->scene_path)) return ARX_DLF_BAD_SCENE_PATH;
+  if (!copyFixedString(scene_path, scene.name, false)) return ARX_DLF_BAD_SCENE_PATH;
   cursor.write(scene);
 
   rc = writeEntities(*data, cursor);
@@ -637,10 +630,50 @@ ArxReturnCode saveDlf(const dlf::Data* data, const llf::Data* embedded_lighting,
   return cursor ? ARX_OK : ARX_BAD_ALLOC;
 }
 
+ArxReturnCode canonicalizeDlf(dlf::Data* data) {
+  if (!data) return ARX_INVALID_DATA_POINTER;
+
+  std::string canonical;
+  if (!isNullTerminated(data->scene_path) ||
+      !normalizeNativeResourcePath(fixedStringView(data->scene_path), canonical) ||
+      !copyFixedString(canonical, data->scene_path, false))
+    return ARX_DLF_BAD_SCENE_PATH;
+
+  std::uint64_t normalized_legacy_teo = 0;
+  for (dlf::Entity& entity : data->entities) {
+    std::string_view removed_extension;
+    if (!isNullTerminated(entity.class_path) ||
+        !normalizeNativeEntityClassPath(fixedStringView(entity.class_path), canonical, removed_extension))
+      return ARX_DLF_BAD_ENTITY_CLASS_PATH;
+    const bool legacy_teo = isLegacyTeoExtension(removed_extension);
+    if (!copyFixedString(canonical, entity.class_path, false)) return ARX_DLF_BAD_ENTITY_CLASS_PATH;
+    if (legacy_teo) ++normalized_legacy_teo;
+  }
+  if (normalized_legacy_teo != 0)
+    log(ARX_LOG_WARN, "DLF import: normalized {} legacy .teo entity class path(s)", normalized_legacy_teo);
+
+  for (dlf::Zone& zone : data->zones) {
+    canonicalizeFixedString(zone.name, "DLF: zone.name");
+    lowerAscii(zone.name);
+    if (zone.ambiance) {
+      if (!isNullTerminated(zone.ambiance->name) ||
+          !normalizeNativeResourceStem(fixedStringView(zone.ambiance->name), canonical) ||
+          !copyFixedString(canonical, zone.ambiance->name))
+        return ARX_DLF_BAD_ZONE_AMBIANCE;
+    }
+  }
+  for (dlf::Path& path : data->paths) {
+    canonicalizeFixedString(path.name, "DLF: path.name");
+    lowerAscii(path.name);
+  }
+  return ARX_OK;
+}
+
 ArxReturnCode validateDlf(const dlf::Data* data) {
   if (!data) return ARX_INVALID_DATA_POINTER;
   if (data->version != kDlfVersion) return ARX_DLF_BAD_VERSION;
-  if (!validDlfScenePath(data->scene_path)) return ARX_DLF_BAD_SCENE_PATH;
+  if (!isNullTerminated(data->scene_path) || !validDlfScenePath(fixedStringView(data->scene_path)))
+    return ARX_DLF_BAD_SCENE_PATH;
   if (!math::finite(data->player_spawn.position) || !math::finite(data->player_spawn.angle))
     return ARX_DLF_BAD_PLAYER_SPAWN;
   if (data->entities.size() > kDlfMaxEntities) return ARX_DLF_BAD_ENTITY_COUNT;
@@ -649,10 +682,14 @@ ArxReturnCode validateDlf(const dlf::Data* data) {
     return ARX_DLF_BAD_PATH_RECORD_COUNT;
 
   for (const dlf::Entity& entity : data->entities) {
+    if (!isNullTerminated(entity.class_path)) return ARX_DLF_BAD_ENTITY_CLASS_PATH;
+    const std::string_view class_path = fixedStringView(entity.class_path);
     std::string normalized;
     std::string_view removed_extension;
-    if (entity.class_path.size() >= sizeof(NativeEntity::name) ||
-        !normalizeEntityClassPath(entity.class_path, normalized, removed_extension) || normalized != entity.class_path)
+    if (!normalizeNativeEntityClassPath(class_path, normalized, removed_extension) || normalized != class_path)
+      return ARX_DLF_BAD_ENTITY_CLASS_PATH;
+    std::string encoded;
+    if (!encodeNativeResourceStem(class_path, sizeof(NativeEntity::name), encoded))
       return ARX_DLF_BAD_ENTITY_CLASS_PATH;
     if (!math::finite(entity.position)) return ARX_DLF_BAD_ENTITY_POSITION;
     if (!math::finite(entity.angle)) return ARX_DLF_BAD_ENTITY_ANGLE;
@@ -668,7 +705,9 @@ ArxReturnCode validateDlf(const dlf::Data* data) {
   }
 
   for (const dlf::Zone& zone : data->zones) {
-    if (zone.name.empty() || !fitsNativeString<sizeof(NativePath::name)>(zone.name)) return ARX_DLF_BAD_ZONE_NAME;
+    if (!isNullTerminated(zone.name)) return ARX_DLF_BAD_ZONE_NAME;
+    const std::string_view zone_name = fixedStringView(zone.name);
+    if (zone_name.empty() || !isLowerAscii(zone_name)) return ARX_DLF_BAD_ZONE_NAME;
     if (!math::finite(zone.position)) return ARX_DLF_BAD_ZONE_POSITION;
     if (zone.points.size() < 3 || zone.points.size() > kDlfMaxPathNodes) return ARX_DLF_BAD_ZONE_POINT_COUNT;
     if (zone.height == 0) return ARX_DLF_BAD_ZONE_HEIGHT;
@@ -679,13 +718,21 @@ ArxReturnCode validateDlf(const dlf::Data* data) {
       return ARX_DLF_BAD_ZONE_FARCLIP;
     if (const auto& ambiance = zone.ambiance; ambiance.has_value()) {
       const dlf::ZoneAmbiance& value = *ambiance;
-      if (!fitsNativeString<sizeof(NativePath::ambiance)>(value.name) || !math::finite(value.volume))
+      if (!isNullTerminated(value.name)) return ARX_DLF_BAD_ZONE_AMBIANCE;
+      const std::string_view ambiance_name = fixedStringView(value.name);
+      std::string normalized;
+      std::string encoded;
+      if (!normalizeNativeResourcePath(ambiance_name, normalized) || normalized != ambiance_name ||
+          !encodeNativeResourceStem(ambiance_name, sizeof(NativePath::ambiance), encoded) ||
+          !math::finite(value.volume))
         return ARX_DLF_BAD_ZONE_AMBIANCE;
     }
   }
 
   for (const dlf::Path& path : data->paths) {
-    if (path.name.empty() || !fitsNativeString<sizeof(NativePath::name)>(path.name)) return ARX_DLF_BAD_PATH_NAME;
+    if (!isNullTerminated(path.name)) return ARX_DLF_BAD_PATH_NAME;
+    const std::string_view path_name = fixedStringView(path.name);
+    if (path_name.empty() || !isLowerAscii(path_name)) return ARX_DLF_BAD_PATH_NAME;
     if (!math::finite(path.position)) return ARX_DLF_BAD_PATH_POSITION;
     if (path.nodes.empty() || path.nodes.size() > kDlfMaxPathNodes) return ARX_DLF_BAD_PATH_NODE_COUNT;
     for (const dlf::PathNode& node : path.nodes) {

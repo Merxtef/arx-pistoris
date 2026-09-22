@@ -28,6 +28,8 @@ const char* formatName(Format format) {
       return "TEA";
     case Format::kAmb:
       return "AMB";
+    case Format::kCin:
+      return "CIN";
     case Format::kObj:
       return "OBJ";
     case Format::kJson:
@@ -46,6 +48,7 @@ Format formatFromExtension(std::string_view extension) noexcept {
   if (equalAsciiInsensitive(extension, ".llf")) return Format::kLlf;
   if (equalAsciiInsensitive(extension, ".tea")) return Format::kTea;
   if (equalAsciiInsensitive(extension, ".amb")) return Format::kAmb;
+  if (equalAsciiInsensitive(extension, ".cin")) return Format::kCin;
   if (equalAsciiInsensitive(extension, ".obj")) return Format::kObj;
   if (equalAsciiInsensitive(extension, ".json")) return Format::kJson;
   if (equalAsciiInsensitive(extension, ".glb")) return Format::kGlb;

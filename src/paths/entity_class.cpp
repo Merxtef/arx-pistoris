@@ -59,8 +59,8 @@ bool isLegacyTeoExtension(std::string_view extension) noexcept {
   return true;
 }
 
-bool normalizeEntityClassPath(std::string_view source, std::string& out, std::string_view& removed_extension,
-                              bool* discarded_prefix) {
+bool normalizeEntityClassPathImpl(std::string_view source, std::string& out, std::string_view& removed_extension,
+                                  bool* discarded_prefix, bool require_utf8_resource_path) {
   removed_extension = {};
   if (discarded_prefix != nullptr) *discarded_prefix = false;
   if (hasEmbeddedNull(source)) return false;
@@ -114,11 +114,21 @@ bool normalizeEntityClassPath(std::string_view source, std::string& out, std::st
     if (source_dot != std::string_view::npos) extension = source.substr(source_dot, source_end - source_dot);
     result.erase(dot);
   }
-  if (result.empty() || result.back() == '/' || !isResourcePath(result)) return false;
+  if (result.empty() || result.back() == '/' || (require_utf8_resource_path && !isResourcePath(result))) return false;
 
   out = std::move(result);
   removed_extension = extension;
   return true;
+}
+
+bool normalizeNativeEntityClassPath(std::string_view source, std::string& out, std::string_view& removed_extension,
+                                    bool* discarded_prefix) {
+  return normalizeEntityClassPathImpl(source, out, removed_extension, discarded_prefix, false);
+}
+
+bool normalizeEntityClassPath(std::string_view source, std::string& out, std::string_view& removed_extension,
+                              bool* discarded_prefix) {
+  return normalizeEntityClassPathImpl(source, out, removed_extension, discarded_prefix, true);
 }
 
 InteractiveKind classifyEntityClassPath(std::string_view normalized_path) noexcept {

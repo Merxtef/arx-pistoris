@@ -23,7 +23,10 @@ typedef uint32_t ArxVertexIndex;
 typedef uint32_t ArxFaceIndex;
 typedef uint32_t ArxTextureIndex;
 typedef uint32_t ArxSoundIndex;
+typedef uint64_t ArxSoundHandle;
+typedef uint32_t ArxLanguageId;
 typedef uint32_t ArxAmbianceTrackIndex;
+typedef uint32_t ArxCinematicIllustrationIndex;
 typedef uint32_t ArxBoneIndex;
 typedef uint32_t ArxActionPointIndex;
 typedef uint8_t ArxSelectionId;
@@ -31,6 +34,10 @@ typedef uint8_t ArxSelectionId;
 #define ARX_INVALID_INDEX UINT32_MAX
 #define ARX_NO_TEXTURE UINT32_MAX
 #define ARX_NO_SOUND UINT32_MAX
+#define ARX_NO_SOUND_HANDLE UINT64_MAX
+#define ARX_SOUND_EFFECTS_LANGUAGE_ID 0U
+#define ARX_INVALID_LANGUAGE_ID UINT32_MAX
+#define ARX_INVALID_CINEMATIC_ILLUSTRATION UINT32_MAX
 #define ARX_INVALID_SELECTION_ID UINT8_MAX
 
 // NOLINTEND(readability-identifier-naming)
@@ -42,6 +49,8 @@ using VertexIndex = ::ArxVertexIndex;
 using FaceIndex = ::ArxFaceIndex;
 using TextureIndex = ::ArxTextureIndex;
 using SoundIndex = ::ArxSoundIndex;
+using SoundHandle = ::ArxSoundHandle;
+using LanguageId = ::ArxLanguageId;
 using RoomIndex = ::ArxRoomIndex;
 using PortalIndex = ::ArxPortalIndex;
 using AnchorIndex = ::ArxAnchorIndex;
@@ -53,6 +62,7 @@ using FogIndex = ::ArxFogIndex;
 using ZoneIndex = ::ArxZoneIndex;
 using PathIndex = ::ArxPathIndex;
 using AmbianceTrackIndex = ::ArxAmbianceTrackIndex;
+using CinematicIllustrationIndex = ::ArxCinematicIllustrationIndex;
 using BoneIndex = ::ArxBoneIndex;
 using ActionPointIndex = ::ArxActionPointIndex;
 using SelectionId = ::ArxSelectionId;
@@ -61,6 +71,9 @@ inline constexpr VertexIndex kInvalidVertexIndex = ARX_INVALID_INDEX;
 inline constexpr FaceIndex kInvalidFaceIndex = ARX_INVALID_INDEX;
 inline constexpr TextureIndex kNoTexture = ARX_NO_TEXTURE;
 inline constexpr SoundIndex kNoSound = ARX_NO_SOUND;
+inline constexpr SoundHandle kNoSoundHandle = ARX_NO_SOUND_HANDLE;
+inline constexpr LanguageId kSoundEffects = ARX_SOUND_EFFECTS_LANGUAGE_ID;
+inline constexpr LanguageId kInvalidLanguageId = ARX_INVALID_LANGUAGE_ID;
 inline constexpr RoomIndex kInvalidRoomIndex = ARX_INVALID_INDEX;
 inline constexpr PortalIndex kInvalidPortalIndex = ARX_INVALID_INDEX;
 inline constexpr AnchorIndex kInvalidAnchorIndex = ARX_INVALID_INDEX;
@@ -72,6 +85,7 @@ inline constexpr FogIndex kInvalidFogIndex = ARX_INVALID_INDEX;
 inline constexpr ZoneIndex kInvalidZoneIndex = ARX_INVALID_INDEX;
 inline constexpr PathIndex kInvalidPathIndex = ARX_INVALID_INDEX;
 inline constexpr AmbianceTrackIndex kInvalidAmbianceTrackIndex = ARX_INVALID_INDEX;
+inline constexpr CinematicIllustrationIndex kInvalidCinematicIllustrationIndex = ARX_INVALID_CINEMATIC_ILLUSTRATION;
 inline constexpr BoneIndex kInvalidBoneIndex = ARX_INVALID_INDEX;
 inline constexpr ActionPointIndex kInvalidActionPointIndex = ARX_INVALID_INDEX;
 inline constexpr SelectionId kInvalidSelectionId = ARX_INVALID_SELECTION_ID;

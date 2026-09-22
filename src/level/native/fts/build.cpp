@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/math.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "level/anchor_bounds.h"
@@ -20,6 +21,7 @@
 #include "utils/log.h"
 #include "utils/math/bounds.h"
 #include "utils/math/finite.h"
+#include "utils/native_text.h"
 #include "utils/resource_path.h"
 
 #include <algorithm>
@@ -141,15 +143,12 @@ TextureIndex addTexture(LevelModules& out, std::map<std::int32_t, TextureIndex>&
     by_id.emplace(texture_id, kNoTexture);
     return kNoTexture;
   }
-  Texture parsed = textures::fromImagePath(texture);
+  Texture parsed(texture);
   if (parsed.path.empty()) {
     by_id.emplace(texture_id, kNoTexture);
     return kNoTexture;
   }
   if (auto existing = by_path.find(std::string_view(parsed.path)); existing != by_path.end()) {
-    Texture& retained = out.textures.textures[existing->second];
-    if (retained.external_image_extension.empty())
-      retained.external_image_extension = std::move(parsed.external_image_extension);
     by_id.emplace(texture_id, existing->second);
     return existing->second;
   }
@@ -304,7 +303,8 @@ std::size_t expectedFtsColorCount(const fts::Data& fts) {
 }
 
 ArxReturnCode buildFtsModules(const fts::Data& fts, std::span<const ArxColor3> colors, LevelModules& out,
-                              NativeBuildWarnings& warnings, std::vector<std::string>* texture_source_paths) {
+                              NativeBuildWarnings& warnings, std::vector<std::string>* texture_source_paths,
+                              NativeTextMode text_mode) {
   std::map<std::int32_t, TextureIndex> textures;
   TexturePathMap textures_by_path;
   std::size_t color_index = 0;
@@ -325,15 +325,24 @@ ArxReturnCode buildFtsModules(const fts::Data& fts, std::span<const ArxColor3> c
   }
   std::sort(texture_ids.begin(), texture_ids.end());
   textures_by_path.reserve(texture_ids.size());
+  std::unordered_map<std::string, std::string, ResourcePathIdentityHash, ResourcePathIdentityEqual> decoded_sources;
   if (texture_source_paths) texture_source_paths->reserve(texture_ids.size());
-  for (std::int32_t id : texture_ids)
-    addTexture(out, textures, textures_by_path, id, fts.textures.at(id).fic, texture_source_paths);
+  for (std::int32_t id : texture_ids) {
+    const std::string& raw_path = fts.textures.at(id).fic;
+    std::string decoded_path;
+    if (!native_text::decode(raw_path, text_mode, decoded_path)) return ARX_FTS_BAD_TEXTURE_PATH;
+    const auto [source, new_source] = decoded_sources.try_emplace(decoded_path, raw_path);
+    if (!new_source && !ResourcePathIdentityEqual{}(source->second, raw_path)) {
+      log(ARX_LOG_ERROR, "FTS -> Level: distinct native texture paths decode to '{}'", decoded_path);
+      return ARX_FTS_BAD_TEXTURE_PATH;
+    }
+    addTexture(out, textures, textures_by_path, id, decoded_path, texture_source_paths);
+  }
   textures::PathRepairInfo texture_repairs;
   const textures::Error texture_error = textures::repairPaths(out.textures.textures, &texture_repairs);
   if (texture_error != textures::Error::kNone) return level_validation::textureError(texture_error);
   for (const textures::PathRepairInfo::Repair& repair : texture_repairs.repairs)
     log(ARX_LOG_WARN, "FTS -> Level: texture path '{}' normalized to '{}'", repair.original, repair.repaired);
-
   out.rooms.portals.reserve(fts.portals.size());
   std::uint32_t portal_ordinal = 1;
   for (const fts::Portal& portal : fts.portals) {

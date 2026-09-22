@@ -20,7 +20,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
   ArxAmbiance* raw_ambiance = nullptr;
   ArxSoundSourceReferences* raw_sources = nullptr;
-  const ArxReturnCode rc = arx_pistoris_ambiance_import_native(native.get(), &raw_ambiance, &raw_sources);
+  const ArxReturnCode rc =
+      arx_pistoris_ambiance_import_native(native.get(), &raw_ambiance, &raw_sources, ARX_NATIVE_TEXT_AUTO);
   arx_fuzz::AmbianceHandle ambiance(raw_ambiance);
   arx_fuzz::SoundSourceReferencesHandle sources(raw_sources);
   if (rc != ARX_OK) {

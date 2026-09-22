@@ -10,6 +10,7 @@
 #include "arx_pistoris/level/bake.hpp"
 #include "arx_pistoris/level/types.h"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/texture.hpp"
@@ -136,13 +137,15 @@ bool prepareProjectedResourceOutputs(ResourceOutputPlan& plan,
 
 template <typename Native>
 bool writeNativeJson(IoService& io, const OutputTarget& target, const Native& native, bool pretty,
-                     const char* description, std::string_view signer = {}) {
+                     const char* description, pistoris::NativeTextMode text_mode, std::string_view signer = {}) {
   std::string json;
   ArxReturnCode rc = ARX_OK;
-  if constexpr (std::same_as<Native, pistoris::Dlf> || std::same_as<Native, pistoris::Llf>) {
+  if constexpr (std::same_as<Native, pistoris::Dlf>) {
+    rc = pistoris::toJson(native, json, pretty, signer, text_mode);
+  } else if constexpr (std::same_as<Native, pistoris::Llf>) {
     rc = pistoris::toJson(native, json, pretty, signer);
   } else {
-    rc = pistoris::toJson(native, json, pretty);
+    rc = pistoris::toJson(native, json, pretty, text_mode);
   }
   if (rc != ARX_OK) return outputFailure(description, rc);
   return writeText(io, target, json);
@@ -166,8 +169,8 @@ bool prepareFullOutput(IntermediateLevel& source, const Invocation& invocation) 
   if (rc != ARX_OK) return outputFailure("Level texture compaction", rc);
   if (removed != 0) log(ARX_LOG_INFO, "removed %zu unused Level texture(s)", removed);
 
-  if (invocation.rebase_textures) {
-    rc = source.level.rebaseTexturePaths(invocation.texture_rebase_directory);
+  if (invocation.texture_rebase.enabled) {
+    rc = source.level.rebaseTexturePaths(invocation.texture_rebase.directory);
     if (rc != ARX_OK) return outputFailure("Level texture rebasing", rc);
   }
   return true;
@@ -175,9 +178,11 @@ bool prepareFullOutput(IntermediateLevel& source, const Invocation& invocation) 
 
 bool bakeDlf(IntermediateLevel& source, const Invocation& invocation, NativeEncoding encoding, NativeLevelFiles& out) {
   const std::string level_name = encoding == NativeEncoding::kJson ? jsonLevelName(invocation) : std::string{};
+  out.text_mode = encoding == NativeEncoding::kJson ? pistoris::NativeTextMode::kUtf8 : invocation.native_text_mode;
   pistoris::Level::DlfBakeOptions options;
   options.level_name = level_name;
   options.target_fts_offset = source.source_fts_offset;
+  options.text_mode = out.text_mode;
   if (encoding == NativeEncoding::kBinary || invocation.options.fts_scene_directory_specified)
     options.dlf_scene_path = invocation.native_output.dlf_scene_path;
 
@@ -192,10 +197,12 @@ bool bakeNativeBundle(IntermediateLevel& source, const Invocation& invocation, N
                       bool include_texture_files, NativeLevelFiles& out,
                       std::vector<pistoris::NativeTextureFile>& texture_files) {
   const std::string level_name = encoding == NativeEncoding::kJson ? jsonLevelName(invocation) : std::string{};
+  out.text_mode = encoding == NativeEncoding::kJson ? pistoris::NativeTextMode::kUtf8 : invocation.native_text_mode;
   pistoris::Level::NativeBakeOptions options;
   options.level_name = level_name;
   options.reconstruct_quads = invocation.options.reconstruct_quads;
-  options.textures.include_files = include_texture_files;
+  options.include_texture_files = include_texture_files;
+  options.text_mode = out.text_mode;
   if (encoding == NativeEncoding::kBinary || invocation.options.fts_scene_directory_specified)
     options.dlf_scene_path = invocation.native_output.dlf_scene_path;
 
@@ -244,7 +251,8 @@ bool writeJsonFiles(NativeLevelFiles& files, const ExecutionContext& execution, 
 
   IoService& io = execution.io();
   if (files.fts &&
-      !writeNativeJson(io, invocation.json_output.fts, *files.fts, invocation.format.pretty, "FTS JSON output")) {
+      !writeNativeJson(
+          io, invocation.json_output.fts, *files.fts, invocation.format.pretty, "FTS JSON output", files.text_mode)) {
     return false;
   }
   if (files.llf && !writeNativeJson(io,
@@ -252,6 +260,7 @@ bool writeJsonFiles(NativeLevelFiles& files, const ExecutionContext& execution, 
                                     *files.llf,
                                     invocation.format.pretty,
                                     "LLF JSON output",
+                                    files.text_mode,
                                     invocation.options.signer)) {
     return false;
   }
@@ -260,6 +269,7 @@ bool writeJsonFiles(NativeLevelFiles& files, const ExecutionContext& execution, 
                                     *files.dlf,
                                     invocation.format.pretty,
                                     "DLF JSON output",
+                                    files.text_mode,
                                     invocation.options.signer)) {
     return false;
   }
@@ -269,7 +279,7 @@ bool writeJsonFiles(NativeLevelFiles& files, const ExecutionContext& execution, 
 void prepareNativeTextureOutput(const NativeLevelFiles& files, const ExecutionContext& execution,
                                 const Invocation& invocation, std::vector<pistoris::NativeTextureFile>& texture_files) {
   if (invocation.texture_options.export_files && files.fts)
-    loadNativeTextureFiles(*files.fts, execution.io(), invocation.textures, texture_files);
+    loadNativeTextureFiles(*files.fts, files.text_mode, execution.io(), invocation.textures, texture_files);
 }
 
 bool writeNativeBinaryNative(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
@@ -345,7 +355,8 @@ bool writeDebugCellsIntermediate(IntermediateLevel& source, const ExecutionConte
   pistoris::Level::NativeBakeOptions options;
   options.level_name = "debug";
   options.reconstruct_quads = false;
-  options.textures.include_files = false;
+  options.include_texture_files = false;
+  options.text_mode = pistoris::NativeTextMode::kUtf8;
   pistoris::NativeLevelBundle bundle;
   ArxReturnCode rc = source.level.bakeNativeBundle(options, bundle);
   if (rc != ARX_OK) return outputFailure("Level native bundle output", rc);

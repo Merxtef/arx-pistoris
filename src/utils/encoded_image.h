@@ -86,6 +86,10 @@ Error encodeRgbPng(std::uint32_t width, std::uint32_t height, std::span<const st
 
 Error transcodeToPng(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out, Info* out_info = nullptr,
                      BmpColorKey bmp_color_key = BmpColorKey::kNone);
+Error transcodeToTga(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out, Info* out_info = nullptr,
+                     BmpColorKey bmp_color_key = BmpColorKey::kNone);
+Error transcodeToBmp(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out, Info* out_info = nullptr,
+                     BmpColorKey bmp_color_key = BmpColorKey::kNone);
 Error normalizeToPowerOfTwo(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out,
                             Info* out_info = nullptr, bool* out_rescaled = nullptr,
                             BmpColorKey bmp_color_key = BmpColorKey::kNone);

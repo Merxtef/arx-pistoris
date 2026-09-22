@@ -642,6 +642,49 @@ ResourceReadResult IoService::readImage(const PathLocation& base, std::string_vi
   return ResourceReadResult::kNotFound;
 }
 
+ResourceReadResult IoService::readAudio(const PathLocation& base, std::string_view path, AudioLookupMode mode,
+                                        std::vector<std::uint8_t>& out, std::string* selected_path,
+                                        std::string* resolved_path) {
+  if (selected_path) selected_path->clear();
+  if (resolved_path) resolved_path->clear();
+
+  const auto read_candidate = [&](std::string_view candidate) {
+    PathLocation location;
+    std::string error;
+    if (!appendPathLocation(base, candidate, location, error)) return ResourceReadResult::kInvalidPath;
+    const ResourceReadResult result = readPath(location, out, resolved_path);
+    if (result != ResourceReadResult::kNotFound && selected_path) *selected_path = candidate;
+    return result;
+  };
+  if (mode == AudioLookupMode::kExact) return read_candidate(path);
+
+  const ResourceReadResult authored = read_candidate(path);
+  if (authored != ResourceReadResult::kNotFound) return authored;
+
+  const std::span<const std::string_view> extensions = media::audioLookupExtensions();
+  std::size_t preferred = extensions.size();
+  for (std::size_t index = 0; index < extensions.size(); ++index) {
+    if (endsWithAsciiInsensitive(path, extensions[index])) {
+      preferred = index;
+      break;
+    }
+  }
+
+  std::string stem(path);
+  if (preferred != extensions.size()) {
+    stem.resize(stem.size() - extensions[preferred].size());
+  }
+  for (std::size_t index = 0; index < extensions.size(); ++index) {
+    if (index == preferred) continue;
+    std::string candidate = stem;
+    candidate += extensions[index];
+    const ResourceReadResult result = read_candidate(candidate);
+    if (result != ResourceReadResult::kNotFound) return result;
+  }
+  out.clear();
+  return ResourceReadResult::kNotFound;
+}
+
 bool IoService::hasReadMounts() const noexcept { return !mounts_->roots.empty(); }
 
 ResourceEnumerationResult IoService::enumerateResources(std::string_view base_path, std::uint32_t max_depth,
@@ -649,14 +692,26 @@ ResourceEnumerationResult IoService::enumerateResources(std::string_view base_pa
   return mounts_->enumerate(base_path, max_depth, out);
 }
 
-ResourceEnumerationResult IoService::enumerateFiles(const PathLocation& directory, std::vector<PathLocation>& out) {
+ResourceEnumerationResult IoService::enumerateFiles(const PathLocation& directory, std::uint32_t max_depth,
+                                                    std::vector<EnumeratedFile>& out) {
   out.clear();
+  if (max_depth == 0) return ResourceEnumerationResult::kSuccess;
   if (directory.address == PathAddress::kMountRelative) {
+    std::string normalized_directory;
+    if (!directory.path.empty()) {
+      std::string error;
+      if (!normalizeResourcePath(directory.path, normalized_directory, error))
+        return ResourceEnumerationResult::kInvalidPath;
+    }
     std::vector<std::string> paths;
-    const ResourceEnumerationResult result = mounts_->enumerate(directory.path, 1, paths);
+    const ResourceEnumerationResult result = mounts_->enumerate(normalized_directory, max_depth, paths);
     if (result != ResourceEnumerationResult::kSuccess) return result;
     out.reserve(paths.size());
-    for (std::string& path : paths) out.push_back({.path = std::move(path), .address = PathAddress::kMountRelative});
+    for (std::string& path : paths) {
+      const std::size_t relative_begin = normalized_directory.empty() ? 0 : normalized_directory.size() + 1U;
+      std::string relative = path.substr(relative_begin);
+      out.push_back({std::move(relative), {.path = std::move(path), .address = PathAddress::kMountRelative}});
+    }
   } else {
     std::filesystem::path native;
     std::string error;
@@ -665,35 +720,67 @@ ResourceEnumerationResult IoService::enumerateFiles(const PathLocation& director
       return ResourceEnumerationResult::kInvalidPath;
     }
     std::error_code ec;
-    std::filesystem::directory_iterator it(native, ec);
+    std::filesystem::directory_iterator initial(native, ec);
     if (ec) {
       return ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory
                  ? ResourceEnumerationResult::kSuccess
                  : ResourceEnumerationResult::kReadFailed;
     }
-    const std::filesystem::directory_iterator end;
-    for (; it != end; it.increment(ec)) {
+
+    struct PendingDirectory {
+      std::filesystem::path path;
+      std::filesystem::path relative;
+      std::uint32_t depth = 0;
+    };
+    std::vector<PendingDirectory> pending = {{native, {}, 0}};
+    while (!pending.empty()) {
+      PendingDirectory current = std::move(pending.back());
+      pending.pop_back();
+      std::filesystem::directory_iterator it(current.path, ec);
       if (ec) {
         out.clear();
         return ResourceEnumerationResult::kReadFailed;
       }
-      const std::filesystem::directory_entry& entry = *it;
-      if (!entry.is_regular_file(ec)) {
+      const std::filesystem::directory_iterator end;
+      for (; it != end; it.increment(ec)) {
         if (ec) {
           out.clear();
           return ResourceEnumerationResult::kReadFailed;
         }
-        continue;
+        const std::filesystem::directory_entry& entry = *it;
+        const std::filesystem::file_status status = entry.symlink_status(ec);
+        if (ec) {
+          out.clear();
+          return ResourceEnumerationResult::kReadFailed;
+        }
+        if (std::filesystem::is_symlink(status)) continue;
+        const std::filesystem::path relative = current.relative / entry.path().filename();
+        if (std::filesystem::is_directory(status)) {
+          if (current.depth + 1U < max_depth) pending.push_back({entry.path(), relative, current.depth + 1U});
+          continue;
+        }
+        if (!std::filesystem::is_regular_file(status)) continue;
+        out.push_back({.relative_path = normalizeResourceSeparators(io_detail::pathToUtf8(relative)),
+                       .location = {.path = io_detail::pathToUtf8(entry.path().lexically_normal()),
+                                    .address = PathAddress::kAbsolute}});
       }
-      out.push_back(
-          {.path = io_detail::pathToUtf8(entry.path().lexically_normal()), .address = PathAddress::kAbsolute});
     }
   }
-  std::ranges::sort(out, [](const PathLocation& lhs, const PathLocation& rhs) {
-    if (resourcePathLess(lhs.path, rhs.path)) return true;
-    if (resourcePathLess(rhs.path, lhs.path)) return false;
-    return lhs.path < rhs.path;
+  std::ranges::sort(out, [](const EnumeratedFile& lhs, const EnumeratedFile& rhs) {
+    if (resourcePathLess(lhs.relative_path, rhs.relative_path)) return true;
+    if (resourcePathLess(rhs.relative_path, lhs.relative_path)) return false;
+    return lhs.relative_path < rhs.relative_path;
   });
+  return ResourceEnumerationResult::kSuccess;
+}
+
+ResourceEnumerationResult IoService::enumerateFiles(const PathLocation& directory, std::vector<PathLocation>& out) {
+  std::vector<EnumeratedFile> files;
+  const ResourceEnumerationResult result = enumerateFiles(directory, 1, files);
+  out.clear();
+  if (result != ResourceEnumerationResult::kSuccess) return result;
+  out.reserve(files.size());
+  for (EnumeratedFile& file : files) out.push_back(std::move(file.location));
   return ResourceEnumerationResult::kSuccess;
 }
 

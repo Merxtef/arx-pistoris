@@ -9,6 +9,7 @@
 #include "external/glb/container.h"
 #include "external/glb/level/coordinates.h"
 #include "external/glb/level/zones.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
 #include "external/glb/utils/tokens.h"
 #include "internal.h"
@@ -48,33 +49,33 @@ ArxReturnCode parseHelpers(const cgltf_data& data, const cgltf_node& root, std::
     if (index < 0 || static_cast<std::size_t>(index) >= data.nodes_count) return ARX_GLB_BAD_FORMAT;
     const std::string_view name = child->name != nullptr ? child->name : "";
     if (name.starts_with(kSettings)) {
-      const std::size_t label_separator = name.rfind("__");
-      if (label_separator == std::string_view::npos || label_separator < kSettings.size() ||
-          label_separator + 2 == name.size() || !glb::simpleEmptyNode(*child)) {
+      zone_internal::Settings candidate;
+      glb::ParsedLabel label;
+      if (!glb::simpleEmptyNode(*child) ||
+          !glb::parseRecoverableLabel(name,
+                                      candidate,
+                                      &label,
+                                      glb::ConventionOptions{{}, {"RGB_", "FARCLIP_", "VOLUME_"}},
+                                      [](std::span<const std::string_view> tokens, zone_internal::Settings& value) {
+                                        if (tokens.size() < 2 || tokens.front() != "SETTINGS") return false;
+                                        return zone_internal::parseSettings(tokens.subspan(1), value) == ARX_OK;
+                                      })) {
         zone_internal::logFailure(node_index, zone_name, "has invalid settings helper node {} '{}'", index, name);
         return ARX_GLB_BAD_LEVEL_ZONE;
       }
-      zone_internal::Settings candidate;
-      ArxReturnCode rc =
-          zone_internal::parseSettings(name.substr(kSettings.size(), label_separator - kSettings.size()), candidate);
-      if (rc != ARX_OK) {
-        zone_internal::logFailure(node_index, zone_name, "has malformed settings helper node {} '{}'", index, name);
-        return rc;
-      }
+      glb::reportConventionLabel("GLB -> Level zone settings", name, label);
       volume_seen = volume_seen || candidate.volume.has_value();
       if (!settings_seen) settings = candidate;
       settings_seen = true;
     }
     if (name.starts_with(kAmbiance)) {
-      const std::size_t label_separator = name.rfind("__");
-      if (label_separator == std::string_view::npos || label_separator < kAmbiance.size() ||
-          label_separator + 2 == name.size() || !glb::simpleEmptyNode(*child)) {
+      const std::optional<glb::LabeledValue> labeled = glb::splitRequiredLabel(name.substr(kAmbiance.size()));
+      if (!labeled || !glb::simpleEmptyNode(*child)) {
         zone_internal::logFailure(node_index, zone_name, "has invalid ambiance helper node {} '{}'", index, name);
         return ARX_GLB_BAD_LEVEL_ZONE;
       }
       std::string ambiance;
-      if (!paths::parseZoneAmbianceReference(name.substr(kAmbiance.size(), label_separator - kAmbiance.size()),
-                                             ambiance)) {
+      if (!paths::parseZoneAmbianceReference(labeled->value, ambiance)) {
         zone_internal::logFailure(node_index, zone_name, "has malformed ambiance helper node {} '{}'", index, name);
         return ARX_GLB_BAD_LEVEL_ZONE;
       }

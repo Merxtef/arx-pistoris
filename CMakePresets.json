@@ -133,7 +133,8 @@
     },
     {
       "name": "tidy-check",
-      "configurePreset": "tidy-check"
+      "configurePreset": "tidy-check",
+      "nativeToolOptions": ["-k", "0"]
     }
   ],
   "testPresets": [

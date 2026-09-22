@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/model/types.h"
+#include "arx_pistoris/native/text.h"
 
 #include "image_helpers.h"
 
@@ -317,7 +318,7 @@ f 1 2 3
     REQUIRE(arx_pistoris_model_replace_action_points(model, &input) == ARX_OK);
     CHECK(arx_pistoris_model_validate(model) == ARX_OK);
 
-    const ArxNativeTextureBakeOptions options = ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT;
+    const ArxNativeModelBakeOptions options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
     ArxFtl* native = nullptr;
     ArxNativeTextureFiles* textures = nullptr;
     CHECK(arx_pistoris_model_bake_native(model, &options, &native, &textures) == ARX_MODEL_TOO_MANY_ACTION_POINTS);
@@ -440,7 +441,7 @@ f 1 2 3
     CHECK(path.size == 0);
     CHECK(arx_pistoris_model_validate(model) == ARX_OK);
 
-    const ArxNativeTextureBakeOptions bake_options = ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT;
+    const ArxNativeModelBakeOptions bake_options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
     ArxFtl* baked = nullptr;
     ArxNativeTextureFiles* texture_files = nullptr;
     REQUIRE(arx_pistoris_model_bake_native(model, &bake_options, &baked, &texture_files) == ARX_OK);
@@ -459,14 +460,14 @@ f 1 2 3
 
     ArxModel* imported = nullptr;
     ArxTextureSourcePaths* imported_sources = nullptr;
-    REQUIRE(arx_pistoris_model_import_native(baked, &imported, &imported_sources) == ARX_OK);
+    REQUIRE(arx_pistoris_model_import_native(baked, &imported, &imported_sources, ARX_NATIVE_TEXT_AUTO) == ARX_OK);
     REQUIRE(imported_sources != nullptr);
     std::size_t source_count = 0;
     REQUIRE(arx_pistoris_texture_source_paths_count(imported_sources, &source_count) == ARX_OK);
     REQUIRE(source_count == 1);
     ArxStringView source{};
     REQUIRE(arx_pistoris_texture_source_paths_get(imported_sources, 0, &source) == ARX_OK);
-    CHECK((std::string_view(source.data, source.size) == "graph/obj3d/textures/wall."));
+    CHECK((std::string_view(source.data, source.size) == "graph/obj3d/textures/wall"));
     CHECK(arx_pistoris_model_validate(imported) == ARX_OK);
     REQUIRE(arx_pistoris_model_copy_faces(imported, 0, 1, &copied_face) == ARX_OK);
     CHECK(equal(copied_face.normal, face.normal));
@@ -562,7 +563,7 @@ f 1 2 3
     CHECK(arx_pistoris_model_add_bone(model, &bone, &bone_index) == ARX_MODEL_BAD_BONE_NAME);
 
     CHECK(arx_pistoris_model_bake_native(model, nullptr, nullptr, nullptr) == ARX_INVALID_OPTIONS);
-    const ArxNativeTextureBakeOptions bake_options = ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT;
+    const ArxNativeModelBakeOptions bake_options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
     CHECK(arx_pistoris_model_bake_native(model, &bake_options, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
     arx_pistoris_model_destroy(model);
   }

@@ -9,6 +9,7 @@
 #include "arx_pistoris/base/audio.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/native/text.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -21,8 +22,14 @@ typedef struct arx_pistoris_ambiance ArxAmbiance;
 typedef struct arx_pistoris_model ArxModel;
 typedef struct arx_pistoris_sound_files ArxSoundFiles;
 typedef struct arx_pistoris_sound_source_references ArxSoundSourceReferences;
-typedef struct ArxNativeSoundBakeOptions ArxNativeSoundBakeOptions;
 typedef struct ArxSoundView ArxSoundView;
+
+typedef struct ArxNativeAmbianceBakeOptions {
+  uint8_t include_sound_files;
+  ArxNativeTextMode text_mode;
+} ArxNativeAmbianceBakeOptions;
+
+#define ARX_NATIVE_AMBIANCE_BAKE_OPTIONS_INIT {1U, ARX_NATIVE_TEXT_AUTO}
 
 typedef struct ArxAmbianceGlbImportOptions {
   // Range [1, 1000]
@@ -53,14 +60,15 @@ ARX_API ArxReturnCode arx_pistoris_ambiance_reset(ArxAmbiance* ambiance) ARX_NOE
 // --- Conversion ---
 
 ARX_API ArxReturnCode arx_pistoris_ambiance_import_native(const ArxAmb* native, ArxAmbiance** out_ambiance,
-                                                          ArxSoundSourceReferences** out_sound_sources) ARX_NOEXCEPT;
+                                                          ArxSoundSourceReferences** out_sound_sources,
+                                                          ArxNativeTextMode text_mode) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_ambiance_import_glb(const uint8_t* data, size_t size,
                                                        const ArxAmbianceGlbImportOptions* options,
                                                        ArxAmbiance** out_ambiance,
                                                        ArxSoundSourceReferences** out_sound_sources) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_ambiance_bake_native(const ArxAmbiance* ambiance,
-                                                        const ArxNativeSoundBakeOptions* options, ArxAmb** out_native,
-                                                        ArxSoundFiles** out_sounds) ARX_NOEXCEPT;
+                                                        const ArxNativeAmbianceBakeOptions* options,
+                                                        ArxAmb** out_native, ArxSoundFiles** out_sounds) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_ambiance_export_glb(const ArxAmbiance* ambiance,
                                                        const ArxAmbianceGlbExportOptions* options,
                                                        const ArxModel* reference_model, uint8_t** out_data,

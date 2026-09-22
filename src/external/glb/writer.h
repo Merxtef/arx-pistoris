@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,6 +38,26 @@ struct AnimationChannel {
   AnimationPath path = AnimationPath::kTranslation;
 };
 
+enum class MaterialAlphaMode : std::uint8_t {
+  kOpaque,
+  kMask,
+  kBlend,
+};
+
+struct MaterialOptions {
+  std::array<float, 4> base_color{1.0f, 1.0f, 1.0f, 1.0f};
+  MaterialAlphaMode alpha_mode = MaterialAlphaMode::kOpaque;
+  bool double_sided = false;
+  bool unlit = false;
+};
+
+struct PerspectiveCameraOptions {
+  float vertical_fov = 0.0f;
+  float aspect_ratio = 0.0f;
+  float znear = 0.0f;
+  std::optional<float> zfar;
+};
+
 class Builder {
  public:
   Builder();
@@ -51,8 +72,10 @@ class Builder {
   int addTimeAccessor(std::span<const float> values);
   int addExternalTexture(std::string name, std::string uri);
   int addEmbeddedTexture(std::string name, std::string mime_type, std::span<const std::uint8_t> encoded);
+  int addMaterial(std::string name, int texture, const MaterialOptions& options);
   int addMaterial(std::string name, int texture, FaceType flags, float alpha, bool alpha_cutout = false);
   int addColorMaterial(std::string name, std::array<float, 4> color, bool double_sided = false);
+  int addPerspectiveCamera(std::string name, const PerspectiveCameraOptions& options);
   int addPointLight(std::string name, Vec3 color, float intensity, float range);
   int addMesh(std::string name, std::vector<Primitive> primitives);
   int addSkin(std::string name, std::span<const int> joints, int skeleton, int inverse_bind_matrices = -1);
@@ -62,6 +85,7 @@ class Builder {
   void setContentBasisRotation(const ArxQuat& rotation);
   void setNodeTranslation(int node, Vec3 translation);
   void setNodeRotation(int node, const ArxQuat& rotation);
+  void setNodeCamera(int node, int camera);
   void setNodeLight(int node, int light);
   void setNodeSkin(int node, int skin);
   void addChild(int parent, int child);
@@ -90,6 +114,7 @@ class Builder {
     std::array<float, 4> color{1.0f, 1.0f, 1.0f, 1.0f};
     bool double_sided = false;
     cgltf_alpha_mode alpha_mode = cgltf_alpha_mode_opaque;
+    bool unlit = false;
   };
 
   struct TextureDesc {
@@ -112,6 +137,11 @@ class Builder {
     float range = 0.0f;
   };
 
+  struct CameraDesc {
+    std::string name;
+    PerspectiveCameraOptions options;
+  };
+
   struct SkinDesc {
     std::string name;
     std::vector<int> joints;
@@ -123,6 +153,7 @@ class Builder {
     std::string name;
     std::string extras_json;
     int mesh = -1;
+    int camera = -1;
     int light = -1;
     int skin = -1;
     bool has_translation = false;
@@ -145,6 +176,7 @@ class Builder {
   std::vector<TextureDesc> textures_;
   std::vector<MaterialDesc> materials_;
   std::vector<MeshDesc> meshes_;
+  std::vector<CameraDesc> cameras_;
   std::vector<LightDesc> lights_;
   std::vector<SkinDesc> skins_;
   std::vector<NodeDesc> nodes_;

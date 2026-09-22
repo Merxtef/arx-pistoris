@@ -61,10 +61,12 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include "modules/rooms.h"
 #include "native/fixed_string.h"
 #include "native/resource_lookup.h"
+#include "native/resource_path.h"
 #include "utils/container_allocation.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
 #include "utils/math/finite.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <algorithm>
@@ -95,61 +97,26 @@ bool mulFits(std::size_t a, std::size_t b, std::size_t max, std::size_t& out) {
 
 bool sizeFitsInt32(std::size_t n) { return n <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()); }
 
-char lowerAscii(char value) noexcept {
-  if (value >= 'A' && value <= 'Z') return static_cast<char>(value - 'A' + 'a');
-  return value;
+std::string runtimeTextureResourceKey(std::string_view source) {
+  std::string normalized;
+  (void)normalizeNativeResourcePath(source, normalized);
+  return normalized;
 }
 
-std::string runtimeTextureResourceKey(std::string_view source) {
-  std::string normalized(source.size(), '\0');
-  std::size_t input_start = 0;
-  std::size_t output_start = 0;
-  while (input_start < source.size()) {
-    std::size_t separator = source.find_first_of("/\\", input_start);
-    if (separator == std::string_view::npos) separator = source.size();
+bool canonicalTexturePath(const fts::Texture& texture) {
+  if (!isNullTerminated(texture.fic)) return false;
+  std::string normalized;
+  std::string encoded;
+  return normalizeNativeResourcePath(texture.fic, normalized) && normalized == texture.fic &&
+         encodeNativeResourceStem(normalized, sizeof(texture.fic), encoded);
+}
 
-    const std::size_t component_start = input_start;
-    input_start = separator + 1U;
-    if (separator == component_start) continue;
-    if (separator - component_start == 1U && source[component_start] == '.') continue;
-    if (separator - component_start == 2U && source[component_start] == '.' && source[component_start + 1U] == '.') {
-      if (output_start == 0) {
-        normalized[output_start++] = '.';
-        normalized[output_start++] = '.';
-      } else {
-        const std::size_t previous_separator = normalized.find_last_of('/', output_start - 1U);
-        if (previous_separator == std::string::npos) {
-          if (output_start == 2U && normalized[0] == '.' && normalized[1] == '.') {
-            normalized[output_start++] = '/';
-            normalized[output_start++] = '.';
-            normalized[output_start++] = '.';
-          } else {
-            output_start = 0;
-          }
-        } else if (output_start - previous_separator - 1U == 2U && normalized[previous_separator + 1U] == '.' &&
-                   normalized[previous_separator + 2U] == '.') {
-          normalized[output_start++] = '/';
-          normalized[output_start++] = '.';
-          normalized[output_start++] = '.';
-        } else {
-          output_start = previous_separator;
-        }
-      }
-      continue;
-    }
-
-    if (output_start != 0) normalized[output_start++] = '/';
-    for (std::size_t i = component_start; i < separator; ++i) normalized[output_start++] = lowerAscii(source[i]);
-  }
-  normalized.resize(output_start);
-
-  const bool has_info =
-      !normalized.empty() && normalized != ".." && !(normalized.size() >= 3U && normalized.ends_with("/.."));
-  if (has_info) {
-    const std::size_t extension = normalized.find_last_of("/.");
-    if (extension != std::string::npos && normalized[extension] == '.') normalized.resize(extension);
-  }
-  return normalized;
+bool encodeTexturePath(const fts::Texture& texture, char (&out)[256]) {
+  std::string encoded;
+  if (!encodeNativeResourceStem(texture.fic, sizeof(out), encoded)) return false;
+  std::memset(out, 0, sizeof(out));
+  std::memcpy(out, encoded.data(), encoded.size());
+  return true;
 }
 
 bool roomDistCount(std::int32_t num_rooms, std::size_t& out) {
@@ -240,7 +207,7 @@ ArxReturnCode readPayload(fts::Data* d, ReadCursor& c) {
     c.read(record);
     if (!c) return ARX_UNEXPECTED_EOF;
     if (record.tc <= 0) return ARX_FTS_BAD_TEXTURE_ID;
-    clampStr(record.fic, "FTS: texture.fic", i);
+    canonicalizeFixedString(record.fic, "FTS: texture.fic", i);
     fts::Texture texture;
     texture.temp = record.temp;
     std::memcpy(texture.fic, record.fic, sizeof(texture.fic));
@@ -313,6 +280,7 @@ ArxReturnCode readPrefix(fts::Data& data, ReadCursor& cursor) {
 
 ArxReturnCode finishLoad(fts::Data* data, fts::Data& result, ReadCursor& payload) {
   ARX_RETURN_IF_ERR(readPayload(&result, payload));
+  ARX_RETURN_IF_ERR(canonicalizeFts(&result));
   ARX_RETURN_IF_ERR(validateFts(&result));
 
   *data = std::move(result);
@@ -328,7 +296,7 @@ ArxReturnCode finishLoad(fts::Data* data, fts::Data& result, ReadCursor& payload
   return ARX_OK;
 }
 
-WriteCursor& writePayload(const fts::Data* d, WriteCursor& c) {
+ArxReturnCode writePayload(const fts::Data* d, WriteCursor& c) {
   fts::SceneHeader scene = d->scene;
   scene.num_textures = static_cast<std::int32_t>(d->textures.size());
   c.write(scene);
@@ -336,7 +304,7 @@ WriteCursor& writePayload(const fts::Data* d, WriteCursor& c) {
     TextureRecord record;
     record.tc = id;
     record.temp = texture.temp;
-    std::memcpy(record.fic, texture.fic, sizeof(record.fic));
+    if (!encodeTexturePath(texture, record.fic)) return ARX_FTS_BAD_TEXTURE_PATH;
     c.write(record);
   }
   for (const auto& cell : d->cells) {
@@ -363,7 +331,7 @@ WriteCursor& writePayload(const fts::Data* d, WriteCursor& c) {
     c.writeArray(room.polygons);
   }
   c.writeArray(d->room_distances);
-  return c;
+  return c ? ARX_OK : ARX_BAD_ALLOC;
 }
 
 }  // namespace
@@ -386,7 +354,7 @@ ArxReturnCode saveFts(const fts::Data* d, WriteCursor& c) {
       log(ARX_LOG_WARN,
           "FTS saving: texture {} path '{}' resolves outside Libertatis default loose roots; it may not be discovered",
           id,
-          path);
+          native_text::diagnostic(path));
     }
   }
 
@@ -407,8 +375,21 @@ ArxReturnCode saveFts(const fts::Data* d, WriteCursor& c) {
 
   c.write(header);
   c.writeArray(d->unique_headers);
-  writePayload(d, c);
-  return c ? ARX_OK : ARX_BAD_ALLOC;
+  return writePayload(d, c);
+}
+
+ArxReturnCode canonicalizeFts(fts::Data* d) {
+  if (!d) return ARX_INVALID_DATA_POINTER;
+  for (auto& [id, texture] : d->textures) {
+    (void)id;
+    if (!isNullTerminated(texture.fic)) return ARX_FTS_BAD_TEXTURE_PATH;
+    std::string normalized;
+    if (!normalizeNativeResourceStem(texture.fic, normalized) || normalized.size() >= sizeof(texture.fic))
+      return ARX_FTS_BAD_TEXTURE_PATH;
+    std::memset(texture.fic, 0, sizeof(texture.fic));
+    std::memcpy(texture.fic, normalized.data(), normalized.size());
+  }
+  return ARX_OK;
 }
 
 ArxReturnCode validateFts(const fts::Data* d) {
@@ -432,7 +413,7 @@ ArxReturnCode validateFts(const fts::Data* d) {
   if (d->textures.size() > kFtsMaxTextures || !sizeFitsInt32(d->textures.size())) return ARX_FTS_BAD_TEXTURE_COUNT;
   for (const auto& [id, texture] : d->textures) {
     if (id <= 0) return ARX_FTS_BAD_TEXTURE_ID;
-    if (!isNullTerminated(texture.fic)) return ARX_FTS_BAD_TEXTURE_PATH;
+    if (!canonicalTexturePath(texture)) return ARX_FTS_BAD_TEXTURE_PATH;
   }
   if (d->anchors.size() > kFtsMaxAnchors || !sizeFitsInt32(d->anchors.size())) return ARX_FTS_BAD_ANCHOR_COUNT;
   if (d->portals.size() > kFtsMaxPortals || !sizeFitsInt32(d->portals.size())) return ARX_FTS_BAD_PORTAL_COUNT;

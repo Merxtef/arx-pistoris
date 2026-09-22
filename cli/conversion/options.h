@@ -7,15 +7,18 @@
 
 namespace cli {
 
+struct DirectoryRebaseRequest {
+  bool requested = false;
+  std::string directory;
+};
+
 struct SharedConversionOptions {
   float rotate[3] = {0.0f, 0.0f, 0.0f};  // Euler XYZ degrees
   float scale = 1.0f;
   float offset[3] = {0.0f, 0.0f, 0.0f};
   bool has_xform = false;
-  bool rebase_textures = false;
-  std::string texture_directory;
-  bool rebase_sounds = false;
-  std::string sound_directory;
+  DirectoryRebaseRequest textures;
+  DirectoryRebaseRequest sounds;
 };
 
 }  // namespace cli

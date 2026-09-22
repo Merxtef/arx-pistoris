@@ -29,8 +29,8 @@ class RebaseTexturesModule final : public SharedConversionModule {
       diagnostic(DiagnosticCode::kMissingArgument, "--rebase-textures: expected argument");
       return {.ok = false};
     }
-    ctx.options.conversion.rebase_textures = true;
-    ctx.options.conversion.texture_directory = ctx.argv[++ctx.index];
+    ctx.options.conversion.textures.requested = true;
+    ctx.options.conversion.textures.directory = ctx.argv[++ctx.index];
     return {};
   }
 };

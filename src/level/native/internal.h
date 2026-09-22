@@ -10,6 +10,7 @@
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.hpp"
 
 #include "modules/geometry.h"
 
@@ -89,10 +90,11 @@ struct NativeTextureResources {
 
 std::size_t expectedFtsColorCount(const fts::Data& fts);
 ArxReturnCode buildFtsModules(const fts::Data& fts, std::span<const ArxColor3> colors, LevelModules& out,
-                              NativeBuildWarnings& warnings, std::vector<std::string>* texture_source_paths = nullptr);
+                              NativeBuildWarnings& warnings, std::vector<std::string>* texture_source_paths,
+                              NativeTextMode text_mode);
 void buildLlfModules(const fts::Data& fts, const llf::Data& llf, LightingData& out, NativeBuildWarnings& warnings);
 ArxReturnCode buildDlfModules(const dlf::Data& dlf, const ArxVector3& offset, SceneData& out,
-                              NativeBuildWarnings& warnings);
+                              NativeBuildWarnings& warnings, NativeTextMode text_mode);
 
 ArxReturnCode projectNativeTextures(const TexturesData& texture_data, const Level::NativeBakeOptions& options,
                                     NativeTextureResources& out, NativeBakeWarnings& warnings);
@@ -100,11 +102,11 @@ ArxReturnCode addNativeTextureShard(NativeTextureResources& textures, TextureInd
                                     std::size_t& out_shard);
 void buildNativeTextureFiles(NativeTextureResources& textures, std::vector<NativeTextureFile>& out);
 ArxReturnCode bakeFts(const LevelModules& level, NativeTextureResources& textures, bool reconstruct_quads,
-                      fts::Data& out, std::vector<ArxColor3>& baked_colors, NativeBakeWarnings& warnings,
-                      NativeBakeStatistics& statistics);
+                      NativeTextMode text_mode, fts::Data& out, std::vector<ArxColor3>& baked_colors,
+                      NativeBakeWarnings& warnings, NativeBakeStatistics& statistics);
 ArxReturnCode bakeLlf(const LightingData& lighting, std::vector<ArxColor3>&& baked_colors, llf::Data& out);
 ArxReturnCode bakeDlf(const SceneData& scene, std::string_view scene_path, const ArxVector3& target_fts_offset,
-                      dlf::Data& out);
+                      NativeTextMode text_mode, dlf::Data& out);
 
 void logRoomDistanceBakeWarnings(const LevelModules& level);
 

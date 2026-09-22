@@ -83,7 +83,7 @@ TEST_SUITE("resource module validation") {
     CHECK(pistoris::resource::repairPath(ARX_RESOURCE_KIND_MODEL, "draft/model.teo", path) ==
           pistoris::resource::Error::kBadPath);
     CHECK(path == "unchanged");
-    CHECK(pistoris::resource::repairPath(ARX_RESOURCE_KIND_CINEMATIC, "cinematic:intro", path) ==
+    CHECK(pistoris::resource::repairPath(static_cast<ArxResourceKind>(255), "intro.cin", path) ==
           pistoris::resource::Error::kBadKind);
     CHECK(path == "unchanged");
   }

@@ -47,7 +47,7 @@ TEST_SUITE("ambiance_corpus") {
 
       pistoris::NativeAmbianceBundle baked;
       if (!test_support::checkCorpusStatus(
-              path, "bake Ambiance to native bundle", ambiance.bakeNativeBundle({.include_files = true}, baked)))
+              path, "bake Ambiance to native bundle", ambiance.bakeNativeBundle({.include_sound_files = true}, baked)))
         continue;
       if (!test_support::validateSoundFiles(ambiance, std::span<const pistoris::SoundFile>(baked.sound_files)))
         continue;

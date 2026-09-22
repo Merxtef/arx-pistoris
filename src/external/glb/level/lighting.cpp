@@ -9,11 +9,13 @@
 #include "arx_pistoris/level.hpp"
 
 #include "coordinates.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
 #include "external/glb/utils/tokens.h"
 #include "modules/lights.h"
 #include "utils/name_tokens.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -56,21 +58,6 @@ constexpr std::string_view kLightPrefix = "arx_light__";
 
 bool zero(const ArxColor3& value) { return value.r == 0.0f && value.g == 0.0f && value.b == 0.0f; }
 
-bool parseColor(std::string_view text, ArxColor3& out) {
-  std::size_t first = text.find('_');
-  if (first == std::string_view::npos) return false;
-  std::size_t second = text.find('_', first + 1);
-  if (second == std::string_view::npos) return false;
-  float r = 0.0f;
-  float g = 0.0f;
-  float b = 0.0f;
-  if (!parseFloatToken(text.substr(0, first), r) || !parseFloatToken(text.substr(first + 1, second - first - 1), g) ||
-      !parseFloatToken(text.substr(second + 1), b))
-    return false;
-  out = {r, g, b};
-  return true;
-}
-
 }  // namespace
 
 bool isReservedLightName(std::string_view name) { return name.starts_with(kLightPrefix); }
@@ -86,7 +73,7 @@ std::string lightNodeName(const Light& light, const Level::GlbExportOptions& opt
 }
 
 std::string lightSettingsHelperName(std::string_view name, const Light& light) {
-  std::string rgb = std::format("RGB_{}_{}_{}", light.color.r, light.color.g, light.color.b);
+  std::string rgb = "RGB_" + glb::formatColor3Token(light.color);
   std::string intensity = std::format("INTENSITY_{}", light.intensity);
   return joinDoubleUnderscore({"SETTINGS", rgb, intensity, name});
 }
@@ -195,38 +182,46 @@ ArxReturnCode parseLightSettings(const cgltf_node& node, bool real_light, bool h
     if (child == nullptr || child->name == nullptr) continue;
     std::string_view name(child->name);
     if (!name.starts_with(kSettingsPrefix)) continue;
-    const std::size_t label_separator = name.rfind("__");
-    if (label_separator == std::string_view::npos || label_separator < kSettingsPrefix.size() ||
-        label_separator + 2 == name.size())
-      return ARX_GLB_BAD_LEVEL_LIGHT;
     if (!glb::simpleEmptyNode(*child)) return ARX_GLB_BAD_LEVEL_LIGHT;
 
-    ArxColor3 parsed_color = default_color;
-    float parsed_intensity = default_intensity;
-    bool seen_rgb = false;
-    bool seen_intensity = false;
-    std::vector<std::string_view> tokens;
-    splitDoubleUnderscore(name.substr(kSettingsPrefix.size(), label_separator - kSettingsPrefix.size()), tokens);
-    for (std::string_view token : tokens) {
-      if (token.starts_with("RGB_")) {
-        ArxColor3 value{};
-        if (seen_rgb || !parseColor(token.substr(4), value) || value.r < 0.0f || value.r > 1.0f || value.g < 0.0f ||
-            value.g > 1.0f || value.b < 0.0f || value.b > 1.0f)
-          return ARX_GLB_BAD_LEVEL_LIGHT;
-        parsed_color = value;
-        seen_rgb = true;
-      } else if (token.starts_with("INTENSITY_")) {
-        float value = 0.0f;
-        if (seen_intensity || !parseFloatToken(token.substr(10), value) || value < 0.0f) return ARX_GLB_BAD_LEVEL_LIGHT;
-        parsed_intensity = value;
-        seen_intensity = true;
-      } else {
-        return ARX_GLB_BAD_LEVEL_LIGHT;
-      }
-    }
+    struct ParsedSettings {
+      ArxColor3 color;
+      float intensity = 0.0f;
+    } parsed{default_color, default_intensity};
+    glb::ParsedLabel label;
+    if (!glb::parseRecoverableLabel(
+            name,
+            parsed,
+            &label,
+            glb::ConventionOptions{{}, {"RGB_", "INTENSITY_"}},
+            [](std::span<const std::string_view> tokens, ParsedSettings& value) {
+              if (tokens.size() < 2 || tokens.front() != "SETTINGS") return false;
+              bool seen_rgb = false;
+              bool seen_intensity = false;
+              for (std::string_view token : tokens.subspan(1)) {
+                if (token.starts_with("RGB_")) {
+                  ArxColor3 color{};
+                  if (seen_rgb || !glb::parseColor3Token(token.substr(4), color) || color.r < 0.0f || color.r > 1.0f ||
+                      color.g < 0.0f || color.g > 1.0f || color.b < 0.0f || color.b > 1.0f)
+                    return false;
+                  value.color = color;
+                  seen_rgb = true;
+                } else if (token.starts_with("INTENSITY_")) {
+                  float intensity = 0.0f;
+                  if (seen_intensity || !parseFloatToken(token.substr(10), intensity) || intensity < 0.0f) return false;
+                  value.intensity = intensity;
+                  seen_intensity = true;
+                } else {
+                  return false;
+                }
+              }
+              return true;
+            }))
+      return ARX_GLB_BAD_LEVEL_LIGHT;
+    glb::reportConventionLabel("GLB -> Level light settings", name, label);
     if (!selected) {
-      light.color = parsed_color;
-      light.intensity = parsed_intensity;
+      light.color = parsed.color;
+      light.intensity = parsed.intensity;
       selected = true;
     }
   }
@@ -241,26 +236,40 @@ ArxReturnCode parseLightFlags(const cgltf_node& node, LightFlags& out) {
     if (child == nullptr || child->name == nullptr) continue;
     std::string_view name(child->name);
     if (!name.starts_with(kFlagsPrefix)) continue;
-    const std::size_t label_separator = name.rfind("__");
-    if (label_separator == std::string_view::npos || label_separator < kFlagsPrefix.size() ||
-        label_separator + 2 == name.size())
-      return ARX_GLB_BAD_LEVEL_LIGHT;
     if (!glb::simpleEmptyNode(*child)) return ARX_GLB_BAD_LEVEL_LIGHT;
 
     LightFlags flags = 0;
-    std::vector<std::string_view> tokens;
-    splitDoubleUnderscore(name.substr(kFlagsPrefix.size(), label_separator - kFlagsPrefix.size()), tokens);
-    for (std::string_view token : tokens) {
-      const LightFlagName* hit = nullptr;
-      for (const LightFlagName& entry : kLightFlagNames) {
-        if (entry.name == token) {
-          hit = &entry;
-          break;
-        }
-      }
-      if (hit == nullptr) return ARX_GLB_BAD_LEVEL_LIGHT;
-      flags |= hit->bit;
-    }
+    glb::ParsedLabel label;
+    if (!glb::parseRecoverableLabel(name,
+                                    flags,
+                                    &label,
+                                    glb::ConventionOptions{{"SEMIDYNAMIC",
+                                                            "EXTINGUISHABLE",
+                                                            "STARTEXTINGUISHED",
+                                                            "SPAWNFIRE",
+                                                            "SPAWNSMOKE",
+                                                            "OFF",
+                                                            "COLORLEGACY",
+                                                            "NOCASTED",
+                                                            "FIXFLARESIZE",
+                                                            "FIREPLACE",
+                                                            "NOIGNIT",
+                                                            "FLARE"},
+                                                           {}},
+                                    [](std::span<const std::string_view> tokens, LightFlags& value) {
+                                      if (tokens.size() < 2 || tokens.front() != "FLAGS") return false;
+                                      LightFlags parsed = 0;
+                                      for (std::string_view token : tokens.subspan(1)) {
+                                        const auto hit =
+                                            std::ranges::find(kLightFlagNames, token, &LightFlagName::name);
+                                        if (hit == kLightFlagNames.end()) return false;
+                                        parsed |= hit->bit;
+                                      }
+                                      value = parsed;
+                                      return true;
+                                    }))
+      return ARX_GLB_BAD_LEVEL_LIGHT;
+    glb::reportConventionLabel("GLB -> Level light flags", name, label);
     if (!selected) {
       out = flags;
       selected = true;
@@ -282,56 +291,57 @@ ArxReturnCode parseLightEffects(const cgltf_node& node, Light& light) {
     if (child == nullptr || child->name == nullptr) continue;
     std::string_view name(child->name);
     if (!name.starts_with(kEffectPrefix)) continue;
-    const std::size_t label_separator = name.rfind("__");
-    if (label_separator == std::string_view::npos || label_separator < kEffectPrefix.size() ||
-        label_separator + 2 == name.size())
-      return ARX_GLB_BAD_LEVEL_LIGHT;
     if (!glb::simpleEmptyNode(*child)) return ARX_GLB_BAD_LEVEL_LIGHT;
 
-    ArxColor3 flicker = {};
-    float effect_radius = 0.0f;
-    float effect_frequency = 0.0f;
-    float effect_size = 0.0f;
-    float effect_speed = 0.0f;
-    float flare_size = 0.0f;
-    bool seen_flicker = false;
-    bool seen_radius = false;
-    bool seen_frequency = false;
-    bool seen_size = false;
-    bool seen_speed = false;
-    bool seen_flaresize = false;
-    std::vector<std::string_view> tokens;
-    splitDoubleUnderscore(name.substr(kEffectPrefix.size(), label_separator - kEffectPrefix.size()), tokens);
-    for (std::string_view token : tokens) {
-      if (token.starts_with("FLICKER_")) {
-        if (seen_flicker || !parseColor(token.substr(8), flicker)) return ARX_GLB_BAD_LEVEL_LIGHT;
-        seen_flicker = true;
-      } else if (token.starts_with("RADIUS_")) {
-        if (seen_radius || !parseFloatToken(token.substr(7), effect_radius)) return ARX_GLB_BAD_LEVEL_LIGHT;
-        seen_radius = true;
-      } else if (token.starts_with("FREQUENCY_")) {
-        if (seen_frequency || !parseFloatToken(token.substr(10), effect_frequency)) return ARX_GLB_BAD_LEVEL_LIGHT;
-        seen_frequency = true;
-      } else if (token.starts_with("SIZE_")) {
-        if (seen_size || !parseFloatToken(token.substr(5), effect_size)) return ARX_GLB_BAD_LEVEL_LIGHT;
-        seen_size = true;
-      } else if (token.starts_with("SPEED_")) {
-        if (seen_speed || !parseFloatToken(token.substr(6), effect_speed)) return ARX_GLB_BAD_LEVEL_LIGHT;
-        seen_speed = true;
-      } else if (token.starts_with("FLARESIZE_")) {
-        if (seen_flaresize || !parseFloatToken(token.substr(10), flare_size)) return ARX_GLB_BAD_LEVEL_LIGHT;
-        seen_flaresize = true;
-      } else {
-        return ARX_GLB_BAD_LEVEL_LIGHT;
-      }
-    }
+    Light parsed;
+    glb::ParsedLabel label;
+    if (!glb::parseRecoverableLabel(
+            name,
+            parsed,
+            &label,
+            glb::ConventionOptions{{}, {"FLICKER_", "RADIUS_", "FREQUENCY_", "SIZE_", "SPEED_", "FLARESIZE_"}},
+            [](std::span<const std::string_view> tokens, Light& value) {
+              if (tokens.size() < 2 || tokens.front() != "EFFECT") return false;
+              bool seen_flicker = false;
+              bool seen_radius = false;
+              bool seen_frequency = false;
+              bool seen_size = false;
+              bool seen_speed = false;
+              bool seen_flaresize = false;
+              for (std::string_view token : tokens.subspan(1)) {
+                if (token.starts_with("FLICKER_")) {
+                  if (seen_flicker || !glb::parseColor3Token(token.substr(8), value.flicker)) return false;
+                  seen_flicker = true;
+                } else if (token.starts_with("RADIUS_")) {
+                  if (seen_radius || !parseFloatToken(token.substr(7), value.effect_radius)) return false;
+                  seen_radius = true;
+                } else if (token.starts_with("FREQUENCY_")) {
+                  if (seen_frequency || !parseFloatToken(token.substr(10), value.effect_frequency)) return false;
+                  seen_frequency = true;
+                } else if (token.starts_with("SIZE_")) {
+                  if (seen_size || !parseFloatToken(token.substr(5), value.effect_size)) return false;
+                  seen_size = true;
+                } else if (token.starts_with("SPEED_")) {
+                  if (seen_speed || !parseFloatToken(token.substr(6), value.effect_speed)) return false;
+                  seen_speed = true;
+                } else if (token.starts_with("FLARESIZE_")) {
+                  if (seen_flaresize || !parseFloatToken(token.substr(10), value.flare_size)) return false;
+                  seen_flaresize = true;
+                } else {
+                  return false;
+                }
+              }
+              return true;
+            }))
+      return ARX_GLB_BAD_LEVEL_LIGHT;
+    glb::reportConventionLabel("GLB -> Level light effect", name, label);
     if (!selected) {
-      light.flicker = flicker;
-      light.effect_radius = effect_radius;
-      light.effect_frequency = effect_frequency;
-      light.effect_size = effect_size;
-      light.effect_speed = effect_speed;
-      light.flare_size = flare_size;
+      light.flicker = parsed.flicker;
+      light.effect_radius = parsed.effect_radius;
+      light.effect_frequency = parsed.effect_frequency;
+      light.effect_size = parsed.effect_size;
+      light.effect_speed = parsed.effect_speed;
+      light.flare_size = parsed.flare_size;
       selected = true;
     }
   }

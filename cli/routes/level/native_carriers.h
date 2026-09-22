@@ -7,6 +7,7 @@
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.hpp"
 
 #include "formats/classification.h"
 
@@ -15,9 +16,9 @@
 
 namespace cli::level {
 
-ArxReturnCode decodeFts(const ClassifiedPath& input, pistoris::Fts& out);
+ArxReturnCode decodeFts(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Fts& out);
 ArxReturnCode decodeLlf(const ClassifiedPath& input, pistoris::Llf& out);
-ArxReturnCode decodeDlf(const ClassifiedPath& input, pistoris::Dlf& out,
+ArxReturnCode decodeDlf(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Dlf& out,
                         std::optional<pistoris::Llf>* embedded_lighting = nullptr);
 void applyLevelNumber(std::uint32_t level, pistoris::Fts& fts, pistoris::Dlf* dlf);
 void applyLevelNumber(std::uint32_t level, pistoris::Dlf& dlf);

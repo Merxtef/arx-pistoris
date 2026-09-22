@@ -72,12 +72,40 @@ bool reportableIdentifierRepair(IdentifierRepair repair) noexcept {
   return repair != IdentifierRepair::kNone && repair != IdentifierRepair::kCase;
 }
 
-std::optional<std::pair<std::string_view, std::string_view>> labeledValue(std::string_view name,
-                                                                          std::string_view prefix) {
+struct ParsedSemanticName {
+  std::string_view source;
+  std::string_view value;
+  glb::ParsedLabel label;
+};
+
+std::optional<ParsedSemanticName> labeledValue(std::string_view name, std::string_view prefix) {
   if (!name.starts_with(prefix)) return std::nullopt;
-  const auto parsed = glb::splitRequiredLabel(name.substr(prefix.size()));
-  if (!parsed || hasDoubleUnderscore(parsed->value)) return std::nullopt;
-  return std::pair{parsed->value, parsed->label};
+  std::string_view value;
+  glb::ParsedLabel label;
+  if (!glb::parseRecoverableLabel(name.substr(prefix.size()),
+                                  value,
+                                  &label,
+                                  {},
+                                  [](std::span<const std::string_view> tokens, std::string_view& parsed) {
+                                    if (tokens.size() != 1 || tokens.front().empty()) return false;
+                                    parsed = tokens.front();
+                                    return true;
+                                  }))
+    return std::nullopt;
+  return ParsedSemanticName{name, value, label};
+}
+
+std::optional<glb::ParsedLabel> markerLabel(std::string_view name, std::string_view marker) {
+  bool parsed = false;
+  glb::ParsedLabel label;
+  if (!glb::parseRecoverableLabel(
+          name, parsed, &label, {}, [&](std::span<const std::string_view> tokens, bool& result) {
+            if (tokens.size() != 1 || tokens.front() != marker) return false;
+            result = true;
+            return true;
+          }))
+    return std::nullopt;
+  return label;
 }
 
 template <class Visitor>
@@ -90,7 +118,7 @@ ArxReturnCode visitSelectionHelpers(const cgltf_node& parent, Visitor&& visitor)
       if (std::string_view(child->name).starts_with(kSelectionPrefix)) return ARX_GLB_BAD_MODEL_SELECTION;
       continue;
     }
-    const ArxReturnCode rc = visitor(parsed->first);
+    const ArxReturnCode rc = visitor(*parsed);
     if (rc != ARX_OK) return rc;
   }
   return ARX_OK;
@@ -625,8 +653,10 @@ ArxReturnCode discoverSelections(ImportContext& context) {
 
   for (std::size_t helper : context.bone_helpers) {
     if (helper == glb::kInvalidNodeIndex) continue;
-    const ArxReturnCode rc = visitSelectionHelpers(
-        context.data.nodes[helper], [&](std::string_view name) { return context.selections.discover(name); });
+    const ArxReturnCode rc = visitSelectionHelpers(context.data.nodes[helper], [&](const ParsedSemanticName& name) {
+      glb::reportConventionLabel("GLB -> Model", name.source, name.label);
+      return context.selections.discover(name.value);
+    });
     if (rc != ARX_OK) return rc;
   }
 
@@ -634,30 +664,35 @@ ArxReturnCode discoverSelections(ImportContext& context) {
     const cgltf_node& node = context.data.nodes[node_index_value];
     const std::string_view name(node.name);
     if (!labeledValue(name, kActionPrefix)) return ARX_GLB_BAD_MODEL_ACTION_POINT;
-    const ArxReturnCode rc =
-        visitSelectionHelpers(node, [&](std::string_view selection) { return context.selections.discover(selection); });
+    const ArxReturnCode rc = visitSelectionHelpers(node, [&](const ParsedSemanticName& selection) {
+      glb::reportConventionLabel("GLB -> Model", selection.source, selection.label);
+      return context.selections.discover(selection.value);
+    });
     if (rc != ARX_OK) return rc;
   }
   for (std::size_t node_index_value : context.discovery.probe_nodes) {
     const cgltf_node& node = context.data.nodes[node_index_value];
     const auto parsed = labeledValue(node.name, kProbePrefix);
     if (!parsed) return ARX_GLB_BAD_MODEL_SELECTION;
-    const ArxReturnCode rc = context.selections.discover(parsed->first);
+    const ArxReturnCode rc = context.selections.discover(parsed->value);
     if (rc != ARX_OK) return rc;
   }
 
   if (context.root != glb::kInvalidNodeIndex) {
-    const ArxReturnCode rc = visitSelectionHelpers(
-        context.data.nodes[context.root], [&](std::string_view name) { return context.selections.discover(name); });
+    const ArxReturnCode rc =
+        visitSelectionHelpers(context.data.nodes[context.root], [&](const ParsedSemanticName& name) {
+          glb::reportConventionLabel("GLB -> Model", name.source, name.label);
+          return context.selections.discover(name.value);
+        });
     if (rc != ARX_OK) return rc;
   }
   return context.selections.finalize();
 }
 
 ArxReturnCode importSelectionHelpers(ImportContext& context, const cgltf_node& parent, SelectionMask& out_mask) {
-  return visitSelectionHelpers(parent, [&](std::string_view name) -> ArxReturnCode {
+  return visitSelectionHelpers(parent, [&](const ParsedSemanticName& name) -> ArxReturnCode {
     SelectionId id = kInvalidSelectionId;
-    const ArxReturnCode rc = context.selections.get(name, id);
+    const ArxReturnCode rc = context.selections.get(name.value, id);
     if (rc != ARX_OK) return rc;
     out_mask |= selections::bit(id);
     return ARX_OK;
@@ -685,15 +720,17 @@ ArxReturnCode importSemantics(ImportContext& context) {
       if (child == nullptr || child->name == nullptr) continue;
       const std::string_view name(child->name);
       if (name.starts_with(kSelectionPrefix)) continue;
-      if (name.starts_with(kOriginOwnerPrefix)) {
-        const std::string_view label = name.substr(kOriginOwnerPrefix.size());
-        if (label.empty() || hasDoubleUnderscore(label) || origin_owner_set) return ARX_GLB_BAD_MODEL_BONE_HELPER;
+      if (name == "ORIGIN_OWNER" || name.starts_with(kOriginOwnerPrefix)) {
+        const std::optional<glb::ParsedLabel> label = markerLabel(name, "ORIGIN_OWNER");
+        if (!label || origin_owner_set) return ARX_GLB_BAD_MODEL_BONE_HELPER;
+        glb::reportConventionLabel("GLB -> Model", name, *label);
         context.model.skeleton.origin_bone = static_cast<BoneIndex>(bone);
         origin_owner_set = true;
       } else if (name.starts_with(kBlobShadowPrefix)) {
         const auto parsed = labeledValue(name, kBlobShadowPrefix);
         if (!parsed || blob_set) return ARX_GLB_BAD_MODEL_BONE_HELPER;
-        const std::optional<float> value = parseFloat(parsed->first);
+        glb::reportConventionLabel("GLB -> Model", name, parsed->label);
+        const std::optional<float> value = parseFloat(parsed->value);
         if (!value || *value < 0.0f) return ARX_GLB_BAD_MODEL_BONE_HELPER;
         context.model.skeleton.bones[bone].blob_shadow_size = *value * context.units;
         blob_set = true;
@@ -710,7 +747,8 @@ ArxReturnCode importSemantics(ImportContext& context) {
     if (name.starts_with(kActionPrefix)) {
       const auto parsed = labeledValue(name, kActionPrefix);
       if (!parsed) return ARX_GLB_BAD_MODEL_ACTION_POINT;
-      const std::string_view requested = parsed->first;
+      glb::reportConventionLabel("GLB -> Model", name, parsed->label);
+      const std::string_view requested = parsed->value;
       ActionPoint point;
       point.name = requested;
       const IdentifierRepair name_repair = action_points::repairName(point.name);
@@ -734,8 +772,9 @@ ArxReturnCode importSemantics(ImportContext& context) {
     } else if (name.starts_with(kProbePrefix)) {
       const auto parsed = labeledValue(name, kProbePrefix);
       if (!parsed) return ARX_GLB_BAD_MODEL_SELECTION;
+      glb::reportConventionLabel("GLB -> Model", name, parsed->label);
       SelectionId id = kInvalidSelectionId;
-      ArxReturnCode rc = context.selections.get(parsed->first, id);
+      ArxReturnCode rc = context.selections.get(parsed->value, id);
       if (rc != ARX_OK) return rc;
       if (probe_set[id]) {
         log(ARX_LOG_WARN,
@@ -972,11 +1011,8 @@ ArxReturnCode importModelFromGlbImpl(std::span<const std::uint8_t> bytes, const 
   ArxReturnCode rc = glb::parse(bytes, asset);
   if (rc != ARX_OK) return rc;
   cgltf_data& data = *asset.data();
-  if (data.extensions_required_count != 0) {
-    for (std::size_t index = 0; index < data.extensions_required_count; ++index)
-      if (data.extensions_required[index] == nullptr) return ARX_GLB_BAD_FORMAT;
-    return ARX_GLB_UNSUPPORTED_FEATURE;
-  }
+  rc = glb::validateRequiredExtensions(data, {});
+  if (rc != ARX_OK) return rc;
   glb::NodeGraph graph;
   rc = glb::buildNodeGraph(data, graph);
   if (rc != ARX_OK) return rc;
@@ -987,6 +1023,7 @@ ArxReturnCode importModelFromGlbImpl(std::span<const std::uint8_t> bytes, const 
   const std::size_t root = discovery.root;
   math::Mat4 inverse_root = math::kIdentityMat4;
   if (root != glb::kInvalidNodeIndex) {
+    glb::reportConventionLabel("GLB -> Model", data.nodes[root].name, discovery.root_label);
     const std::optional<math::Mat4> inverse = math::inverseAffine(graph.world[root]);
     if (!inverse) return ARX_GLB_BAD_MODEL_HIERARCHY;
     inverse_root = *inverse;

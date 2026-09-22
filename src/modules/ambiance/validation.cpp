@@ -2,7 +2,9 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/runtime/types.h"
+#include "arx_pistoris/sound.hpp"
 
 #include "modules/ambiance.h"
 #include "utils/log.h"
@@ -91,7 +93,10 @@ Error validateKeyCount(std::size_t key_count) noexcept {
 }
 
 Error validateTrack(const AmbianceTrack& track, std::size_t sound_count) noexcept {
-  if (track.sound >= sound_count) {
+  SoundKind kind = SoundKind::kEffect;
+  SoundIndex index = kNoSound;
+  if (soundHandleKind(track.sound, kind) != ARX_OK || soundHandleIndex(track.sound, index) != ARX_OK ||
+      kind != SoundKind::kEffect || static_cast<std::size_t>(index) >= sound_count) {
     log(ARX_LOG_DEBUG, "Ambiance validation: track references sound {} with sound count {}", track.sound, sound_count);
     return Error::kBadSound;
   }

@@ -14,6 +14,7 @@
 #include "level/validation.h"
 #include "native/dlf.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -58,6 +59,7 @@ void logTextureShardWarnings(const NativeTextureResources& textures) {
 
 ArxReturnCode bakeValidatedNativeLevelBundle(const LevelModules& level, const Level::NativeBakeOptions& options,
                                              NativeLevelBundle& out) {
+  if (!native_text::validMode(options.text_mode)) return ARX_INVALID_OPTIONS;
   std::string dlf_scene_path;
   if (!resolveDlfScenePath(options.level_name, options.dlf_scene_path, dlf_scene_path)) return ARX_DLF_BAD_SCENE_PATH;
 
@@ -68,12 +70,13 @@ ArxReturnCode bakeValidatedNativeLevelBundle(const LevelModules& level, const Le
   ArxReturnCode rc = projectNativeTextures(level.textures, options, textures, warnings);
   if (rc != ARX_OK) return rc;
   std::vector<ArxColor3> baked_colors;
-  rc = bakeFts(level, textures, options.reconstruct_quads, tmp.fts, baked_colors, warnings, statistics);
+  rc = bakeFts(
+      level, textures, options.reconstruct_quads, options.text_mode, tmp.fts, baked_colors, warnings, statistics);
   if (rc != ARX_OK) return rc;
   buildNativeTextureFiles(textures, tmp.texture_files);
   rc = bakeLlf(level.lighting, std::move(baked_colors), tmp.llf);
   if (rc != ARX_OK) return rc;
-  rc = bakeDlf(level.scene, dlf_scene_path, {}, tmp.dlf);
+  rc = bakeDlf(level.scene, dlf_scene_path, {}, options.text_mode, tmp.dlf);
   if (rc != ARX_OK) return rc;
 
   logRoomDistanceBakeWarnings(level);
@@ -109,7 +112,7 @@ ArxReturnCode bakeValidatedNativeLevelBundle(const LevelModules& level, const Le
       "Level native bake: {} FTS polygon(s), {} LLF color(s), DLF scene '{}'",
       tmp.fts.scene.num_polys,
       tmp.llf.colors.size(),
-      tmp.dlf.scene_path);
+      native_text::diagnostic(tmp.dlf.scene_path));
   out = std::move(tmp);
   return ARX_OK;
 }
@@ -125,7 +128,7 @@ ArxReturnCode bakeNativeLevelBundle(const LevelModules& level, const Level::Nati
 ArxReturnCode bakeValidatedNativeDlf(const SceneData& scene, const Level::DlfBakeOptions& options, dlf::Data& out) {
   std::string scene_path;
   if (!resolveDlfScenePath(options.level_name, options.dlf_scene_path, scene_path)) return ARX_DLF_BAD_SCENE_PATH;
-  return bakeDlf(scene, scene_path, options.target_fts_offset, out);
+  return bakeDlf(scene, scene_path, options.target_fts_offset, options.text_mode, out);
 }
 
 }  // namespace pistoris::level_native

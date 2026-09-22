@@ -9,12 +9,13 @@
 #include "utils/audio.h"
 #include "utils/log.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <new>
 #include <span>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -41,8 +42,21 @@ AudioInfo outputInfo(const AudioPreparationOptions& options, const AudioInfo& so
   return result;
 }
 
+struct AudioIdentity {
+  SoundHandle sound = kNoSoundHandle;
+  LanguageId language = kSoundEffects;
+
+  bool operator==(const AudioIdentity&) const = default;
+};
+
+struct AudioIdentityHash {
+  std::size_t operator()(const AudioIdentity& value) const noexcept {
+    return std::hash<SoundHandle>{}(value.sound) ^ (std::hash<LanguageId>{}(value.language) << 1U);
+  }
+};
+
 struct AudioPlan {
-  SoundIndex sound = kNoSound;
+  AudioIdentity identity;
   AudioInfo source;
   bool convert_preserved = false;
   bool convert_mono = false;
@@ -58,112 +72,81 @@ Error prepareAudio(const SoundsData& sounds, std::span<const AudioPreparationReq
                    std::vector<PreparedAudio>& out) {
   try {
     std::vector<PreparedAudio> prepared(requests.size());
-    std::vector<std::size_t> plan_by_sound(sounds.sounds.size(), kNoRequest);
+    std::vector<std::size_t> request_plans(requests.size(), kNoRequest);
+    std::unordered_map<AudioIdentity, std::size_t, AudioIdentityHash> plans_by_audio;
+    plans_by_audio.reserve(requests.size());
     std::vector<AudioPlan> plans;
-    plans.reserve(std::min(sounds.sounds.size(), requests.size()));
+    plans.reserve(requests.size());
 
-    for (std::size_t index = 0; index < requests.size(); ++index) {
-      const AudioPreparationRequest& request = requests[index];
-      if (static_cast<std::size_t>(request.sound) >= sounds.sounds.size()) {
+    for (std::size_t request_index = 0; request_index < requests.size(); ++request_index) {
+      const AudioPreparationRequest& request = requests[request_index];
+      if (!validHandle(sounds, request.sound)) return Error::kBadIndex;
+      if (!validOptions(request.options)) return Error::kInvalidOptions;
+      const std::span<const std::uint8_t> audio = encodedAudio(sounds, request.sound, request.language);
+      if (audio.empty()) {
         log(ARX_LOG_DEBUG,
-            "Sound preparation: request {} references sound {} with sound count {}",
-            index,
+            "Sound preparation: request {} handle {} language {} has no encoded audio",
+            request_index,
             request.sound,
-            sounds.sounds.size());
-        return Error::kBadIndex;
-      }
-      if (!validOptions(request.options)) {
-        log(ARX_LOG_DEBUG,
-            "Sound preparation: request {} for sound {} has invalid options: formats {:#x}, channels {}, fallback {}",
-            index,
-            request.sound,
-            request.options.accepted_formats,
-            static_cast<int>(request.options.channels),
-            static_cast<int>(request.options.fallback_format));
-        return Error::kInvalidOptions;
-      }
-      const Sound& sound = sounds.sounds[request.sound];
-      if (sound.encoded_audio.empty()) {
-        log(ARX_LOG_DEBUG,
-            "Sound preparation: request {} sound {} '{}' has no encoded audio",
-            index,
-            request.sound,
-            sound.path);
+            request.language);
         return Error::kBadAudio;
       }
 
-      std::size_t& plan_index = plan_by_sound[request.sound];
-      if (plan_index == kNoRequest) {
-        AudioInfo source_info;
-        const Error error = inspectEncodedAudio(sound.encoded_audio, source_info);
-        if (error != Error::kNone) {
-          log(ARX_LOG_DEBUG,
-              "Sound preparation: sound {} '{}' inspection failed: {} bytes, error {}",
-              request.sound,
-              sound.path,
-              sound.encoded_audio.size(),
-              static_cast<int>(error));
-          return error;
-        }
-        plan_index = plans.size();
-        AudioPlan plan;
-        plan.sound = request.sound;
-        plan.source = source_info;
-        plans.push_back(std::move(plan));
+      const AudioIdentity identity{request.sound, request.language};
+      auto [entry, inserted] = plans_by_audio.try_emplace(identity, plans.size());
+      if (inserted) {
+        AudioInfo source;
+        const Error error = inspectEncodedAudio(audio, source);
+        if (error != Error::kNone) return error;
+        plans.emplace_back();
+        plans.back().identity = identity;
+        plans.back().source = source;
       }
-
+      const std::size_t plan_index = entry->second;
+      request_plans[request_index] = plan_index;
       AudioPlan& plan = plans[plan_index];
-      PreparedAudio& target = prepared[index];
+      PreparedAudio& target = prepared[request_index];
       target.source = plan.source;
       target.output = outputInfo(request.options, plan.source);
       if (!request.options.include_bytes) continue;
       if (!needsConversion(request.options, plan.source)) {
-        target.bytes.borrowed = sound.encoded_audio;
+        target.bytes.borrowed = audio;
       } else if (request.options.channels == ChannelMode::kMono && plan.source.channels > 1) {
         plan.convert_mono = true;
-        plan.last_mono = index;
+        plan.last_mono = request_index;
       } else {
         plan.convert_preserved = true;
-        plan.last_preserved = index;
+        plan.last_preserved = request_index;
       }
     }
 
     for (AudioPlan& plan : plans) {
-      const Sound& sound = sounds.sounds[plan.sound];
+      const std::span<const std::uint8_t> audio = encodedAudio(sounds, plan.identity.sound, plan.identity.language);
       Error error = Error::kNone;
       if (plan.convert_preserved || plan.convert_mono) {
-        error = audioError(audio::transcodeToPcm16WavVariants(sound.encoded_audio,
+        error = audioError(audio::transcodeToPcm16WavVariants(audio,
                                                               plan.convert_preserved,
                                                               plan.convert_mono,
                                                               &plan.preserved,
                                                               plan.convert_mono ? &plan.mono : nullptr));
       } else {
-        error = audioError(audio::validate(sound.encoded_audio));
+        error = audioError(audio::validate(audio));
       }
-      if (error != Error::kNone) {
-        log(ARX_LOG_DEBUG,
-            "Sound preparation: sound {} '{}' conversion failed: preserved {}, mono {}, error {}",
-            plan.sound,
-            sound.path,
-            plan.convert_preserved,
-            plan.convert_mono,
-            static_cast<int>(error));
-        return error;
-      }
+      if (error != Error::kNone) return error;
     }
 
-    for (std::size_t index = 0; index < requests.size(); ++index) {
-      const AudioPreparationRequest& request = requests[index];
+    for (std::size_t request_index = 0; request_index < requests.size(); ++request_index) {
+      const AudioPreparationRequest& request = requests[request_index];
       if (!request.options.include_bytes) continue;
-      AudioPlan& plan = plans[plan_by_sound[request.sound]];
+      AudioPlan& plan = plans[request_plans[request_index]];
       if (!needsConversion(request.options, plan.source)) continue;
-      PreparedBytes& bytes = prepared[index].bytes;
+      PreparedBytes& bytes = prepared[request_index].bytes;
       if (request.options.channels == ChannelMode::kMono && plan.source.channels > 1) {
-        if (index == plan.last_mono)
+        if (request_index == plan.last_mono)
           bytes.converted = std::move(plan.mono);
         else
           bytes.converted = plan.mono;
-      } else if (index == plan.last_preserved) {
+      } else if (request_index == plan.last_preserved) {
         bytes.converted = std::move(plan.preserved);
       } else {
         bytes.converted = plan.preserved;

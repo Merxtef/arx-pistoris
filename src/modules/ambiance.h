@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/sound.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -55,7 +56,7 @@ struct PositionedAmbianceKey : AmbianceKeyCommon {
 using AmbianceTrackKeys = std::variant<std::vector<PannedAmbianceKey>, std::vector<PositionedAmbianceKey>>;
 
 struct AmbianceTrack {
-  SoundIndex sound = kNoSound;
+  SoundHandle sound = kNoSoundHandle;
   AmbianceTrackKeys keys;
 };
 

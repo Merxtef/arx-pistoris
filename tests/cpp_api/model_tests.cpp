@@ -118,7 +118,7 @@ TEST_SUITE("C++ Model API") {
   TEST_CASE("Returns the first format path for each normalized Model texture") {
     pistoris::Ftl native = makeSemanticModelFtl();
     native.texture_containers.push_back(native.texture_containers.front());
-    setFtlName("graph/obj3d/textures/my_tex.tga",
+    setFtlName("graph/obj3d/textures/my_tex",
                native.texture_containers.back().filename,
                sizeof(native.texture_containers.back().filename));
 
@@ -127,7 +127,7 @@ TEST_SUITE("C++ Model API") {
     REQUIRE(pistoris::Model::importNative(model, native, &sources) == ARX_OK);
     CHECK(model.textureCount() == 1);
     REQUIRE(sources.size() == 1);
-    CHECK(sources[0] == "GRAPH\\OBJ3D\\TEXTURES\\MY_TEX.BMP");
+    CHECK(sources[0] == "graph/obj3d/textures/my_tex");
   }
 
   TEST_CASE("Treats empty native texture slots as no texture") {
@@ -143,7 +143,7 @@ TEST_SUITE("C++ Model API") {
     REQUIRE(model.validate() == ARX_OK);
     CHECK(model.textureCount() == 1);
     REQUIRE(sources.size() == 1);
-    CHECK(sources[0] == "GRAPH\\OBJ3D\\TEXTURES\\MY_TEX.BMP");
+    CHECK(sources[0] == "graph/obj3d/textures/my_tex");
 
     std::array<ArxModelFace, 2> faces{};
     REQUIRE(model.copyFaces(0, faces.size(), faces.data()) == ARX_OK);
@@ -1160,11 +1160,11 @@ f 1 2 3
     CHECK(bundle.texture_files[0].source_texture == 0);
     CHECK(bundle.texture_files[0].resource_path == "graph/obj3d/textures/my_tex.bmp");
     CHECK(bundle.texture_files[0].encoded_image == image);
-    CHECK(std::string(bundle.ftl.texture_containers[0].filename) == "graph/obj3d/textures/my_tex.");
+    CHECK(std::string(bundle.ftl.texture_containers[0].filename) == "graph/obj3d/textures/my_tex");
 
-    REQUIRE(model.bakeNativeBundle({.include_files = false}, bundle) == ARX_OK);
+    REQUIRE(model.bakeNativeBundle({.include_texture_files = false}, bundle) == ARX_OK);
     CHECK(bundle.texture_files.empty());
-    CHECK(std::string(bundle.ftl.texture_containers[0].filename) == "graph/obj3d/textures/my_tex.");
+    CHECK(std::string(bundle.ftl.texture_containers[0].filename) == "graph/obj3d/textures/my_tex");
   }
 
   TEST_CASE("Native bake applies the FTL texture path limit with its extension") {
@@ -1185,7 +1185,7 @@ f 1 2 3
     setFtlName("bad_name", native.selections[0].name, sizeof(native.selections[0].name));
     setFtlName("bad__name", native.selections[4].name, sizeof(native.selections[4].name));
     setFtlName("__", native.selections[5].name, sizeof(native.selections[5].name));
-    setFtlName("ROOT", native.groups[1].name, sizeof(native.groups[1].name));
+    setFtlName("root", native.groups[1].name, sizeof(native.groups[1].name));
     setFtlName("", native.actions[0].name, sizeof(native.actions[0].name));
     LogCapture logs;
 
@@ -1206,7 +1206,7 @@ f 1 2 3
     REQUIRE(logs.messages.size() == 4);
     CHECK((logs.messages[0] == "FTL -> Model: selection 'bad__name' normalized to 'bad_name_1'"));
     CHECK((logs.messages[1] == "FTL -> Model: selection '__' normalized to 'selection'"));
-    CHECK((logs.messages[2] == "FTL -> Model: bone 'ROOT' normalized to 'root_1'"));
+    CHECK((logs.messages[2] == "FTL -> Model: bone 'root' normalized to 'root_1'"));
     CHECK((logs.messages[3] == "FTL -> Model: action point '' normalized to 'unnamed'"));
   }
 
@@ -1238,8 +1238,8 @@ f 1 2 3
   TEST_CASE("Native conversion preserves duplicate action point names") {
     pistoris::Ftl native = makeSemanticModelFtl();
     native.actions.push_back(native.actions.front());
-    setFtlName("HIT_30", native.actions[0].name, sizeof(native.actions[0].name));
-    setFtlName("HIT_30", native.actions[1].name, sizeof(native.actions[1].name));
+    setFtlName("hit_30", native.actions[0].name, sizeof(native.actions[0].name));
+    setFtlName("hit_30", native.actions[1].name, sizeof(native.actions[1].name));
 
     pistoris::Model model;
     REQUIRE(pistoris::Model::importNative(model, native) == ARX_OK);

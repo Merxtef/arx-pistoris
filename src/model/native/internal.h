@@ -61,13 +61,6 @@ std::string_view fixedString(const char (&value)[N]) noexcept {
   return {value, end ? static_cast<std::size_t>(end - value) : N};
 }
 
-template <std::size_t N>
-void fixedString(std::string_view value, char (&out)[N]) noexcept {
-  const std::size_t size = std::min(value.size(), N - 1);
-  value.copy(out, size);
-  out[size] = '\0';
-}
-
 inline bool cutSelection(std::string_view name) noexcept {
   return std::find(kCutSelectionNames.begin(), kCutSelectionNames.end(), name) != kCutSelectionNames.end();
 }

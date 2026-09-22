@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/status.h"
 
 #include "external/glb/node_graph.h"
+#include "external/glb/utils/names.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +18,7 @@ namespace pistoris::glb_model {
 
 struct ModelDiscovery {
   std::size_t root = glb::kInvalidNodeIndex;
+  glb::ParsedLabel root_label;
   std::size_t outside_meshes = 0;
   std::vector<std::uint8_t> active;
   std::vector<std::size_t> active_nodes;

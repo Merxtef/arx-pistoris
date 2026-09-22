@@ -8,8 +8,8 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
-#include "arx_pistoris/texture.hpp"
 
 #include "api/status_boundary.h"
 #include "model/data.h"
@@ -22,6 +22,7 @@
 #include "native/ftl.h"
 #include "utils/encoded_image.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 
 #include <algorithm>
 #include <array>
@@ -197,9 +198,14 @@ ArxReturnCode buildNativeGeometry(const ModelModules& model, NativeBuildState& s
   return ARX_OK;
 }
 
-void buildNativeTextureContainers(std::span<const NativeTextureProjection> textures, NativeBuildState& state) {
-  for (std::size_t index = 0; index < textures.size(); ++index)
-    fixedString(textures[index].resource_path + '.', state.data.texture_containers[index].filename);
+ArxReturnCode buildNativeTextureContainers(std::span<const NativeTextureProjection> textures,
+                                           const NativeModelBakeOptions& options, NativeBuildState& state) {
+  for (std::size_t index = 0; index < textures.size(); ++index) {
+    if (!native_text::encodeFixed(
+            textures[index].resource_path, options.text_mode, state.data.texture_containers[index].filename))
+      return ARX_MODEL_BAD_TEXTURE_PATH;
+  }
+  return ARX_OK;
 }
 
 ArxReturnCode buildNativePoints(const ModelModules& model, NativeBuildState& state) {
@@ -235,7 +241,7 @@ ArxReturnCode buildNativePoints(const ModelModules& model, NativeBuildState& sta
   return ARX_OK;
 }
 
-void buildNativeRig(const ModelModules& model, NativeBuildState& state) {
+ArxReturnCode buildNativeRig(const ModelModules& model, NativeTextMode text_mode, NativeBuildState& state) {
   std::vector<std::size_t> member_counts(model.skeleton.bones.size(), 1U);
   for (std::size_t vertex = state.geometry_begin; vertex < state.geometry_end; ++vertex) {
     const BoneIndex bone = state.vertex_bones[vertex];
@@ -257,7 +263,7 @@ void buildNativeRig(const ModelModules& model, NativeBuildState& state) {
   for (std::size_t index = 0; index < model.skeleton.bones.size(); ++index) {
     const Bone& source = model.skeleton.bones[index];
     ftl::Group& target = state.data.groups[index];
-    fixedString(source.name, target.name);
+    if (!native_text::encodeTruncated(source.name, text_mode, target.name)) return ARX_MODEL_BAD_BONE_NAME;
     target.origin = state.bone_vertices[index];
     target.blob_shadow_size = source.blob_shadow_size;
     target.indices.reserve(member_counts[index]);
@@ -286,9 +292,12 @@ void buildNativeRig(const ModelModules& model, NativeBuildState& state) {
   }
 
   for (std::size_t index = 0; index < model.action_points.points.size(); ++index) {
-    fixedString(model.action_points.points[index].name, state.data.actions[index].name);
+    if (!native_text::encodeTruncated(
+            model.action_points.points[index].name, text_mode, state.data.actions[index].name))
+      return ARX_MODEL_BAD_ACTION_POINT_NAME;
     state.data.actions[index].vertex_idx = state.action_vertices[index];
   }
+  return ARX_OK;
 }
 
 std::optional<std::uint16_t> inferredCutProbe(const ModelModules& model, const NativeBuildState& state,
@@ -307,7 +316,7 @@ std::optional<std::uint16_t> inferredCutProbe(const ModelModules& model, const N
   return std::nullopt;
 }
 
-void buildNativeSelections(const ModelModules& model, NativeBuildState& state) {
+ArxReturnCode buildNativeSelections(const ModelModules& model, NativeTextMode text_mode, NativeBuildState& state) {
   std::size_t omitted = 0;
   for (SelectionId id = 0; id < 64U; ++id) {
     if (!selections::occupied(model.selections, id)) continue;
@@ -345,17 +354,19 @@ void buildNativeSelections(const ModelModules& model, NativeBuildState& state) {
       continue;
     }
     ftl::Selection selection;
-    fixedString(source.name, selection.name);
+    if (!native_text::encodeTruncated(source.name, text_mode, selection.name)) return ARX_MODEL_BAD_SELECTION_NAME;
     selection.selected = std::move(selected);
     state.data.selections.push_back(std::move(selection));
   }
   if (omitted != 0) log(ARX_LOG_INFO, "Model -> FTL: omitted {} empty selection(s)", omitted);
+  return ARX_OK;
 }
 
 }  // namespace
 
-ArxReturnCode Model::bakeNativeBundle(const NativeTextureBakeOptions& options, NativeModelBundle& out) const noexcept {
+ArxReturnCode Model::bakeNativeBundle(const NativeModelBakeOptions& options, NativeModelBundle& out) const noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(options.text_mode)) return ARX_INVALID_OPTIONS;
     ArxReturnCode rc = validate();
     if (rc != ARX_OK) return rc;
     rc = validateNativeCounts(*data_);
@@ -367,11 +378,13 @@ ArxReturnCode Model::bakeNativeBundle(const NativeTextureBakeOptions& options, N
     if (rc != ARX_OK) return rc;
     rc = buildNativePoints(*data_, state);
     if (rc != ARX_OK) return rc;
-    buildNativeRig(*data_, state);
-    buildNativeSelections(*data_, state);
+    rc = buildNativeRig(*data_, options.text_mode, state);
+    if (rc != ARX_OK) return rc;
+    rc = buildNativeSelections(*data_, options.text_mode, state);
+    if (rc != ARX_OK) return rc;
 
     std::vector<textures::ImagePreparationRequest> requests;
-    if (options.include_files) {
+    if (options.include_texture_files) {
       requests.reserve(data_->textures.textures.size());
       for (std::size_t index = 0; index < data_->textures.textures.size(); ++index) {
         if (data_->textures.textures[index].encoded_image.empty()) continue;
@@ -394,13 +407,11 @@ ArxReturnCode Model::bakeNativeBundle(const NativeTextureBakeOptions& options, N
     for (std::size_t index = 0; index < data_->textures.textures.size(); ++index) {
       const Texture& texture = data_->textures.textures[index];
       std::string resource_path = textures::normalizePath(texture.path);
-      if (resource_path.empty() || !textures::validExternalPath(resource_path) ||
-          resource_path.size() + 2U > sizeof(ftl::TextureContainer::filename))
-        return ARX_MODEL_BAD_TEXTURE_PATH;
+      if (resource_path.empty() || !textures::validExternalPath(resource_path)) return ARX_MODEL_BAD_TEXTURE_PATH;
       NativeTextureProjection item;
       item.source_texture = static_cast<TextureIndex>(index);
       item.resource_path = std::move(resource_path);
-      if (options.include_files && !texture.encoded_image.empty()) {
+      if (options.include_texture_files && !texture.encoded_image.empty()) {
         textures::PreparedImage& image = prepared[prepared_index++];
         item.image_extension = pistoris::image::extension(image.info.format);
         if (item.image_extension.empty()) return ARX_MODEL_BAD_TEXTURE_IMAGE;
@@ -419,12 +430,13 @@ ArxReturnCode Model::bakeNativeBundle(const NativeTextureBakeOptions& options, N
           "native repeat sampling",
           rescaled_images);
 
-    buildNativeTextureContainers(projected, state);
+    rc = buildNativeTextureContainers(projected, options, state);
+    if (rc != ARX_OK) return rc;
     rc = validateFtl(&state.data);
     if (rc != ARX_OK) return rc;
     NativeModelBundle bundle;
     bundle.ftl = std::move(state.data);
-    if (options.include_files) {
+    if (options.include_texture_files) {
       bundle.texture_files.reserve(projected.size());
       for (NativeTextureProjection& texture : projected) {
         if (texture.encoded_image.empty()) continue;

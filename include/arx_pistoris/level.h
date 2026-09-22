@@ -10,6 +10,7 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
 #include "arx_pistoris/level/types.h"
+#include "arx_pistoris/native/text.h"
 #include "arx_pistoris/texture.h"
 
 #include <stddef.h>
@@ -224,13 +225,14 @@ typedef struct ArxLevelMinimapGenerationOptions {
 typedef struct ArxLevelNativeBakeOptions {
   // Used when dlf_scene_path is empty
   ArxStringView level_name;
-  ArxNativeTextureBakeOptions textures;
+  uint8_t include_texture_files;
+  ArxNativeTextMode text_mode;
   uint8_t reconstruct_quads;
   // Overrides level_name-derived path
   ArxStringView dlf_scene_path;
 } ArxLevelNativeBakeOptions;
 
-#define ARX_LEVEL_NATIVE_BAKE_OPTIONS_INIT {{NULL, 0}, ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT, 1U, {NULL, 0}}
+#define ARX_LEVEL_NATIVE_BAKE_OPTIONS_INIT {{NULL, 0}, 1U, ARX_NATIVE_TEXT_AUTO, 1U, {NULL, 0}}
 
 typedef struct ArxLevelDlfBakeOptions {
   // Used when dlf_scene_path is empty
@@ -239,9 +241,10 @@ typedef struct ArxLevelDlfBakeOptions {
   ArxVector3 target_fts_offset;
   // Overrides level_name-derived path
   ArxStringView dlf_scene_path;
+  ArxNativeTextMode text_mode;
 } ArxLevelDlfBakeOptions;
 
-#define ARX_LEVEL_DLF_BAKE_OPTIONS_INIT {{NULL, 0}, {0.0f, 0.0f, 0.0f}, {NULL, 0}}
+#define ARX_LEVEL_DLF_BAKE_OPTIONS_INIT {{NULL, 0}, {0.0f, 0.0f, 0.0f}, {NULL, 0}, ARX_NATIVE_TEXT_AUTO}
 
 ARX_EXTERN_C_BEGIN
 
@@ -256,7 +259,8 @@ ARX_API ArxReturnCode arx_pistoris_level_reset(ArxLevel* level) ARX_NOEXCEPT;
 
 ARX_API ArxReturnCode arx_pistoris_level_import_native(const ArxFts* fts, const ArxLlf* llf, const ArxDlf* dlf,
                                                        ArxLevel** out_level,
-                                                       ArxTextureSourcePaths** out_texture_source_paths) ARX_NOEXCEPT;
+                                                       ArxTextureSourcePaths** out_texture_source_paths,
+                                                       ArxNativeTextMode text_mode) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_import_glb(const uint8_t* data, size_t size,
                                                     const ArxLevelGlbImportOptions* options, ArxLevel** out_level,
                                                     ArxLevelGlbImportInfo* out_info,

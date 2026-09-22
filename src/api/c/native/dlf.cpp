@@ -7,10 +7,12 @@
 #include "arx_pistoris/base/string_view.h"
 #include "arx_pistoris/native.h"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.h"
 
 #include "api/c/internal.h"
 #include "api/c/native/internal.h"
 #include "api/c/native/json_internal.h"
+#include "api/c/native/text_internal.h"
 #include "external/json.h"
 #include "native/storage.h"
 
@@ -68,12 +70,17 @@ ArxReturnCode arx_pistoris_dlf_write(const ArxDlf* dlf, const ArxDlfWriteOptions
 }
 
 ArxReturnCode arx_pistoris_dlf_to_json(const ArxDlf* dlf, std::uint32_t pretty, ArxStringView signer,
-                                       char** out_json) noexcept {
-  return pistoris::c_api::toJson(dlf, pretty, signer, out_json, pistoris::exportDlfToJson);
+                                       ArxNativeTextMode text_mode, char** out_json) noexcept {
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
+  return pistoris::c_api::toJson(
+      dlf, pretty, signer, pistoris::c_api::nativeTextMode(text_mode), out_json, pistoris::exportDlfToJson);
 }
 
-ArxReturnCode arx_pistoris_dlf_from_json(const std::uint8_t* data, std::size_t size, ArxDlf** out_dlf) noexcept {
-  return pistoris::c_api::fromJson(data, size, out_dlf, pistoris::importJsonToDlf);
+ArxReturnCode arx_pistoris_dlf_from_json(const std::uint8_t* data, std::size_t size, ArxNativeTextMode text_mode,
+                                         ArxDlf** out_dlf) noexcept {
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
+  return pistoris::c_api::fromJson(
+      data, size, pistoris::c_api::nativeTextMode(text_mode), out_dlf, pistoris::importJsonToDlf);
 }
 
 ArxReturnCode arx_pistoris_dlf_validate(const ArxDlf* dlf) noexcept {

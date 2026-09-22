@@ -12,10 +12,45 @@
 #include "image_helpers.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <string>
+#include <string_view>
 #include <vector>
 
 TEST_SUITE("C++ binary validation API") {
+  TEST_CASE("Classifies and converts text encodings") {
+    using pistoris::binary::TextEncoding;
+
+    CHECK(pistoris::binary::classifyTextEncoding({}) == TextEncoding::kAscii);
+    CHECK(pistoris::binary::classifyTextEncoding(std::string_view("a\0b", 3)) == TextEncoding::kAscii);
+    CHECK(pistoris::binary::classifyTextEncoding("caf\xc3\xa9") == TextEncoding::kUtf8);
+
+    std::string latin1 = "caf";
+    latin1.push_back(static_cast<char>(0xe9));
+    CHECK(pistoris::binary::classifyTextEncoding(latin1) == TextEncoding::kLatin1);
+    CHECK(pistoris::binary::classifyTextEncoding("\xc3\xa9") == TextEncoding::kUtf8);
+
+    std::string converted;
+    REQUIRE(pistoris::binary::latin1ToUtf8(latin1, converted) == ARX_OK);
+    CHECK(converted == "caf\xc3\xa9");
+    REQUIRE(pistoris::binary::utf8ToLatin1(converted, converted) == ARX_OK);
+    CHECK(converted == latin1);
+
+    std::string all_latin1(256, '\0');
+    for (std::size_t index = 0; index < all_latin1.size(); ++index) all_latin1[index] = static_cast<char>(index);
+    REQUIRE(pistoris::binary::latin1ToUtf8(all_latin1, converted) == ARX_OK);
+    std::string roundtrip;
+    REQUIRE(pistoris::binary::utf8ToLatin1(converted, roundtrip) == ARX_OK);
+    CHECK(roundtrip == all_latin1);
+
+    converted = "unchanged";
+    CHECK(pistoris::binary::utf8ToLatin1("\xc3", converted) == ARX_TEXT_INVALID_UTF8);
+    CHECK(converted == "unchanged");
+    CHECK(pistoris::binary::utf8ToLatin1("\xe2\x82\xac", converted) == ARX_TEXT_NOT_LATIN1);
+    CHECK(converted == "unchanged");
+  }
+
   TEST_CASE("Validates encoded audio") {
     const std::vector<std::uint8_t> wav = makePcm16Wav(2);
     CHECK(pistoris::binary::validateEncodedAudio(wav) == ARX_OK);

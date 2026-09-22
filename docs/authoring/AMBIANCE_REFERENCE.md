@@ -31,6 +31,12 @@ labels are mandatory and ignored. Track and key ordinals are unique sortable
 unsigned values; gaps are valid. Omitted `MASTER` selects the lowest track
 ordinal. A supplied `MASTER` must identify one track ordinal.
 
+Import can recover missing root, key, and automation-helper labels because
+their grammars are self-delimiting, and warns for each recovered node. Track
+labels remain mandatory because `<sample-path>` may contain `__`. Semantic
+options take precedence over label recovery, and labels that resemble
+convention tokens follow the shared informational-notice rule.
+
 `<sample-path>` may contain `__`. Parsing uses the first `__` after the ordinal
 and the final `__` before the label. Canonical export uses dense track and key
 ordinals padded to at least three digits and omits `MASTER_0`.
@@ -87,8 +93,8 @@ require `VAL`.
 
 X, Y, and Z forbid `VAL` and take their centers from the corresponding key
 coordinate. Their ranges use GLB units. PAN may use `VAL`; when present, it is
-authoritative. Automation helper transforms are ignored and nonidentity
-transforms warn.
+authoritative. Automation helper transforms are presentation-only and do not
+affect import.
 
 [Worked automation example](AMBIANCE_GUIDE.md#keys-and-automation)
 

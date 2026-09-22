@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/animation/types.h"
 #include "arx_pistoris/arx_pistoris.h"
+#include "arx_pistoris/native/text.h"
 
 #include "audio_helpers.h"
 
@@ -101,7 +102,7 @@ TEST_SUITE("C Animation editing") {
     REQUIRE(arx_pistoris_animation_bake_native(animation, nullptr, &native, nullptr) == ARX_OK);
     ArxAnimation* imported = nullptr;
     ArxSoundSourceReferences* sources = nullptr;
-    REQUIRE(arx_pistoris_animation_import_native(native, &imported, &sources) == ARX_OK);
+    REQUIRE(arx_pistoris_animation_import_native(native, &imported, &sources, ARX_NATIVE_TEXT_AUTO) == ARX_OK);
     REQUIRE(imported != nullptr);
     REQUIRE(sources != nullptr);
     CHECK(arx_pistoris_animation_validate(imported) == ARX_OK);

@@ -10,16 +10,19 @@
 
 #include "native/fixed_string.h"
 #include "native/resource_lookup.h"
+#include "native/resource_path.h"
 #include "utils/container_allocation.h"
 #include "utils/cursor.h"
 #include "utils/log.h"
 #include "utils/math/finite.h"
 #include "utils/math/quat.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -41,6 +44,19 @@ std::size_t activeGroupCount(const tea::Data& animation) noexcept {
     }
   }
   return active;
+}
+
+bool canonicalSamplePath(std::string_view path) {
+  std::string canonical;
+  return normalizeNativeResourcePath(path, canonical) && canonical == path;
+}
+
+bool encodeSamplePath(std::string_view path, tea::Sample& out) {
+  std::string encoded;
+  if (!encodeNativeResourceStem(path, sizeof(out.name), encoded)) return false;
+  std::memset(out.name, 0, sizeof(out.name));
+  std::memcpy(out.name, encoded.data(), encoded.size());
+  return true;
 }
 
 }  // namespace
@@ -90,7 +106,7 @@ static ArxReturnCode readKeyframe(tea::Keyframe* kf, ReadCursor& c, uint32_t ver
     auto& sample = kf->sample.emplace();
     c.read(sample);
     if (!c) return ARX_UNEXPECTED_EOF;
-    clampStr(sample.name, "TEA: sample.name", frame_idx);
+    canonicalizeFixedString(sample.name, "TEA: sample.name", frame_idx);
 
     int32_t sample_size = 0;
     c.read(sample_size);
@@ -120,7 +136,7 @@ ArxReturnCode loadTea(tea::Data* d, ReadCursor& c) {
   if (version < kTeaVersion) return ARX_TEA_BAD_VERSION;
 
   c.read(result.name);
-  clampStr(result.name, "TEA: anim_name", 0);
+  canonicalizeFixedString(result.name, "TEA: anim_name", 0);
   c.read(result.num_frames);
   c.read(result.num_groups);
   int32_t num_key_frames = 0;
@@ -135,6 +151,7 @@ ArxReturnCode loadTea(tea::Data* d, ReadCursor& c) {
     ARX_RETURN_IF_ERR(readKeyframe(&result.keyframes[i], c, version, result.num_groups, i), c);
   }
 
+  ARX_RETURN_IF_ERR(canonicalizeTea(&result));
   ARX_RETURN_IF_ERR(validateTea(&result));
 
   *d = std::move(result);
@@ -151,7 +168,7 @@ ArxReturnCode loadTea(tea::Data* d, ReadCursor& c) {
   return ARX_OK;
 }
 
-static WriteCursor& writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
+ArxReturnCode writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
   c.write(kf.num_frame);
   c.write(kf.flag_frame);
   c.pad(4);                                                         // master_key_frame
@@ -181,7 +198,9 @@ static WriteCursor& writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
   const auto& sample = kf.sample;
   if (sample) {
     c.write(static_cast<int32_t>(0));  // num_sample (unused by readers)
-    c.write(*sample);
+    tea::Sample encoded;
+    if (!encodeSamplePath(sample->name, encoded)) return ARX_TEA_BAD_SAMPLE_PATH;
+    c.write(encoded);
     c.write(static_cast<int32_t>(0));  // sample_size; audio dropped
   } else {
     c.write(static_cast<int32_t>(-1));
@@ -189,7 +208,7 @@ static WriteCursor& writeKeyframe(const tea::Keyframe& kf, WriteCursor& c) {
 
   c.pad(4);  // num_sfx
 
-  return c;
+  return c ? ARX_OK : ARX_BAD_ALLOC;
 }
 
 ArxReturnCode saveTea(const tea::Data* d, WriteCursor& c) {
@@ -204,7 +223,7 @@ ArxReturnCode saveTea(const tea::Data* d, WriteCursor& c) {
           "TEA saving: keyframe[{}] sample path '{}' resolves outside Libertatis default loose roots; "
           "it may not be discovered",
           index,
-          path);
+          native_text::diagnostic(path));
     }
   }
 
@@ -226,9 +245,23 @@ ArxReturnCode saveTea(const tea::Data* d, WriteCursor& c) {
   c.write(d->num_groups);
   c.write(static_cast<int32_t>(d->keyframes.size()));
 
-  for (const auto& kf : d->keyframes) writeKeyframe(kf, c);
+  for (const auto& kf : d->keyframes) ARX_RETURN_IF_ERR(writeKeyframe(kf, c));
 
   return c ? ARX_OK : ARX_BAD_ALLOC;
+}
+
+ArxReturnCode canonicalizeTea(tea::Data* d) {
+  if (!d) return ARX_INVALID_DATA_POINTER;
+  for (tea::Keyframe& keyframe : d->keyframes) {
+    if (!keyframe.sample) continue;
+    tea::Sample& sample = *keyframe.sample;
+    std::string canonical;
+    if (!normalizeNativeResourceStem(sample.name, canonical) || canonical.size() >= sizeof(sample.name))
+      return ARX_TEA_BAD_SAMPLE_PATH;
+    std::memset(sample.name, 0, sizeof(sample.name));
+    std::memcpy(sample.name, canonical.data(), canonical.size());
+  }
+  return ARX_OK;
 }
 
 ArxReturnCode validateTea(const tea::Data* d) {
@@ -252,6 +285,9 @@ ArxReturnCode validateTea(const tea::Data* d) {
       // NOLINTNEXTLINE(bugprone-unchecked-optional-access): checked above
       const tea::Sample& sample = *kf.sample;
       if (!isNullTerminated(sample.name)) return ARX_TEA_BAD_SAMPLE_PATH;
+      if (!canonicalSamplePath(sample.name)) return ARX_TEA_BAD_SAMPLE_PATH;
+      tea::Sample encoded;
+      if (!encodeSamplePath(sample.name, encoded)) return ARX_TEA_BAD_SAMPLE_PATH;
     }
     prev_frame = kf.num_frame;
   }

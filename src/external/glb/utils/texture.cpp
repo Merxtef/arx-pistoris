@@ -15,6 +15,7 @@
 #include "utils/path.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -32,6 +33,38 @@ void logPathRepairs(const textures::PathRepairInfo& info, std::string_view log_p
 }
 
 }  // namespace
+
+TextureBindingError decodeTextureBinding(const cgltf_texture_view& view, TextureBinding& out) noexcept {
+  TextureBinding result;
+  result.image = view.texture != nullptr ? view.texture->image : nullptr;
+  result.texcoord = view.texcoord;
+  if (view.texture != nullptr && (view.texture->extensions_count != 0 ||
+                                  (view.texture->image != nullptr && view.texture->image->extensions_count != 0)))
+    return TextureBindingError::kUnsupportedFeature;
+
+  if (view.has_transform) {
+    result.transformed = true;
+    result.offset = {view.transform.offset[0], view.transform.offset[1]};
+    result.scale = {view.transform.scale[0], view.transform.scale[1]};
+    result.rotation = view.transform.rotation;
+    if (view.transform.has_texcoord) result.texcoord = view.transform.texcoord;
+    if (!std::isfinite(result.offset.x) || !std::isfinite(result.offset.y) || !std::isfinite(result.scale.x) ||
+        !std::isfinite(result.scale.y) || !std::isfinite(result.rotation))
+      return TextureBindingError::kBadBinding;
+  }
+  if (result.texcoord < 0) return TextureBindingError::kBadBinding;
+  out = result;
+  return TextureBindingError::kNone;
+}
+
+Vec2 transformTexcoord(const TextureBinding& binding, Vec2 value) noexcept {
+  if (!binding.transformed) return value;
+  value.x *= binding.scale.x;
+  value.y *= binding.scale.y;
+  const float sine = std::sin(binding.rotation);
+  const float cosine = std::cos(binding.rotation);
+  return {cosine * value.x - sine * value.y + binding.offset.x, sine * value.x + cosine * value.y + binding.offset.y};
+}
 
 TextureImporter::TextureImporter(TexturesData& textures, std::vector<std::string>* source_paths,
                                  std::string_view log_prefix)

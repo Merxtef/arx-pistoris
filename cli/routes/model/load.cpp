@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
 #include "arx_pistoris/runtime.hpp"
@@ -23,6 +24,7 @@
 #include "routes/model/invocation.h"
 #include "routes/model/options.h"
 #include "routes/model/state.h"
+#include "routes/native_text.h"
 #include "routes/types.h"
 
 #include <cstddef>
@@ -56,14 +58,14 @@ bool inputFailure(const char* what, ArxReturnCode rc, std::string_view path = {}
   return false;
 }
 
-bool decodeTea(const ClassifiedPath& input, pistoris::Tea& out) {
+bool decodeTea(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Tea& out) {
   ArxReturnCode rc = ARX_OK;
   switch (input.facts.format) {
     case Format::kTea:
       rc = pistoris::readTea(input.buffer, out);
       break;
     case Format::kJson:
-      rc = pistoris::fromJson(byteStringView(input.buffer), out);
+      rc = pistoris::fromJson(byteStringView(input.buffer), out, text_mode);
       break;
     default:
       diagnostic(DiagnosticCode::kModelUnsupportedExtra, "Unsupported extra animation format: %s", input.path.c_str());
@@ -72,14 +74,14 @@ bool decodeTea(const ClassifiedPath& input, pistoris::Tea& out) {
   return rc == ARX_OK || inputFailure("TEA", rc, input.path);
 }
 
-bool decodeFtl(const ClassifiedPath& input, pistoris::Ftl& out) {
+bool decodeFtl(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Ftl& out) {
   ArxReturnCode rc = ARX_OK;
   switch (input.facts.format) {
     case Format::kFtl:
       rc = pistoris::readFtl(input.buffer, out);
       break;
     case Format::kJson:
-      rc = pistoris::fromJson(byteStringView(input.buffer), out);
+      rc = pistoris::fromJson(byteStringView(input.buffer), out, text_mode);
       break;
     default:
       diagnostic(DiagnosticCode::kModelUnsupportedInput, "Unsupported Model input format: %s", input.path.c_str());
@@ -103,11 +105,15 @@ bool applyAnimationResourcePath(const ClassifiedPath& input, pistoris::Animation
 }
 
 bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, NativeModelFiles& out) {
-  if (!decodeFtl(inputs[invocation.input], out.ftl)) return false;
+  const ClassifiedPath& input = inputs[invocation.input];
+  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  if (!decodeFtl(input, out.text_mode, out.ftl)) return false;
   out.animations.reserve(invocation.extras.size());
   for (const std::size_t index : invocation.extras) {
     NativeAnimationFile animation;
-    if (!decodeTea(inputs[index], animation.tea)) return false;
+    animation.text_mode =
+        directCarrierTextMode(inputs[index].facts.format, invocation.output.format, invocation.native_text_mode);
+    if (!decodeTea(inputs[index], animation.text_mode, animation.tea)) return false;
     animation.input = index;
     pistoris::paths::AnimationPathView parsed;
     if (pistoris::paths::animationFromTea(inputs[index].path, parsed)) animation.resource_path = inputs[index].path;
@@ -120,7 +126,7 @@ bool nativeToIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoc
                           NativeModelFiles& native, IntermediateModel& out) {
   pistoris::Model model;
   std::vector<std::string> texture_source_paths;
-  ArxReturnCode rc = pistoris::Model::importNative(model, native.ftl, &texture_source_paths);
+  ArxReturnCode rc = pistoris::Model::importNative(model, native.ftl, &texture_source_paths, native.text_mode);
   if (rc != ARX_OK) return inputFailure("FTL Model", rc, inputs[invocation.input].path);
   if (!applyModelResourcePath(inputs[invocation.input], model)) return false;
   out.model.swap(model);
@@ -136,7 +142,8 @@ bool nativeToIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoc
     }
     auto animation = std::make_unique<pistoris::Animation>();
     std::vector<pistoris::SoundSourceReference> sound_sources;
-    rc = pistoris::Animation::importNative(*animation, native.animations[index].tea, &sound_sources);
+    rc = pistoris::Animation::importNative(
+        *animation, native.animations[index].tea, &sound_sources, native.animations[index].text_mode);
     if (rc != ARX_OK) return inputFailure("TEA Animation", rc, inputs[invocation.extras[index]].path);
     if (!native.animations[index].resource_path.empty()) {
       rc = animation->setResourcePath(native.animations[index].resource_path);
@@ -161,8 +168,12 @@ bool loadObjIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoca
                          IntermediateModel& out) {
   const ClassifiedPath& input = inputs[invocation.input];
   ConvertedModelInput converted;
-  if (!convertModelInput(
-          input, invocation.obj_material_libraries, {}, DiagnosticCode::kModelInputFailed, "OBJ Model", converted))
+  if (!convertModelInput(input,
+                         invocation.obj_material_libraries,
+                         {.glb = {}, .native_text_mode = invocation.native_text_mode},
+                         DiagnosticCode::kModelInputFailed,
+                         "OBJ Model",
+                         converted))
     return false;
   out.model.swap(converted.model);
   out.texture_source_paths = std::move(converted.texture_source_paths);
@@ -171,11 +182,12 @@ bool loadObjIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoca
   out.sound_sources.reserve(invocation.extras.size());
   out.animation_sources.reserve(invocation.extras.size());
   for (const std::size_t index : invocation.extras) {
+    const pistoris::NativeTextMode text_mode = carrierTextMode(inputs[index].facts.format, invocation.native_text_mode);
     pistoris::Tea native_animation;
-    if (!decodeTea(inputs[index], native_animation)) return false;
+    if (!decodeTea(inputs[index], text_mode, native_animation)) return false;
     auto animation = std::make_unique<pistoris::Animation>();
     std::vector<pistoris::SoundSourceReference> sound_sources;
-    const ArxReturnCode rc = pistoris::Animation::importNative(*animation, native_animation, &sound_sources);
+    const ArxReturnCode rc = pistoris::Animation::importNative(*animation, native_animation, &sound_sources, text_mode);
     if (rc != ARX_OK) return inputFailure("TEA Animation", rc, inputs[index].path);
     if (!applyAnimationResourcePath(inputs[index], *animation)) return false;
     out.animations.push_back(std::move(animation));
@@ -190,7 +202,12 @@ bool loadGlbIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoca
                          const ModelOptions& options, IntermediateModel& out) {
   const ClassifiedPath& input = inputs[invocation.input];
   ConvertedModelInput converted;
-  if (!convertModelInput(input, {}, options.glb_import, DiagnosticCode::kModelInputFailed, "GLB Model", converted))
+  if (!convertModelInput(input,
+                         {},
+                         {.glb = options.glb_import, .native_text_mode = invocation.native_text_mode},
+                         DiagnosticCode::kModelInputFailed,
+                         "GLB Model",
+                         converted))
     return false;
   out.model.swap(converted.model);
   out.texture_source_paths = std::move(converted.texture_source_paths);
@@ -208,11 +225,12 @@ bool loadGlbIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoca
   out.sound_sources.reserve(out.animations.capacity());
   out.animation_sources.reserve(out.animations.capacity());
   for (const std::size_t index : invocation.extras) {
+    const pistoris::NativeTextMode text_mode = carrierTextMode(inputs[index].facts.format, invocation.native_text_mode);
     pistoris::Tea native_animation;
-    if (!decodeTea(inputs[index], native_animation)) return false;
+    if (!decodeTea(inputs[index], text_mode, native_animation)) return false;
     auto animation = std::make_unique<pistoris::Animation>();
     std::vector<pistoris::SoundSourceReference> sound_sources;
-    const ArxReturnCode rc = pistoris::Animation::importNative(*animation, native_animation, &sound_sources);
+    const ArxReturnCode rc = pistoris::Animation::importNative(*animation, native_animation, &sound_sources, text_mode);
     if (rc != ARX_OK) return inputFailure("TEA Animation", rc, inputs[index].path);
     if (!applyAnimationResourcePath(inputs[index], *animation)) return false;
     out.animations.push_back(std::move(animation));
@@ -259,13 +277,14 @@ bool loadInput(const InputConverterDescriptor& converter, const std::vector<Clas
   return false;
 }
 
-bool loadReferenceModel(std::span<const std::uint8_t> data, std::string_view path, IntermediateModel& out) {
+bool loadReferenceModel(std::span<const std::uint8_t> data, std::string_view path, pistoris::NativeTextMode text_mode,
+                        IntermediateModel& out) {
   pistoris::Ftl native;
   ArxReturnCode rc = pistoris::readFtl(data, native);
   if (rc != ARX_OK) return inputFailure("Reference FTL", rc, path);
 
   auto reference = std::make_unique<pistoris::Model>();
-  rc = pistoris::Model::importNative(*reference, native);
+  rc = pistoris::Model::importNative(*reference, native, nullptr, text_mode);
   if (rc != ARX_OK) return inputFailure("Reference Model", rc, path);
   log(ARX_LOG_INFO, "using reference FTL: %.*s", static_cast<int>(path.size()), path.data());
   out.reference = std::move(reference);

@@ -357,6 +357,8 @@ bool resolveCli(const ParsedCli& parsed, std::span<const ModuleInvocation> effec
   resolved.route_invocation = std::move(selected->invocation);
   resolved.route_probe = selected->result;
   if (!validateSelectedProbe(resolved)) return false;
+  if (!resolved.route_invocation) return false;
+  resolved.route_invocation->native_text_mode = options.native_text_mode;
 
   resolved.route = {.kind = route_kind, .input = resolved.inputs[0].facts.format, .output = resolved.output};
   if (!validateFormatModifiers(effective_modules, resolved.route)) return false;

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "arx_pistoris/native/text.hpp"
+
 #include "routes/model/invocation.h"
 #include "routes/model/options.h"
 #include "routes/model/state.h"
@@ -28,6 +30,7 @@ struct InputConverterDescriptor {
 const InputConverterDescriptor* inputConverterDescriptor(Route route);
 bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
                const Invocation& invocation, const ModelOptions& options, bool native, ModelInput& out);
-bool loadReferenceModel(std::span<const std::uint8_t> data, std::string_view path, IntermediateModel& out);
+bool loadReferenceModel(std::span<const std::uint8_t> data, std::string_view path, pistoris::NativeTextMode text_mode,
+                        IntermediateModel& out);
 
 }  // namespace cli::model

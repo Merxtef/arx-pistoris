@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
+#include "arx_pistoris/native/text.hpp"
+
+#include "base/unique_prefix.h"
 #include "console/diagnostics.h"
 #include "io/policy.h"
 #include "modules/module.h"
 #include "modules/system/modules.h"
 #include "pipeline/options.h"
 
+#include <array>
 #include <span>
+#include <string_view>
 
 namespace cli::modules::system {
 namespace {
@@ -158,6 +163,43 @@ class WriteMountModule final : public SystemModule {
   }
 };
 
+class NativeTextModule final : public SystemModule {
+ public:
+  std::span<const char* const> keywords() const noexcept override {
+    static constexpr const char* kKeywords[] = {"--native-text"};
+    return kKeywords;
+  }
+
+  ModuleHelp help(const RouteDescriptor*) const noexcept override {
+    return {HelpSection::kOptions,
+            "--native-text <auto|utf8|latin1>",
+            "Decode native input and encode rebuilt native output with this mode."};
+  }
+
+  ModuleParseResult parse(ModuleParseContext& ctx) const override {
+    if (ctx.index + 1 >= ctx.argc) {
+      diagnostic(DiagnosticCode::kMissingArgument, "--native-text: expected auto, utf8, or latin1");
+      return {.ok = false};
+    }
+    struct Choice {
+      std::string_view name;
+      pistoris::NativeTextMode mode;
+    };
+    static constexpr std::array<Choice, 3> kChoices = {{{"auto", pistoris::NativeTextMode::kAuto},
+                                                        {"utf8", pistoris::NativeTextMode::kUtf8},
+                                                        {"latin1", pistoris::NativeTextMode::kLatin1}}};
+    const std::string_view value = ctx.argv[++ctx.index];
+    const auto match =
+        resolveUniquePrefix(value, std::span<const Choice>(kChoices), [](const Choice& choice) { return choice.name; });
+    if (match.status != UniquePrefixStatus::kUnique) {
+      diagnostic(DiagnosticCode::kInvalidMode, "--native-text: expected auto, utf8, or latin1");
+      return {.ok = false};
+    }
+    ctx.options.native_text_mode = match.value->mode;
+    return {};
+  }
+};
+
 }  // namespace
 
 const Module& overwriteModule() { return moduleInstance<OverwriteModule>(); }
@@ -174,6 +216,8 @@ const Module& autoMountModule() { return moduleInstance<AutoMountModule>(); }
 
 const Module& writeMountModule() { return moduleInstance<WriteMountModule>(); }
 
+const Module& nativeTextModule() { return moduleInstance<NativeTextModule>(); }
+
 std::span<const ModuleRef> rootModules() {
   static constexpr ModuleRef kModules[] = {
       helpModule,
@@ -187,6 +231,7 @@ std::span<const ModuleRef> rootModules() {
       mountModule,
       autoMountModule,
       writeMountModule,
+      nativeTextModule,
       resourceListingModule,
   };
   return kModules;

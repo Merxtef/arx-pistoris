@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/base/string_view.h"
 #include "arx_pistoris/paths.h"
 #include "arx_pistoris/paths.hpp"
 
@@ -14,6 +15,12 @@
 using namespace pistoris::c_paths;
 
 // NOLINTBEGIN(readability-identifier-naming)
+
+ArxReturnCode arx_pistoris_path_cinematic_illustration_directory(ArxStringView* out_directory) noexcept {
+  if (!out_directory) return ARX_INVALID_DATA_POINTER;
+  *out_directory = pistoris::c_api::view(pistoris::paths::cinematicIllustrationDirectory());
+  return ARX_OK;
+}
 
 ArxReturnCode arx_pistoris_path_cinematic_cin(ArxCinematicPathView cinematic, char* out, size_t capacity,
                                               size_t* out_size) noexcept {

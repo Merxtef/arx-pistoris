@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -53,13 +54,21 @@ ArxReturnCode exportGlbInternal(const Ambiance& ambiance, const AmbianceModules&
 
   std::vector<SoundFile> files;
   if (sound_files != nullptr) {
-    std::vector<std::uint8_t> used(modules.sounds.sounds.size(), 0);
-    for (const AmbianceTrack& track : modules.ambiance.tracks) used[track.sound] = 1;
-    files.reserve(modules.sounds.sounds.size());
-    for (std::size_t index = 0; index < modules.sounds.sounds.size(); ++index) {
-      const Sound& sound = modules.sounds.sounds[index];
-      if (used[index] != 0 && !sound.encoded_audio.empty())
-        files.push_back({static_cast<SoundIndex>(index), sound.path, sound.encoded_audio});
+    const std::size_t sound_count = sounds::count(modules.sounds, SoundKind::kEffect);
+    std::vector<std::uint8_t> used(sound_count, 0);
+    for (const AmbianceTrack& track : modules.ambiance.tracks) {
+      SoundIndex sound = kNoSound;
+      if (!sounds::effectIndex(track.sound, sound) || sound >= used.size()) return ARX_AMBIANCE_BAD_TRACK_SOUND;
+      used[sound] = 1;
+    }
+    files.reserve(sound_count);
+    for (std::size_t index = 0; index < sound_count; ++index) {
+      const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(index));
+      const std::span<const std::uint8_t> encoded_audio = sounds::encodedAudio(modules.sounds, handle);
+      if (used[index] != 0 && !encoded_audio.empty())
+        files.push_back({static_cast<SoundIndex>(index),
+                         std::string(sounds::path(modules.sounds, handle)),
+                         {encoded_audio.begin(), encoded_audio.end()}});
     }
   }
 

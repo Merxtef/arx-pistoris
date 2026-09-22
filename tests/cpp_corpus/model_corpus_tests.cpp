@@ -98,7 +98,7 @@ TEST_SUITE("model_corpus") {
 
       pistoris::NativeModelBundle baked;
       if (!test_support::checkCorpusStatus(
-              path, "bake Model to native bundle", model.bakeNativeBundle({.include_files = true}, baked)))
+              path, "bake Model to native bundle", model.bakeNativeBundle({.include_texture_files = true}, baked)))
         continue;
       if (!test_support::validateTextureFiles(model, std::span<const pistoris::NativeTextureFile>(baked.texture_files)))
         continue;
@@ -261,7 +261,7 @@ TEST_SUITE("model_corpus") {
         REQUIRE(found != animations.end());
 
         pistoris::NativeAnimationBundle baked;
-        REQUIRE((*found)->bakeNativeBundle({.include_files = true}, baked) == ARX_OK);
+        REQUIRE((*found)->bakeNativeBundle({.include_sound_files = true}, baked) == ARX_OK);
         if (!test_support::validateSoundFiles(**found, std::span<const pistoris::SoundFile>(baked.sound_files)))
           continue;
 

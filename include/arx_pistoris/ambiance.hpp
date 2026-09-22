@@ -6,6 +6,7 @@
 #include "arx_pistoris/ambiance/types.h"
 #include "arx_pistoris/base/audio.h"
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/text.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -25,7 +26,7 @@ struct Data;
 class Model;
 struct AmbianceGlbBundle;
 struct NativeAmbianceBundle;
-struct NativeSoundBakeOptions;
+struct NativeAmbianceBakeOptions;
 struct SoundSourceReference;
 
 // Collection indices are current zero-based positions, not persistent identities
@@ -59,13 +60,14 @@ class Ambiance {
   // --- Conversion ---
 
   [[nodiscard]] static ArxReturnCode importNative(Ambiance& out, const amb::Data& native,
-                                                  std::vector<SoundSourceReference>* sound_sources = nullptr) noexcept;
+                                                  std::vector<SoundSourceReference>* sound_sources = nullptr,
+                                                  NativeTextMode text_mode = NativeTextMode::kAuto) noexcept;
   [[nodiscard]] static ArxReturnCode importGlb(Ambiance& out, std::span<const std::uint8_t> data) noexcept;
   [[nodiscard]] static ArxReturnCode importGlb(Ambiance& out, std::span<const std::uint8_t> data,
                                                const GlbImportOptions& options,
                                                std::vector<SoundSourceReference>* sound_sources = nullptr) noexcept;
   [[nodiscard]] ArxReturnCode bakeNative(amb::Data& out) const noexcept;
-  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeSoundBakeOptions& options,
+  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeAmbianceBakeOptions& options,
                                                NativeAmbianceBundle& out) const noexcept;
   [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out) const noexcept;
   [[nodiscard]] ArxReturnCode exportGlb(std::vector<std::uint8_t>& out, const GlbExportOptions& options) const noexcept;

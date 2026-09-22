@@ -11,6 +11,7 @@
 #include "arx_pistoris/level.hpp"
 #include "arx_pistoris/level/bake.hpp"
 #include "arx_pistoris/level/types.h"
+#include "arx_pistoris/native/text.h"
 #include "arx_pistoris/texture.h"
 
 #include "image_helpers.h"
@@ -20,12 +21,14 @@
 #include "modules/navigation.h"
 #include "modules/rooms.h"
 #include "modules/scene.h"
+#include "native/fixed_string.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -38,6 +41,11 @@ static_assert(kLevelFaceBitsAll == ARX_LEVEL_FACE_BITS_ALL);
 static_assert((kLevelFaceBitsAll & kFaceBitQuad) == 0);
 
 namespace {
+
+template <std::size_t N>
+void setNativeText(char (&out)[N], std::string_view value) {
+  REQUIRE(pistoris::copyFixedString(value, out));
+}
 
 constexpr bool cOptionDefaultsMatchCpp() {
   constexpr ArxLevelVertexWeldOptions kCWeld = ARX_LEVEL_VERTEX_WELD_OPTIONS_INIT;
@@ -157,8 +165,9 @@ constexpr bool cOptionDefaultsMatchCpp() {
   constexpr Level::NativeBakeOptions kCppNative{};
   if (kCNative.level_name.data != nullptr || kCNative.level_name.size != kCppNative.level_name.size() ||
       kCNative.reconstruct_quads != kCppNative.reconstruct_quads ||
-      kCNative.textures.include_files != kCppNative.textures.include_files || kCNative.dlf_scene_path.data != nullptr ||
-      kCNative.dlf_scene_path.size != kCppNative.dlf_scene_path.size())
+      kCNative.include_texture_files != kCppNative.include_texture_files || kCNative.dlf_scene_path.data != nullptr ||
+      kCNative.dlf_scene_path.size != kCppNative.dlf_scene_path.size() ||
+      kCNative.text_mode != static_cast<ArxNativeTextMode>(kCppNative.text_mode))
     return false;
 
   constexpr ArxLevelDlfBakeOptions kCDlf = ARX_LEVEL_DLF_BAKE_OPTIONS_INIT;
@@ -167,7 +176,8 @@ constexpr bool cOptionDefaultsMatchCpp() {
          kCDlf.target_fts_offset.x == kCppDlf.target_fts_offset.x &&
          kCDlf.target_fts_offset.y == kCppDlf.target_fts_offset.y &&
          kCDlf.target_fts_offset.z == kCppDlf.target_fts_offset.z && kCDlf.dlf_scene_path.data == nullptr &&
-         kCDlf.dlf_scene_path.size == kCppDlf.dlf_scene_path.size();
+         kCDlf.dlf_scene_path.size == kCppDlf.dlf_scene_path.size() &&
+         kCDlf.text_mode == static_cast<ArxNativeTextMode>(kCppDlf.text_mode);
 }
 
 static_assert(cOptionDefaultsMatchCpp());
@@ -347,15 +357,15 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Native bundle bake rejects an empty level name") {
     Level level = makeLevelWithRoomAndTriangle();
     NativeLevelBundle bundle;
-    bundle.dlf.scene_path = "unchanged";
+    setNativeText(bundle.dlf.scene_path, "unchanged");
 
     CHECK(level.bakeNativeBundle({.level_name = ""}, bundle) == ARX_DLF_BAD_SCENE_PATH);
-    CHECK(bundle.dlf.scene_path == "unchanged");
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
 
     dlf::Data dlf;
-    dlf.scene_path = "unchanged";
+    setNativeText(dlf.scene_path, "unchanged");
     CHECK(level.bakeDlf({.level_name = ""}, dlf) == ARX_DLF_BAD_SCENE_PATH);
-    CHECK(dlf.scene_path == "unchanged");
+    CHECK(pistoris::fixedStringView(dlf.scene_path).compare("unchanged") == 0);
   }
 
   TEST_CASE("Native DLF bake validates only scene data and preserves the target FTS offset") {
@@ -386,7 +396,7 @@ TEST_SUITE("Level edit API") {
     dlf::Data dlf;
     REQUIRE(level.bakeDlf({.level_name = "level7", .target_fts_offset = {10.0f, 20.0f, 30.0f}}, dlf) == ARX_OK);
 
-    CHECK(dlf.scene_path == "graph/levels/level7");
+    CHECK(pistoris::fixedStringView(dlf.scene_path).compare("graph/levels/level7") == 0);
     CHECK(dlf.player_spawn.position.x == doctest::Approx(1.0f));
     CHECK(dlf.player_spawn.position.y == doctest::Approx(2.0f));
     CHECK(dlf.player_spawn.position.z == doctest::Approx(3.0f));
@@ -414,7 +424,7 @@ TEST_SUITE("Level edit API") {
     Level::DlfBakeOptions explicit_scene_options;
     explicit_scene_options.dlf_scene_path = "graph/levels/custom";
     REQUIRE(level.bakeDlf(explicit_scene_options, dlf) == ARX_OK);
-    CHECK(dlf.scene_path == "graph/levels/custom");
+    CHECK(pistoris::fixedStringView(dlf.scene_path).compare("graph/levels/custom") == 0);
   }
 
   TEST_CASE("Copies independently and swaps complete Level state") {

@@ -106,6 +106,9 @@ TEST_SUITE("C path API") {
     REQUIRE(arx_pistoris_path_ambiance_sound_directory(&type) == ARX_OK);
     CHECK(view(type) == "sfx/ambiance");
     CHECK(arx_pistoris_path_ambiance_sound_directory(nullptr) == ARX_INVALID_DATA_POINTER);
+    REQUIRE(arx_pistoris_path_cinematic_illustration_directory(&type) == ARX_OK);
+    CHECK(view(type) == "graph/interface/illustrations");
+    CHECK(arx_pistoris_path_cinematic_illustration_directory(nullptr) == ARX_INVALID_DATA_POINTER);
     REQUIRE(arx_pistoris_path_model_selector_type(3, &type) == ARX_OK);
     CHECK(view(type) == "armor");
     REQUIRE(arx_pistoris_path_model_selector_type(11, &type) == ARX_OK);

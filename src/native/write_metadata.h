@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "arx_pistoris/base/status.h"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +20,6 @@ struct NativeWriteMetadata {
   std::string_view lastUser() const noexcept { return {last_user.data(), last_user_size}; }
 };
 
-NativeWriteMetadata nativeWriteMetadata(std::string_view signer) noexcept;
+[[nodiscard]] ArxReturnCode nativeWriteMetadata(std::string_view signer, NativeWriteMetadata& out) noexcept;
 
 }  // namespace pistoris

@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <format>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -61,7 +62,7 @@ void logFailure(std::size_t node_index, std::string_view name, std::format_strin
 }
 ParsedName parseName(std::string_view name, std::size_t node_index);
 std::string nodeName(const Zone& zone, std::size_t ordinal);
-ArxReturnCode parseSettings(std::string_view payload, Settings& out);
+ArxReturnCode parseSettings(std::span<const std::string_view> settings, Settings& out);
 std::string settingsHelperName(const Settings& settings, std::string_view label);
 
 ArxReturnCode readMesh(const glb::Asset& asset, const cgltf_node& node, const math::Mat4& world,

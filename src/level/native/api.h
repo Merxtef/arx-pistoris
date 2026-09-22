@@ -8,6 +8,7 @@
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/texture.hpp"
 
 #include <string>
@@ -30,7 +31,8 @@ struct NativeLevelSource {
 
 ArxReturnCode buildLevel(const NativeLevelSource& source, LevelModules& out,
                          LevelValidationState* out_validation = nullptr,
-                         std::vector<std::string>* texture_source_paths = nullptr);
+                         std::vector<std::string>* texture_source_paths = nullptr,
+                         NativeTextMode text_mode = NativeTextMode::kAuto);
 
 ArxReturnCode bakeNativeLevelBundle(const LevelModules& level, const Level::NativeBakeOptions& options,
                                     NativeLevelBundle& out);

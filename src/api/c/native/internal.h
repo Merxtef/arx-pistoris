@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/native.h"
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/cin.hpp"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/fts.hpp"
@@ -15,6 +16,10 @@
 
 struct arx_pistoris_amb {
   pistoris::amb::Data value;
+};
+
+struct arx_pistoris_cin {
+  pistoris::cin::Data value;
 };
 
 struct arx_pistoris_dlf {

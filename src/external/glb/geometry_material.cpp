@@ -58,15 +58,16 @@ GeometryMaterialError decodeGeometryMaterial(const cgltf_material* source, Geome
 
   if (source->has_pbr_metallic_roughness) {
     const cgltf_texture_view& view = source->pbr_metallic_roughness.base_color_texture;
-    if (view.has_transform) return GeometryMaterialError::kUnsupportedFeature;
-    if (view.texcoord < 0) return GeometryMaterialError::kBadMaterial;
-    out.uv_set = view.texcoord;
-    if (view.texture != nullptr && view.texture->image != nullptr) {
-      if (view.texture->extensions_count != 0 || view.texture->image->extensions_count != 0)
-        return GeometryMaterialError::kUnsupportedFeature;
+    TextureBinding binding;
+    const TextureBindingError binding_error = decodeTextureBinding(view, binding);
+    if (binding_error == TextureBindingError::kUnsupportedFeature) return GeometryMaterialError::kUnsupportedFeature;
+    if (binding_error != TextureBindingError::kNone) return GeometryMaterialError::kBadMaterial;
+    if (binding.transformed) return GeometryMaterialError::kUnsupportedFeature;
+    out.uv_set = binding.texcoord;
+    if (binding.image != nullptr) {
       info.no_tex_with_image = out.fallback_stem == kNoTexture;
-      out.texture = TextureImportRequest{view.texture->image,
-                                         info.no_tex_with_image ? std::string_view("texture") : out.fallback_stem};
+      out.texture =
+          TextureImportRequest{binding.image, info.no_tex_with_image ? std::string_view("texture") : out.fallback_stem};
     }
   }
   if (!out.texture.has_value() && out.fallback_stem != kNoTexture)

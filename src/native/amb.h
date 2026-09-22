@@ -12,7 +12,7 @@ namespace pistoris {
 
 ArxReturnCode loadAmb(amb::Data* data, ReadCursor& cursor);
 ArxReturnCode saveAmb(const amb::Data* data, WriteCursor& cursor);
+ArxReturnCode canonicalizeAmb(amb::Data* data);
 ArxReturnCode validateAmb(const amb::Data* data);
-void canonicalizeAmb(amb::Data& data) noexcept;
 
 }  // namespace pistoris

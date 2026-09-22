@@ -198,8 +198,9 @@ void addAnimationHelpers(const AnimationModules& animation, std::string_view exp
 
   std::map<std::string_view, std::vector<std::uint32_t>> sounds;
   for (const AnimationKeyframe& keyframe : animation.animation.keyframes) {
-    if (keyframe.sound == kNoSound) continue;
-    sounds[animation.sounds.sounds[keyframe.sound].path].push_back(keyframe.frame);
+    if (keyframe.sound == kNoSoundHandle) continue;
+    if (!sounds::validHandle(animation.sounds, keyframe.sound)) continue;
+    sounds[sounds::path(animation.sounds, keyframe.sound)].push_back(keyframe.frame);
   }
   for (const auto& [sound, frames] : sounds) {
     std::string name = "SOUND__FRAMES";
@@ -358,14 +359,21 @@ ArxReturnCode addAnimationsToGlb(const ModelModules& model, std::span<const Anim
           compatible[index]->animation.group_count,
           model.skeleton.bones.size(),
           compatible[index]->animation.group_count - group_count);
-    std::vector<std::uint8_t> used(compatible[index]->sounds.sounds.size(), 0);
-    for (const AnimationKeyframe& keyframe : compatible[index]->animation.keyframes)
-      if (keyframe.sound != kNoSound) used[keyframe.sound] = 1;
-    for (std::size_t sound_index = 0; sound_index < compatible[index]->sounds.sounds.size(); ++sound_index) {
+    const std::size_t sound_count = sounds::count(compatible[index]->sounds, SoundKind::kEffect);
+    std::vector<std::uint8_t> used(sound_count, 0);
+    for (const AnimationKeyframe& keyframe : compatible[index]->animation.keyframes) {
+      if (keyframe.sound == kNoSoundHandle) continue;
+      SoundIndex sound = kNoSound;
+      if (sounds::effectIndex(keyframe.sound, sound) && sound < used.size()) used[sound] = 1;
+    }
+    for (std::size_t sound_index = 0; sound_index < sound_count; ++sound_index) {
       if (used[sound_index] == 0) continue;
-      const Sound& sound = compatible[index]->sounds.sounds[sound_index];
-      if (sound_files && !sound.encoded_audio.empty()) {
-        SoundFile file{static_cast<SoundIndex>(sound_index), sound.path, sound.encoded_audio};
+      const SoundHandle handle = sounds::effectHandle(static_cast<SoundIndex>(sound_index));
+      const std::span<const std::uint8_t> encoded_audio = sounds::encodedAudio(compatible[index]->sounds, handle);
+      if (sound_files && !encoded_audio.empty()) {
+        SoundFile file{static_cast<SoundIndex>(sound_index),
+                       std::string(sounds::path(compatible[index]->sounds, handle)),
+                       {encoded_audio.begin(), encoded_audio.end()}};
         sound_files->push_back({source_indices[index], std::move(file)});
       }
     }

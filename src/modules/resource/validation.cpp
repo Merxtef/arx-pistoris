@@ -20,6 +20,8 @@ std::string_view extensionFor(ArxResourceKind kind) noexcept {
       return ".ftl";
     case ARX_RESOURCE_KIND_ANIMATION:
       return ".tea";
+    case ARX_RESOURCE_KIND_CINEMATIC:
+      return ".cin";
     case ARX_RESOURCE_KIND_AMBIANCE:
       return ".amb";
     default:

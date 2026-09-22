@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/ambiance.hpp"
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/sound.hpp"
 
 #include <variant>
@@ -20,6 +21,7 @@ struct NativeAmbiance {
   NativeAmbiance& operator=(NativeAmbiance&&) = delete;
 
   pistoris::Amb ambiance;
+  pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 
 struct IntermediateAmbiance {

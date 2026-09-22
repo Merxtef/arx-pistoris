@@ -8,6 +8,7 @@
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime.hpp"
 
 #include "console/diagnostics.h"
@@ -18,6 +19,7 @@
 #include "routes/level/native_carriers.h"
 #include "routes/level/options.h"
 #include "routes/level/state.h"
+#include "routes/native_text.h"
 #include "routes/types.h"
 
 #include <optional>
@@ -38,7 +40,8 @@ bool inputFailure(const char* what, ArxReturnCode rc) {
 }
 
 bool loadNativeExtras(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
-                      InputConverterDescriptor::DecodedDlfInput* decoded_dlf, NativeLevelFiles& out) {
+                      pistoris::NativeTextMode text_mode, InputConverterDescriptor::DecodedDlfInput* decoded_dlf,
+                      NativeLevelFiles& out) {
   if (invocation.llf != kNoClassifiedPath) {
     pistoris::Llf loaded;
     ArxReturnCode rc = decodeLlf(inputs[invocation.llf], loaded);
@@ -57,20 +60,22 @@ bool loadNativeExtras(const std::vector<ClassifiedPath>& inputs, const Invocatio
   pistoris::Dlf loaded;
   std::optional<pistoris::Llf> embedded_lighting;
   std::optional<pistoris::Llf>* embedded_output = out.llf ? nullptr : &embedded_lighting;
-  ArxReturnCode rc = decodeDlf(inputs[invocation.dlf], loaded, embedded_output);
+  ArxReturnCode rc = decodeDlf(inputs[invocation.dlf], text_mode, loaded, embedded_output);
   if (rc != ARX_OK) return inputFailure("DLF", rc);
   out.dlf = std::move(loaded);
   if (embedded_lighting) out.llf = std::move(*embedded_lighting);
   return true;
 }
 
-bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
-                InputConverterDescriptor::DecodedDlfInput* decoded_dlf, NativeLevelFiles& out) {
+bool loadNativeFiles(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+                     pistoris::NativeTextMode text_mode, InputConverterDescriptor::DecodedDlfInput* decoded_dlf,
+                     NativeLevelFiles& out) {
+  out.text_mode = text_mode;
   pistoris::Fts fts;
-  ArxReturnCode rc = decodeFts(inputs[invocation.input], fts);
+  ArxReturnCode rc = decodeFts(inputs[invocation.input], text_mode, fts);
   if (rc != ARX_OK) return inputFailure("FTS", rc);
   out.fts = std::move(fts);
-  if (!loadNativeExtras(inputs, invocation, decoded_dlf, out)) return false;
+  if (!loadNativeExtras(inputs, invocation, text_mode, decoded_dlf, out)) return false;
 
   const ClassifiedPath& primary = inputs[invocation.input];
   if (primary.facts.format == Format::kJson) {
@@ -86,11 +91,21 @@ bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& inv
   return true;
 }
 
+bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+                InputConverterDescriptor::DecodedDlfInput* decoded_dlf, NativeLevelFiles& out) {
+  const Format input = inputs[invocation.input].facts.format;
+  const pistoris::NativeTextMode text_mode =
+      directCarrierTextMode(input, invocation.output.format, invocation.native_text_mode);
+  return loadNativeFiles(inputs, invocation, text_mode, decoded_dlf, out);
+}
+
 bool loadNativeIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
                             const LevelOptions&, InputConverterDescriptor::DecodedDlfInput* decoded_dlf,
                             IntermediateLevel& out) {
   NativeLevelFiles native;
-  if (!loadNative(inputs, invocation, decoded_dlf, native)) return false;
+  const Format input = inputs[invocation.input].facts.format;
+  const pistoris::NativeTextMode text_mode = carrierTextMode(input, invocation.native_text_mode);
+  if (!loadNativeFiles(inputs, invocation, text_mode, decoded_dlf, native)) return false;
   if (!native.fts) {
     diagnostic(DiagnosticCode::kLevelInputFailed, "Native Level input did not produce FTS data");
     return false;
@@ -99,8 +114,12 @@ bool loadNativeIntermediate(const std::vector<ClassifiedPath>& inputs, const Inv
 
   pistoris::Level level;
   std::vector<std::string> texture_source_paths;
-  ArxReturnCode rc = pistoris::Level::importNative(
-      level, fts, native.llf ? &*native.llf : nullptr, native.dlf ? &*native.dlf : nullptr, &texture_source_paths);
+  ArxReturnCode rc = pistoris::Level::importNative(level,
+                                                   fts,
+                                                   native.llf ? &*native.llf : nullptr,
+                                                   native.dlf ? &*native.dlf : nullptr,
+                                                   &texture_source_paths,
+                                                   native.text_mode);
   if (rc != ARX_OK) return inputFailure("Native", rc);
   out.source_fts_offset = fts.scene.Mscenepos;
   out.level.swap(level);

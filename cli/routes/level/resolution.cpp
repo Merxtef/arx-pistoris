@@ -17,6 +17,7 @@
 #include "conversion/options.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/native_text.h"
 #include "io/path_location.h"
 #include "io/service.h"
 #include "media/encoded.h"
@@ -42,6 +43,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <span>
@@ -157,7 +159,7 @@ bool discoverDlfCompanions(Invocation& invocation, std::vector<ClassifiedPath>& 
   InputConverterDescriptor::DecodedDlfInput prepared;
   std::optional<pistoris::Llf>* embedded_output =
       llf_result == ResourceReadResult::kSuccess ? nullptr : &prepared.embedded_lighting;
-  const ArxReturnCode rc = decodeDlf(dlf_input, prepared.dlf, embedded_output);
+  const ArxReturnCode rc = decodeDlf(dlf_input, invocation.native_text_mode, prepared.dlf, embedded_output);
   if (rc != ARX_OK) {
     diagnostic(DiagnosticCode::kLevelInputFailed,
                "DLF Level input failed: %s (code %d)",
@@ -166,10 +168,24 @@ bool discoverDlfCompanions(Invocation& invocation, std::vector<ClassifiedPath>& 
     return false;
   }
 
+  const void* scene_path_end = std::memchr(prepared.dlf.scene_path, '\0', sizeof(prepared.dlf.scene_path));
+  const std::string_view raw_scene_path(prepared.dlf.scene_path,
+                                        scene_path_end
+                                            ? static_cast<const char*>(scene_path_end) - prepared.dlf.scene_path
+                                            : sizeof(prepared.dlf.scene_path));
+  std::string scene_path;
+  const ArxReturnCode text_rc = io_detail::nativeTextToUtf8(raw_scene_path, invocation.native_text_mode, scene_path);
+  if (text_rc != ARX_OK) {
+    diagnostic(DiagnosticCode::kLevelInputFailed,
+               "DLF Level scene path cannot be decoded: %s (code %d)",
+               pistoris::errorString(text_rc),
+               static_cast<int>(text_rc));
+    return false;
+  }
+
   std::string fts_path;
-  if (!pistoris::paths::ftsFromDlfScene(prepared.dlf.scene_path, fts_path)) {
-    diagnostic(
-        DiagnosticCode::kLevelInputFailed, "DLF Level scene path is invalid: %s", prepared.dlf.scene_path.c_str());
+  if (!pistoris::paths::ftsFromDlfScene(scene_path, fts_path)) {
+    diagnostic(DiagnosticCode::kLevelInputFailed, "DLF Level scene path is invalid: %s", scene_path.c_str());
     return false;
   }
   std::vector<std::uint8_t> fts_buffer;
@@ -224,10 +240,7 @@ bool siblingTarget(IoService& io, const OutputTarget& primary, std::string_view 
 
 bool resolveScenePath(const LevelOptions& options, std::string_view level_name, IoService& io, std::string& out) {
   if (!options.fts_scene_directory_specified) {
-    if (pistoris::paths::dlfSceneFromLevelName(level_name, out)) {
-      out.push_back('/');
-      return true;
-    }
+    if (pistoris::paths::dlfSceneFromLevelName(level_name, out)) return true;
     diagnostic(DiagnosticCode::kResourcePathInvalid,
                "Cannot derive DLF scene directory from Level name '%.*s'",
                static_cast<int>(level_name.size()),
@@ -243,7 +256,6 @@ bool resolveScenePath(const LevelOptions& options, std::string_view level_name, 
                error.c_str());
     return false;
   }
-  out.push_back('/');
   return true;
 }
 
@@ -265,15 +277,14 @@ bool resolveInputTextures(Invocation& invocation, const std::vector<ClassifiedPa
 
 bool resolveTextureRebase(Invocation& invocation, const SharedConversionOptions& options,
                           SidecarRebaseDirection automatic, IoService& io) {
-  return resolveSidecarRebase({.explicit_requested = options.rebase_textures,
-                               .explicit_directory = options.texture_directory,
+  return resolveSidecarRebase({.explicit_requested = options.textures.requested,
+                               .explicit_directory = options.textures.directory,
                                .automatic = automatic,
                                .to_loose_directory = kLooseTextureDirectory,
                                .to_game_directory = pistoris::paths::textureDirectory()},
                               "texture",
                               io,
-                              invocation.rebase_textures,
-                              invocation.texture_rebase_directory);
+                              invocation.texture_rebase);
 }
 
 bool resolveTextureOutput(Invocation& invocation, IoService& io) {
@@ -418,7 +429,7 @@ bool loadModelPreviews(Invocation& invocation, IoService& io) {
       continue;
     }
     auto model = std::make_unique<pistoris::Model>();
-    rc = pistoris::Model::importNative(*model, native);
+    rc = pistoris::Model::importNative(*model, native, nullptr, invocation.native_text_mode);
     if (rc == ARX_OK) rc = model->setResourcePath(ftl_path);
     if (rc == ARX_OK) rc = model->compactTextures();
     if (rc != ARX_OK) {

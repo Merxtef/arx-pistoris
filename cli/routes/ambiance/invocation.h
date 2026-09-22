@@ -9,6 +9,7 @@
 #include "pipeline/execution_context.h"
 #include "pipeline/options.h"
 #include "resources/selector.h"
+#include "resources/sidecar_io.h"
 #include "resources/sound_io.h"
 #include "routes/ambiance/options.h"
 #include "routes/ambiance/state.h"
@@ -33,8 +34,7 @@ struct Invocation final : RouteInvocation {
   SoundIoOptions sound_options;
   SoundInput sounds;
   SoundOutput sound_output;
-  bool rebase_sounds = false;
-  std::string sound_rebase_directory;
+  ResolvedSidecarRebase sound_rebase;
 };
 
 struct ResolvedAmbianceInvocation {

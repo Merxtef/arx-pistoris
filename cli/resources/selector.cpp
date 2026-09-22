@@ -88,6 +88,7 @@ Format selectorFormat(ArxResourceKind kind) {
   if (kind == ARX_RESOURCE_KIND_MODEL) return Format::kFtl;
   if (kind == ARX_RESOURCE_KIND_ANIMATION) return Format::kTea;
   if (kind == ARX_RESOURCE_KIND_AMBIANCE) return Format::kAmb;
+  if (kind == ARX_RESOURCE_KIND_CINEMATIC) return Format::kCin;
   return Format::kUnknown;
 }
 

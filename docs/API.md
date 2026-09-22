@@ -31,6 +31,10 @@ arx_pistoris/ambiance/bake.hpp
 arx_pistoris/animation.hpp
 arx_pistoris/animation/bake.hpp
 arx_pistoris/binary.hpp
+arx_pistoris/cinematic.hpp
+arx_pistoris/cinematic/bake.hpp
+arx_pistoris/cinematic/glb.hpp
+arx_pistoris/cinematic/sound.hpp
 arx_pistoris/glb.hpp
 arx_pistoris/level.hpp
 arx_pistoris/level/bake.hpp
@@ -41,6 +45,7 @@ arx_pistoris/model/glb.hpp
 arx_pistoris/model/obj.hpp
 arx_pistoris/native.hpp
 arx_pistoris/native/amb.hpp
+arx_pistoris/native/cin.hpp
 arx_pistoris/native/dlf.hpp
 arx_pistoris/native/ftl.hpp
 arx_pistoris/native/fts.hpp
@@ -84,22 +89,50 @@ counterparts. Use that macro instead of zero-initializing the option record.
 Other C input records are fully specified values unless their declaration
 states otherwise. Zero initialization is not a semantic initializer. Set
 sentinel fields explicitly with `ARX_INVALID_INDEX`, `ARX_NO_TEXTURE`, or
-`ARX_NO_SOUND`, and use `ARX_QUAT_IDENTITY_INIT` for identity quaternions.
+`ARX_NO_SOUND`, use `ARX_NO_SOUND_HANDLE` for an absent Cinematic sound, and
+use `ARX_QUAT_IDENTITY_INIT` for identity quaternions. Cinematic illustration
+and language sentinels are `ARX_INVALID_CINEMATIC_ILLUSTRATION` and
+`ARX_INVALID_LANGUAGE_ID`.
 
-Each editing-class conversion operation has one C entry point. Optional
-provenance, related-asset, report, and sidecar output pointers control whether
-those results are produced; pass `NULL` to omit them. The primary converted
-asset output remains required.
+Each editing-class conversion operation has one C entry point. Optional source
+path, related-asset, report, and sidecar output pointers control whether those
+results are produced; pass `NULL` to omit them. The primary converted asset
+output remains required.
 
-Null GLB, OBJ export, Level welding, Level generation, native Sound bake, DLF
-write, and LLF write option pointers select defaults. Other option pointers
-are required unless documented otherwise.
+Null GLB, OBJ export, Level welding, Level generation, native Sound bake,
+Cinematic native bake, DLF write, and LLF write option pointers select
+defaults. Other option pointers are required unless documented otherwise.
 
-Model GLB import produces its animation report and sound-source provenance
+Model GLB import produces its animation report and sound-source lookup paths
 only while importing Animations. Requesting either output requires non-null
 `out_animations`.
 
-## Binary Validation
+## Binary Utilities
+
+### Text Encoding
+
+`pistoris::binary::classifyTextEncoding` classifies counted bytes as ASCII,
+UTF-8, or ISO-8859-1 (Latin-1). Empty input and input containing only bytes in
+`0x00-0x7f` are ASCII. Other strictly valid UTF-8 is UTF-8; every remaining
+byte sequence is Latin-1. A Latin-1 sequence can also be valid UTF-8, so UTF-8
+wins that ambiguous case. Use an explicit native text mode when the source
+encoding is known.
+
+`latin1ToUtf8` accepts every byte sequence. `utf8ToLatin1` returns
+`ARX_TEXT_INVALID_UTF8` for malformed UTF-8 and `ARX_TEXT_NOT_LATIN1` when a
+valid code point is above `U+00FF`. Both preserve embedded NUL bytes and change
+the output string only on success. They perform no path normalization, case
+conversion, Unicode normalization, or byte-order-mark removal.
+
+The C API exposes the same operations through
+`arx_pistoris_binary_classify_text_encoding`,
+`arx_pistoris_binary_latin1_to_utf8`, and
+`arx_pistoris_binary_utf8_to_latin1`. Conversion output is caller-owned,
+NUL-terminated, accompanied by its byte length excluding that terminator, and
+freed with `arx_pistoris_free_string`. The length remains authoritative when
+the result contains embedded NUL bytes.
+
+### Encoded Media
 
 `pistoris::binary::validateEncodedAudio` and
 `arx_pistoris_binary_validate_encoded_audio` validate complete encoded WAV,
@@ -148,13 +181,13 @@ Public code ranges are grouped by concern:
 | ---: | --- |
 | `1-99` | common preconditions |
 | `100-899` | runtime, storage, compression, and internal failures |
-| `900-999` | binary data validation |
+| `900-999` | binary data validation and text conversion |
 | `1000-1999` | native formats |
 | `2000-2999` | Level |
 | `3000-3999` | Model |
 | `4000-4999` | Animation |
 | `5000-5999` | Ambiance |
-| `6000-6999` | reserved Cinematic |
+| `6000-6999` | Cinematic |
 | `7000-9999` | reserved intermediate formats |
 | `10000+` | external formats |
 
@@ -185,16 +218,40 @@ rc = pistoris::writeFts(fts, encoded, false);   // raw
 ```
 
 `readFtl`, `readFts`, `readDlf`, and `readLlf` accept raw and supported PKWARE
-DCL-compressed data. Their writers compress by default. TEA and AMB are always
-raw. `readAmb` accepts exact AMB versions 1.000 through 1.003 and maps them to
-one carrier representation; unused track names, padding, and flag bits are
+DCL-compressed data. Their writers compress by default. TEA, AMB, and CIN are
+always raw. `readCin` accepts versions 1.75 and 1.76; `writeCin` emits canonical
+1.76 data. `readAmb` accepts exact AMB versions 1.000 through 1.003 and maps
+them to one carrier representation; unused track names, padding, and flag bits are
 discarded. Inactive pan or position settings and interval or flags unused by
 constant settings are stored as zero. AMB validation requires this form.
 `writeAmb` emits version 1.001 with only game-observable flag bits.
 `readDlf` can return embedded lighting separately.
 
-The C ABI exposes opaque `ArxAmb`, `ArxFtl`, `ArxTea`, `ArxFts`, `ArxDlf`, and
-`ArxLlf` types through pointers:
+Native carrier resource references use the spelling the game uses for lookup,
+not the exact serialized spelling. Readers lowercase ASCII, use `/` separators,
+resolve `.` and `..`, and remove a lookup suffix where the engine does. Writers
+require this canonical carrier form and reconstruct wire-only spelling such as
+protective trailing dots.
+
+`Level`, `Model`, `Animation`, `Ambiance`, and `Cinematic` store semantic text
+as UTF-8. Native import uses the binary text classification above: ASCII and
+UTF-8 are copied, while other bytes decode as ISO-8859-1 (Latin-1). Pass
+`NativeTextMode::kUtf8` or `kLatin1` to resolve ambiguous input explicitly;
+forced UTF-8 rejects invalid sequences. Source paths returned by import are
+canonical UTF-8 lookup paths. Native baking uses UTF-8 for `kAuto` and `kUtf8`;
+`kLatin1` rejects characters it cannot encode. The selected mode controls the
+native carrier regardless of whether sidecars are requested; sidecar paths
+remain UTF-8. Latin-1 is a legacy compatibility mode: ASCII references are
+portable, but resolution of non-ASCII references depends on the target
+runtime, resource provider, and filesystem normalization. Pistoris guarantees
+the encoding, not that lookup environment. Native conversion preserves
+semantic content, not arbitrary serialized bytes.
+
+The C API exposes the same policy through `ArxNativeTextMode` import arguments
+and native bake options.
+
+The C ABI exposes opaque `ArxAmb`, `ArxCin`, `ArxFtl`, `ArxTea`, `ArxFts`,
+`ArxDlf`, and `ArxLlf` types through pointers:
 
 ```c
 #include "arx_pistoris/native.h"
@@ -217,31 +274,35 @@ arx_pistoris_fts_destroy(fts);
 
 For DLF, `arx_pistoris_dlf_read` returns embedded LLF through a separate
 output handle; that handle is `NULL` when no valid embedded lighting exists.
-DLF and LLF write options accept optional signer text. Native writers truncate
-the resulting metadata to the native field capacity.
+DLF and LLF write options accept optional printable-ASCII signer text. Native
+writers truncate the resulting metadata to the native field capacity.
 
-Native carriers expose binary and JSON I/O plus validation through
-`native.hpp` and `native.h`. The umbrella headers re-export those declarations.
-OBJ and GLB conversion use the coherent Model surface; GLB accepts and returns
-Animation sidecars.
+Native carriers expose binary I/O and validation through `native.hpp` and
+`native.h`. FTL, TEA, FTS, DLF, LLF, and AMB also expose compatible JSON I/O;
+CIN does not. The umbrella headers re-export those declarations. OBJ and GLB
+conversion use the coherent Model surface; GLB accepts and returns Animation
+sidecars.
 
-Native writers preserve serialized resource paths. Writing succeeds with a
-warning when a reference resolves outside Libertatis' default loose resource
-roots (`editor`, `game`, `graph`, `localisation`, `misc`, `sfx`, and `speech`),
-because a loose installation may not discover it. Archive-backed resources may
-still make the reference available.
+Native writers serialize canonical carrier resource paths. Writing succeeds
+with a warning when a reference resolves outside Libertatis' default loose
+resource roots (`editor`, `game`, `graph`, `localisation`, `misc`, `sfx`, and
+`speech`), because a loose installation may not discover it. Archive-backed
+resources may still make the reference available.
 
 JSON is an arx-convert compatibility serialization of native carriers. It is
 not a separate Pistoris intermediate and is not promised to preserve data that
 the compatibility schema cannot represent. This includes AMB JSON through the
 same native carrier API used by FTL, TEA, FTS, DLF, and LLF.
+JSON text is always UTF-8. A JSON conversion's `NativeTextMode` controls only
+decoding text from the source carrier or encoding text into the destination
+carrier.
 
 ## Textures and Native Sidecars
 
-Level and Model use the shared `ArxTextureView` value. Its path, optional
-encoded image, and optional external-image extension are copied by editing
-calls. Views returned by copy operations borrow all three fields from the
-owning object.
+Level, Model, and Cinematic use the shared `ArxTextureView` value. Its path,
+optional encoded image, and optional external-image extension are copied by
+editing calls. Views returned by copy operations borrow all three fields from
+the owning object.
 
 `pistoris::paths::textureDirectory()` and
 `arx_pistoris_path_texture_directory` expose the canonical game texture
@@ -265,42 +326,66 @@ texture and includes its leading dot, such as `.jpg`. It must be empty when
 encoded image bytes are present. Attaching bytes clears the hint; clearing
 bytes retains the detected image format as the hint.
 
-Native import supplies identity and suffix metadata, but no image bytes. The
-library does not search for or read referenced image files. A caller can
-attach encoded image data with `setTextureImage` before baking.
+Native import supplies the canonical lookup identity, but no physical suffix
+hint or image bytes. The native format does not preserve which file extension
+won the engine's lookup. The library does not search for or read referenced
+image files. A caller can attach encoded image data with `setTextureImage`
+before baking.
 
 Model and Level import overloads can also return texture source paths. The
-returned vector has one entry per texture in `TextureIndex` order. External
-images retain their original format path; embedded GLB images and
-material-name fallbacks use an empty entry. When several format paths resolve
-to one texture, the first path is retained. These paths are import provenance
-for caller-owned file resolution and are not retained by Model or Level.
+returned vector has one entry per texture in `TextureIndex` order. Native
+entries are canonical engine lookup paths. External image references retain
+their authored format path; embedded GLB images and material-name fallbacks use
+an empty entry. When several format paths resolve to one texture, the first path
+is retained. These paths are caller-owned file-resolution inputs and are not
+retained by Model or Level.
 
-The Level and Model `rebaseTexturePaths` methods move every identity under one
-logical resource directory, keep only each basename, normalize it as a game
-texture path, and resolve collisions by appending `_N` after the full identity.
-An empty directory keeps only basenames; a trailing separator is accepted.
-Invalid relative path structure rejects the atomic operation.
+The Level, Model, and Cinematic `rebaseTexturePaths` methods move every identity
+under one logical resource directory, keep only each basename, normalize it as
+a game texture path, and resolve collisions by appending `_N` after the full
+identity. An empty directory keeps only basenames; a trailing separator is
+accepted. Invalid relative path structure rejects the atomic operation.
 
-`NativeTextureBakeOptions::include_files=false` retains native references but
-omits encoded image sidecars.
+`NativeModelBakeOptions::include_texture_files=false` and
+`Level::NativeBakeOptions::include_texture_files=false` retain native references
+but omit encoded image sidecars. Cinematic controls the same behavior through
+`NativeCinematicBakeOptions::include_illustration_files`.
 
-`NativeTextureFile` reports the source texture index, logical resource path,
-and encoded bytes. Level and Model bundles own these values. The C ABI exposes
-the same collection through `ArxNativeTextureFiles`; returned file views remain
-valid until that handle is destroyed. Import provenance is exposed through the
-owned `ArxTextureSourcePaths` handle. Its position is the texture index, and
-returned string views remain valid until that handle is destroyed.
+`NativeTextureFile` reports the source texture index, relative sidecar path,
+and encoded bytes. Level, Model, and Cinematic bundles own these values. The C
+ABI exposes the same collection through `ArxNativeTextureFiles`; returned file
+views remain valid until that handle is destroyed. Import lookup paths are
+exposed through the owned `ArxTextureSourcePaths` handle. Its position is the
+texture index, and returned string views remain valid until that handle is
+destroyed.
 
-Native FTS and FTL baking ends identities with `.` so the engine does not
-interpret a meaningful inner dot as an image suffix. FTS baking may shard one
-Level texture across several native aliases when room rendering limits require
-it.
+Native FTS, FTL, and CIN writers use a protective trailing `.` when serializing
+dotted identities so the engine does not interpret a meaningful inner dot as
+an image suffix. FTS baking may shard one Level texture across several native
+aliases when room rendering limits require it.
 
 GLB external image URIs append the preserved extension to the full logical
 identity. When neither bytes nor an extension hint are available, GLB export
 assumes `.png` and warns. Embedded GLB images always use the format detected
 from their bytes.
+
+## Sound Identities
+
+Animation and Ambiance expose zero-based `SoundIndex` values from their effect
+sound collection. Cinematic supports separate effect and speech collections,
+so it uses `SoundHandle` as the public reference carried by keyframes. A handle
+combines `SoundKind` with a per-kind `SoundIndex`; use `soundHandle`,
+`soundHandleKind`, and `soundHandleIndex` rather than inspecting its bits.
+`SoundHandle` invalidates together with `SoundIndex` when a sound collection is
+edited.
+
+`LanguageId` identifies a registered speech language. Value `kSoundEffects`
+(`ARX_SOUND_EFFECTS_LANGUAGE_ID`) is reserved for effect encodings. Effect
+sounds can have one encoding under that value; speech sounds can have one
+encoding per registered nonzero language. Logical sound identities do not
+require encoded audio, and speech paths can exist before any language is
+registered. Language names are portable identifiers and must be unique by
+case-insensitive path identity.
 
 ## Level
 
@@ -491,7 +576,8 @@ copying, editing, generation, and native baking functions.
 ```c
 ArxLevel* level = NULL;
 ArxReturnCode rc =
-    arx_pistoris_level_import_native(fts, llf, dlf, &level, NULL);
+    arx_pistoris_level_import_native(
+        fts, llf, dlf, &level, NULL, ARX_NATIVE_TEXT_AUTO);
 if (rc != ARX_OK) {
   return rc;
 }
@@ -834,9 +920,10 @@ count and writes the guard again.
 
 Native sample names enter Animation as
 lowercase logical `sfx/*.wav` paths. An optional `SoundSourceReference` vector
-retains each distinct exact native sample spelling for caller-owned file
-discovery; case and separator aliases may map to one Sound. The library does
-not search the filesystem.
+reports each distinct decoded, canonical native lookup path for caller-owned
+file discovery; case and separator aliases may map to one Sound. GLB import
+instead reports the authored format path. The library does not search the
+filesystem.
 
 Animation resource identity is optional. `setResourcePath` accepts an Animation
 selector or any portable logical `.tea` path. Selectors expand to registered
@@ -871,7 +958,7 @@ tolerance. Invalid Animations are skipped with warnings;
 `ArxAnimationConversionReport` reports converted and skipped counts.
 `exportGlbBundle` emits audio as external files with paths relative to the GLB.
 Different Animations can request the same sidecar path; the caller decides
-which payload to write. `importGlb` can return format-path provenance for caller
+which payload to write. `importGlb` can return authored format paths for caller
 lookup. Case and separator aliases may map to one Sound while distinct source
 spellings remain available for lookup. Unrepairable sound paths skip only the
 affected Animation. GLB import returns owning `std::unique_ptr<Animation>`
@@ -884,6 +971,104 @@ The C ABI mirrors this through opaque `ArxAnimation` handles and
 native and Model GLB sidecars. Model GLB import publishes an owning
 `ArxAnimationList`. Animations returned by its indexed getter are borrowed and
 remain valid until the list is destroyed.
+
+## Cinematic
+
+`pistoris::Cinematic` is the coherent editing surface for one cinematic. It
+owns an optional CIN resource identity, an illustration timeline, shared
+textures, effect and speech paths, registered languages, and optional encoded
+audio per sound and language.
+
+An illustration references one texture and a positive subdivision scale.
+Keyframes are ordered by distinct frame numbers, begin at frame zero, and
+reference an illustration plus an optional `SoundHandle`. A valid Cinematic
+has at least one illustration, at least two keyframes, a positive end frame and
+frame rate, and no keyframe beyond the end frame. The final keyframe may precede
+the declared end frame. Outgoing speed must be positive except on the final
+keyframe.
+
+`importNative` converts CIN bitmap entries into illustrations and merges shared
+texture identities. It keeps only sounds referenced by effective keyframes.
+Effect and speech paths use independent namespaces; both are stored as
+lowercase portable paths without native prefixes or a physical extension.
+Optional illustration source paths provide caller lookup inputs. Native
+sound source references report each imported handle and normalized logical
+path; GLB references preserve each distinct authored spelling. The handle
+identifies whether lookup belongs below `sfx/` or a localized `speech/`
+directory. Neither result is retained by Cinematic, and the library does not
+search for sidecar files.
+
+Native CIN does not preserve a speech language. Imported speech paths therefore
+remain valid logical references without registered languages or audio.
+Register a language and attach an encoding when a localized sidecar should be
+emitted. Keyframes continue to reference one speech handle independently of
+the available language encodings.
+
+`bakeNative` emits only canonical CIN carrier data. Illustration and sound paths
+exclude wire-only prefixes and protective suffixes; `cin::Sound::speech`
+distinguishes speech from effects. `writeCin` reconstructs CIN lookup spelling,
+including illustration and speech markers and protective trailing dots.
+`bakeNativeBundle` can additionally emit attached illustration and audio
+sidecars. Compatible BMP and TGA illustration bytes are retained by default,
+except grayscale-alpha TGA is rewritten as RGBA TGA
+to preserve transparency in the game. Other supported images are converted to TGA.
+`illustration_format` can instead request BMP or TGA for every emitted
+illustration, including images already encoded in another format. Attached
+audio is converted to PCM16 WAV. Effect files are placed below `sfx/`; speech
+files are placed below `speech/<language>/`. Path-only resources remain native
+references without emitted files. Only sounds referenced by keyframes enter
+the native sound table, which is limited to 256 entries. Native baking checks
+renderer grid capacity against attached image dimensions, including the next
+illustration in a Dream crossfade; path-only
+illustrations can be checked only against the minimum possible grid. The
+declared FPS and every nonterminal key's outgoing speed must also produce a
+finite timeline duration. CIN stores the multiplier on each key. Arx
+Libertatis uses the following frame span and multiplier to calculate one total
+duration, then advances uniformly across the complete declared frame range;
+different outgoing speeds do not create different local playback rates. The
+terminal key's value is retained but does not contribute to the duration.
+
+`importGlb` reads one semantic Cinematic hierarchy. Illustration images must be
+embedded; key positions map through each illustration's UV chart, while light
+positions map through the key camera's screen. Positive illustration scale
+applies to the mesh and its keys; positive key scale affects child lights but
+not the camera itself. Off-axis keys are leveled with a warning; child lights
+follow the effective rotation. It can return effect or speech source references.
+Legacy CIN illustration grid transforms are discarded on import and zeroed on native
+baking. Canonical GLB export uses 100 image pixels per GLB unit and has no scale
+option; import derives camera depth from the scaled illustration geometry, UV
+chart, and vertical field of view. Camera aspect is not stored in Cinematic;
+horizontal framing depends on the playback viewport and letterbox mode. GLB
+export requires valid encoded image bytes on every referenced illustration
+texture because images are embedded in the GLB.
+`exportGlb` emits only GLB bytes. `exportGlbBundle` additionally returns
+referenced attached audio in its existing WAV, MP3, or Ogg Vorbis encoding.
+Effect paths use `<path>.<extension>`; speech paths use
+`<path>[<registered-language-name>].<extension>`. Illustration images are
+embedded as PNG or JPEG, with other supported formats converted to PNG. Bundle
+export rejects effect and localized speech encodings that map to the same
+generated relative sidecar path.
+
+Collection access uses count-and-copy operations. Returned texture, sound,
+language, and encoding views borrow storage from Cinematic. Non-const calls
+invalidate collection indices, `SoundHandle` values, and borrowed views.
+Removing a referenced illustration or sound fails; explicit compaction removes
+unused textures or sounds and remaps retained references.
+
+### C ABI
+
+The C ABI mirrors the editing and native conversion surface through opaque
+`ArxCinematic` and `ArxCin` handles. `ArxCinematicSoundFiles` owns audio
+sidecars returned by native baking or GLB export, while
+`ArxCinematicSoundSourceReferences` owns import lookup
+references. The common `ArxNativeTextureFiles` and `ArxTextureSourcePaths`
+handles carry illustration sidecars and source paths. Borrowed views remain
+valid until their owning handle is destroyed.
+
+Cinematic has no OBJ authoring projection or compatible JSON representation.
+The exact GLB hierarchy is documented in the
+[Cinematic Authoring Reference](authoring/CINEMATIC_REFERENCE.md); filesystem
+conversion is documented in the [CLI Guide](CLI.md#cinematic-workflows).
 
 ## Ambiance
 
@@ -931,9 +1116,10 @@ empty directory keeps only basenames; a trailing separator is accepted.
 Invalid relative path structure rejects the atomic operation.
 
 Native and GLB imports can return `SoundSourceReference` values that map each
-normalized Sound index to its exact original format path. The mapping is import
-provenance for caller-owned file resolution and is not retained by Ambiance.
-The library never searches for sound files.
+normalized Sound index to a caller lookup path. GLB returns the authored path;
+native input returns the canonical path used by the engine, which may omit a
+lookup suffix. The mapping is not retained by Ambiance. The library never
+searches for sound files.
 
 `bakeNativeBundle` emits AMB plus optional sound files. Encoded audio is
 decoded and written as PCM16 WAV. Positioned tracks, nonzero panning, and
@@ -980,7 +1166,7 @@ referenced.
 The C ABI exposes the equivalent operations through opaque `ArxAmbiance` and
 `ArxModel` handles and `arx_pistoris_ambiance_*` functions. Owned
 `ArxSoundFiles` and `ArxSoundSourceReferences` handles expose bundle output and
-import provenance. The nullable reference Model follows the GLB export
+import lookup paths. The nullable reference Model follows the GLB export
 options. C entry points catch C++ exceptions and report failures as
 `ArxReturnCode`.
 
@@ -1016,10 +1202,12 @@ Animation search locations depend on a registered selector type; their helpers
 return `false` for an unsupported type. Level, Cinematic, and Ambiance have
 fixed search locations.
 
-`textureDirectory`, `soundDirectory`, and `ambianceSoundDirectory` return the
-canonical `graph/obj3d/textures`, `sfx`, and `sfx/ambiance` resource
-directories. `normalizeZoneAmbiance` normalizes the extensionless relative
-Ambiance name stored by a Level zone and accepts one final `.amb` suffix.
+`textureDirectory`, `soundDirectory`, `ambianceSoundDirectory`, and
+`cinematicIllustrationDirectory` return the canonical
+`graph/obj3d/textures`, `sfx`, `sfx/ambiance`, and
+`graph/interface/illustrations` resource directories. `normalizeZoneAmbiance`
+normalizes the extensionless relative Ambiance name stored by a Level zone and
+accepts one final `.amb` suffix.
 `ambFromZoneAmbiance` maps that stored name to its canonical AMB path and
 rejects the reserved `none` value. The C API exposes equivalent helpers.
 

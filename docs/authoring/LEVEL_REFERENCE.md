@@ -40,9 +40,9 @@ level_space                                      export-only scene root
 |   `-- arx_fog__<fog-name>
 |       +-- SETTINGS__<fog-setting>...__<label>
 |       `-- DIRECTION__<label>
-+-- arx_minimap[__<label>]                     optional mesh root
-+-- arx_nav_surface[__<label>]                  optional mesh root
-`-- arx_player_spawn[__<label>]                 optional empty root
++-- arx_minimap__<label>                        optional mesh root
++-- arx_nav_surface__<label>                    optional mesh root
+`-- arx_player_spawn__<label>                   optional empty root
 ```
 
 Reachable ordinary GLB point lights also import as Level lights. A room may
@@ -53,6 +53,14 @@ them is ignored. Unrecognized reachable `arx_*` roots warn.
 Player-spawn, anchor, light, entity, and fog roots must keep identity local
 scale. Import discards nonidentity local scale with a warning; named size
 fields remain authoritative.
+
+Canonical labels are mandatory where shown. Import can recover missing labels
+from the three singleton roots, light helpers, zone settings, path nodes, and
+fog helpers because those grammars are self-delimiting; each recovery warns.
+Entity `CLASS` and zone `AMBIANCE` labels remain mandatory because their payloads
+may contain `__`. Semantic options take precedence over label recovery, and
+labels that resemble convention tokens follow the shared informational-notice
+rule.
 
 ## Level Space
 
@@ -194,7 +202,7 @@ visualization.
 ## Player Spawn
 
 ```text
-required root when authored: arx_player_spawn[__<label>]
+required root when authored: arx_player_spawn__<label>
 canonical export:            arx_player_spawn__spawn
 ```
 
@@ -208,7 +216,7 @@ duplicate wins is unspecified. Export emits at most one.
 ## Navigation Surface
 
 ```text
-required mesh root when present: arx_nav_surface[__<label>]
+required mesh root when present: arx_nav_surface__<label>
 canonical export:                arx_nav_surface__surface
 export-only material:            arx_nav_surface
 ```
@@ -539,7 +547,7 @@ sets the curve duration. Author `BEZIER` only when two following points exist.
 ## Minimap
 
 ```text
-required mesh root when present: arx_minimap[__<label>]
+required mesh root when present: arx_minimap__<label>
 canonical export:                arx_minimap__map
 ```
 

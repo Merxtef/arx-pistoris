@@ -34,6 +34,11 @@ Error pathFromSelector(ArxResourceKind kind, std::string_view input, std::string
       if (!paths::animationFromSelector(input, animation)) return Error::kBadPath;
       return paths::animationTea(animation, out) ? Error::kNone : Error::kBadPath;
     }
+    case ARX_RESOURCE_KIND_CINEMATIC: {
+      paths::CinematicPathView cinematic;
+      if (!paths::cinematicFromSelector(input, cinematic)) return Error::kBadPath;
+      return paths::cinematicCin(cinematic, out) ? Error::kNone : Error::kBadPath;
+    }
     case ARX_RESOURCE_KIND_AMBIANCE: {
       paths::AmbiancePathView ambiance;
       if (!paths::ambianceFromSelector(input, ambiance)) return Error::kBadPath;

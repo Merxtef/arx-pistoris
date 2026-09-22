@@ -11,6 +11,7 @@ add_library(arx_pistoris_cli_support STATIC
   io/files.cpp
   io/mounts.cpp
   io/native_path.cpp
+  io/native_text.cpp
   io/paths.cpp
   io/service.cpp
   media/encoded.cpp
@@ -18,6 +19,7 @@ add_library(arx_pistoris_cli_support STATIC
   modules/module.cpp
   pipeline/options.cpp
   resources/animation_output.cpp
+  resources/cinematic_sound_io.cpp
   resources/inventory_icon_io.cpp
   resources/input.cpp
   resources/level_image_io.cpp
@@ -82,6 +84,12 @@ add_executable(arx_pistoris_cli
   routes/animation/resolution.cpp
   routes/animation/route.cpp
   routes/animation/save.cpp
+  routes/cinematic/load.cpp
+  routes/cinematic/options/rebase.cpp
+  routes/cinematic/options/root.cpp
+  routes/cinematic/resolution.cpp
+  routes/cinematic/route.cpp
+  routes/cinematic/save.cpp
   routes/level/load.cpp
   routes/level/native_carriers.cpp
   routes/level/operations.cpp

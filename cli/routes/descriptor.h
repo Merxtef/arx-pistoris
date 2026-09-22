@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "arx_pistoris/native/text.hpp"
+
 #include "formats/classification.h"
 #include "modules/module.h"
 #include "resources/selector.h"
@@ -26,6 +28,7 @@ struct TextureIoOptions;
 
 struct RouteInvocation {
   virtual ~RouteInvocation() = default;
+  pistoris::NativeTextMode native_text_mode = pistoris::NativeTextMode::kAuto;
 };
 
 struct RouteProbeContext {

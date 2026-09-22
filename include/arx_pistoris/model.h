@@ -9,6 +9,7 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
 #include "arx_pistoris/model/types.h"
+#include "arx_pistoris/native/text.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -27,7 +28,13 @@ typedef struct arx_pistoris_obj_material_library_paths ArxObjMaterialLibraryPath
 typedef struct arx_pistoris_obj_texture_files ArxObjTextureFiles;
 typedef struct arx_pistoris_texture_source_paths ArxTextureSourcePaths;
 typedef struct ArxAnimationConversionReport ArxAnimationConversionReport;
-typedef struct ArxNativeTextureBakeOptions ArxNativeTextureBakeOptions;
+
+typedef struct ArxNativeModelBakeOptions {
+  uint8_t include_texture_files;
+  ArxNativeTextMode text_mode;
+} ArxNativeModelBakeOptions;
+
+#define ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT {1U, ARX_NATIVE_TEXT_AUTO}
 
 typedef struct ArxObjMaterialLibraryView {
   ArxStringView path;
@@ -132,7 +139,8 @@ ARX_API ArxReturnCode arx_pistoris_model_reset(ArxModel* model) ARX_NOEXCEPT;
 // --- Conversion ---
 
 ARX_API ArxReturnCode arx_pistoris_model_import_native(const ArxFtl* native, ArxModel** out_model,
-                                                       ArxTextureSourcePaths** out_texture_source_paths) ARX_NOEXCEPT;
+                                                       ArxTextureSourcePaths** out_texture_source_paths,
+                                                       ArxNativeTextMode text_mode) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_obj_material_library_paths(const uint8_t* obj_data, size_t obj_size,
                                                               ArxObjMaterialLibraryPaths** out_paths) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_obj_material_library_paths_count(const ArxObjMaterialLibraryPaths* paths,
@@ -166,7 +174,7 @@ ARX_API ArxReturnCode arx_pistoris_model_export_glb(const ArxModel* model, const
 ARX_API ArxReturnCode arx_pistoris_model_export_level_preview_glb(const ArxModel* model,
                                                                   const ArxModelLevelPreviewGlbOptions* options,
                                                                   uint8_t** out_data, size_t* out_size) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_bake_native(const ArxModel* model, const ArxNativeTextureBakeOptions* options,
+ARX_API ArxReturnCode arx_pistoris_model_bake_native(const ArxModel* model, const ArxNativeModelBakeOptions* options,
                                                      ArxFtl** out_native,
                                                      ArxNativeTextureFiles** out_textures) ARX_NOEXCEPT;
 

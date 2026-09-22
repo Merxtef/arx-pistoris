@@ -23,6 +23,7 @@
 #include "external/glb/node_graph.h"
 #include "external/glb/object_coordinates.h"
 #include "external/glb/utils/names.h"
+#include "external/glb/utils/sound.h"
 #include "model/data.h"
 #include "modules/animation.h"
 #include "modules/resource.h"
@@ -33,7 +34,6 @@
 #include "utils/math/mat4.h"
 #include "utils/math/quat.h"
 #include "utils/name_tokens.h"
-#include "utils/resource_path.h"
 
 #include <algorithm>
 #include <array>
@@ -62,7 +62,6 @@ namespace {
 
 constexpr std::string_view kPathPrefix = "PATH_";
 constexpr std::string_view kSound = "SOUND";
-constexpr std::string_view kSoundPrefix = "SOUND__";
 constexpr std::string_view kFramesPrefix = "FRAMES_";
 constexpr std::string_view kSettings = "SETTINGS";
 constexpr std::string_view kExtraFrame = "EXTRA_FRAME";
@@ -71,6 +70,20 @@ constexpr std::string_view kStepsPrefix = "STEPS_";
 constexpr std::string_view kGroups = "GROUPS";
 constexpr std::string_view kVoidPrefix = "VOID_";
 constexpr std::string_view kClaimPrefix = "CLAIM_";
+
+ArxReturnCode soundPathImportError(glb::SoundPathImportError error) noexcept {
+  switch (error) {
+    case glb::SoundPathImportError::kNone:
+      return ARX_OK;
+    case glb::SoundPathImportError::kBadPath:
+      return ARX_ANIMATION_BAD_SOUND_PATH;
+    case glb::SoundPathImportError::kTooManySounds:
+      return ARX_ANIMATION_TOO_MANY_SOUNDS;
+    case glb::SoundPathImportError::kBadKind:
+      return ARX_INTERNAL_ERROR;
+  }
+  return ARX_INTERNAL_ERROR;
+}
 
 struct Trs {
   ArxVector3 translation{};
@@ -96,14 +109,28 @@ enum class TimingKind : std::uint8_t {
   kExact,
 };
 
+struct TimingData {
+  TimingKind kind = TimingKind::kNone;
+  std::uint32_t frame_length = 0;
+};
+
 struct HelperData {
   std::string path;
-  TimingKind timing = TimingKind::kNone;
-  std::uint32_t frame_length = 0;
+  TimingData timing;
   std::unordered_set<std::uint32_t> footsteps;
   std::map<std::uint32_t, std::string> sounds;
   std::bitset<animation::kMaxGroups> void_groups;
   std::bitset<animation::kMaxGroups> claimed_groups;
+};
+
+struct GroupPatch {
+  std::bitset<animation::kMaxGroups> void_groups;
+  std::bitset<animation::kMaxGroups> claimed_groups;
+};
+
+struct SettingsPatch {
+  TimingData timing;
+  std::vector<std::uint32_t> footsteps;
 };
 
 struct HelperEntry {
@@ -203,64 +230,101 @@ bool parseGroupList(std::string_view text, std::bitset<animation::kMaxGroups>& g
 }
 
 bool parseGroups(std::string_view name, HelperData& out) {
-  std::vector<std::string_view> tokens;
-  splitDoubleUnderscore(name, tokens);
-  if (tokens.size() < 3U || tokens.front() != kGroups || tokens.back().empty()) return false;
-  for (std::size_t index = 1; index + 1U < tokens.size(); ++index) {
-    const std::string_view token = tokens[index];
-    if (token.starts_with(kVoidPrefix)) {
-      if (!parseGroupList(token.substr(kVoidPrefix.size()), out.void_groups, out.claimed_groups)) return false;
-    } else if (token.starts_with(kClaimPrefix)) {
-      if (!parseGroupList(token.substr(kClaimPrefix.size()), out.claimed_groups, out.void_groups)) return false;
-    } else {
-      return false;
-    }
-  }
-  return out.void_groups.any() || out.claimed_groups.any();
+  GroupPatch patch;
+  glb::ParsedLabel label;
+  const bool valid = glb::parseRecoverableLabel(
+      name,
+      patch,
+      &label,
+      {{}, {kVoidPrefix, kClaimPrefix}},
+      [](std::span<const std::string_view> tokens, GroupPatch& parsed) {
+        if (tokens.size() < 2U || tokens.front() != kGroups) return false;
+        for (std::string_view token : tokens.subspan(1)) {
+          if (token.starts_with(kVoidPrefix)) {
+            if (!parseGroupList(token.substr(kVoidPrefix.size()), parsed.void_groups, parsed.claimed_groups))
+              return false;
+          } else if (token.starts_with(kClaimPrefix)) {
+            if (!parseGroupList(token.substr(kClaimPrefix.size()), parsed.claimed_groups, parsed.void_groups))
+              return false;
+          } else {
+            return false;
+          }
+        }
+        return parsed.void_groups.any() || parsed.claimed_groups.any();
+      });
+  if (!valid || (patch.void_groups & out.claimed_groups).any() || (patch.claimed_groups & out.void_groups).any())
+    return false;
+  out.void_groups |= patch.void_groups;
+  out.claimed_groups |= patch.claimed_groups;
+  glb::reportConventionLabel("GLB -> Model", name, label);
+  return true;
 }
 
-bool setTiming(HelperData& out, TimingKind kind, std::uint32_t length = 0) {
-  if (out.timing == TimingKind::kNone) {
-    out.timing = kind;
+bool setTiming(TimingData& out, TimingKind kind, std::uint32_t length = 0) {
+  if (out.kind == TimingKind::kNone) {
+    out.kind = kind;
     out.frame_length = length;
     return true;
   }
-  return out.timing == kind && (kind != TimingKind::kExact || out.frame_length == length);
+  return out.kind == kind && (kind != TimingKind::kExact || out.frame_length == length);
 }
 
 bool parseSettings(std::string_view name, HelperData& out) {
-  std::vector<std::string_view> tokens;
-  splitDoubleUnderscore(name, tokens);
-  if (tokens.size() < 3U || tokens.front() != kSettings || tokens.back().empty()) return false;
-  for (std::size_t index = 1; index + 1U < tokens.size(); ++index) {
-    const std::string_view token = tokens[index];
-    if (token == kExtraFrame) {
-      if (!setTiming(out, TimingKind::kExtra)) return false;
-      continue;
-    }
-    if (token.starts_with(kFrameLengthPrefix)) {
-      std::uint32_t length = 0;
-      if (!parseUnsigned(token.substr(kFrameLengthPrefix.size()), length) ||
-          length > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
-          !setTiming(out, TimingKind::kExact, length))
-        return false;
-      continue;
-    }
-    if (token.starts_with(kStepsPrefix)) {
-      std::vector<std::uint32_t> frames;
-      if (!parseFrameList(token.substr(kStepsPrefix.size()), frames)) return false;
-      out.footsteps.insert(frames.begin(), frames.end());
-      continue;
-    }
+  SettingsPatch patch;
+  glb::ParsedLabel label;
+  const bool valid = glb::parseRecoverableLabel(
+      name,
+      patch,
+      &label,
+      {{kExtraFrame}, {kFrameLengthPrefix, kStepsPrefix}},
+      [](std::span<const std::string_view> tokens, SettingsPatch& parsed) {
+        if (tokens.empty() || tokens.front() != kSettings) return false;
+        for (std::string_view token : tokens.subspan(1)) {
+          if (token == kExtraFrame) {
+            if (!setTiming(parsed.timing, TimingKind::kExtra)) return false;
+            continue;
+          }
+          if (token.starts_with(kFrameLengthPrefix)) {
+            std::uint32_t length = 0;
+            if (!parseUnsigned(token.substr(kFrameLengthPrefix.size()), length) ||
+                length > static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) ||
+                !setTiming(parsed.timing, TimingKind::kExact, length))
+              return false;
+            continue;
+          }
+          if (token.starts_with(kStepsPrefix)) {
+            std::vector<std::uint32_t> frames;
+            if (!parseFrameList(token.substr(kStepsPrefix.size()), frames)) return false;
+            parsed.footsteps.insert(parsed.footsteps.end(), frames.begin(), frames.end());
+            continue;
+          }
+          return false;
+        }
+        return true;
+      });
+  if (!valid ||
+      (patch.timing.kind != TimingKind::kNone && !setTiming(out.timing, patch.timing.kind, patch.timing.frame_length)))
     return false;
-  }
+  out.footsteps.insert(patch.footsteps.begin(), patch.footsteps.end());
+  glb::reportConventionLabel("GLB -> Model", name, label);
   return true;
 }
 
 bool parseSound(const cgltf_node& node, HelperData& out) {
-  std::vector<std::string_view> tokens;
-  splitDoubleUnderscore(node.name, tokens);
-  if (tokens.size() != 3U || tokens[0] != kSound || !tokens[1].starts_with(kFramesPrefix) || tokens[2].empty())
+  struct SoundName {
+    std::vector<std::uint32_t> frames;
+  };
+  SoundName parsed_name;
+  glb::ParsedLabel label;
+  if (!glb::parseRecoverableLabel(node.name,
+                                  parsed_name,
+                                  &label,
+                                  {{}, {kFramesPrefix}},
+                                  [](std::span<const std::string_view> tokens, SoundName& parsed) {
+                                    return tokens.size() == 2U && tokens[0] == kSound &&
+                                           tokens[1].starts_with(kFramesPrefix) &&
+                                           parseFrameList(tokens[1].substr(kFramesPrefix.size()), parsed.frames);
+                                  }))
     return false;
   std::string_view sample;
   for (std::size_t index = 0; index < node.children_count; ++index) {
@@ -276,12 +340,11 @@ bool parseSound(const cgltf_node& node, HelperData& out) {
     }
   }
   if (sample.empty()) return false;
-  std::vector<std::uint32_t> frames;
-  if (!parseFrameList(tokens[1].substr(kFramesPrefix.size()), frames)) return false;
-  for (std::uint32_t frame : frames) {
+  for (std::uint32_t frame : parsed_name.frames) {
     const auto [found, inserted] = out.sounds.emplace(frame, sample);
     if (!inserted && found->second != sample) return false;
   }
+  glb::reportConventionLabel("GLB -> Model", node.name, label);
   return true;
 }
 
@@ -291,16 +354,19 @@ bool parseHelper(const cgltf_node& node, HelperData& out) {
     const cgltf_node* child = node.children[index];
     if (child == nullptr || child->name == nullptr) continue;
     const std::string_view name(child->name);
-    if (name.starts_with(kPathPrefix)) {
+    std::vector<std::string_view> tokens;
+    splitDoubleUnderscore(name, tokens);
+    const std::string_view first = tokens.empty() ? std::string_view{} : tokens.front();
+    if (first.starts_with(kPathPrefix)) {
       const auto parsed = glb::splitRequiredLabel(name.substr(kPathPrefix.size()));
       if (path_set || !parsed) return false;
       out.path = parsed->value;
       path_set = true;
-    } else if (name.starts_with(kSettings)) {
+    } else if (first == kSettings) {
       if (!parseSettings(name, out)) return false;
-    } else if (name.starts_with(kSoundPrefix)) {
+    } else if (first == kSound) {
       if (!parseSound(*child, out)) return false;
-    } else if (name == kGroups || name.starts_with("GROUPS__")) {
+    } else if (first == kGroups) {
       if (!parseGroups(name, out)) return false;
     } else {
       log(ARX_LOG_WARN,
@@ -797,16 +863,17 @@ ArxReturnCode importOne(const cgltf_data& data, glb::AccessorCache& accessors, c
 
   std::size_t discarded_frames = 0;
   std::size_t discarded_events = 0;
-  if (helper.timing == TimingKind::kExact) {
+  if (helper.timing.kind == TimingKind::kExact) {
     discarded_frames = static_cast<std::size_t>(
-        std::ranges::count_if(frames, [&](std::uint32_t frame) { return frame > helper.frame_length; }));
-    discarded_events = static_cast<std::size_t>(
-        std::ranges::count_if(helper.footsteps, [&](std::uint32_t frame) { return frame > helper.frame_length; }));
-    discarded_events += static_cast<std::size_t>(
-        std::ranges::count_if(helper.sounds, [&](const auto& value) { return value.first > helper.frame_length; }));
-    std::erase_if(frames, [&](std::uint32_t frame) { return frame > helper.frame_length; });
-    if (helper.frame_length < last_transform_frame && !std::ranges::binary_search(frames, helper.frame_length))
-      frames.push_back(helper.frame_length);
+        std::ranges::count_if(frames, [&](std::uint32_t frame) { return frame > helper.timing.frame_length; }));
+    discarded_events = static_cast<std::size_t>(std::ranges::count_if(
+        helper.footsteps, [&](std::uint32_t frame) { return frame > helper.timing.frame_length; }));
+    discarded_events += static_cast<std::size_t>(std::ranges::count_if(
+        helper.sounds, [&](const auto& value) { return value.first > helper.timing.frame_length; }));
+    std::erase_if(frames, [&](std::uint32_t frame) { return frame > helper.timing.frame_length; });
+    if (helper.timing.frame_length < last_transform_frame &&
+        !std::ranges::binary_search(frames, helper.timing.frame_length))
+      frames.push_back(helper.timing.frame_length);
     std::sort(frames.begin(), frames.end());
   }
 
@@ -826,42 +893,24 @@ ArxReturnCode importOne(const cgltf_data& data, glb::AccessorCache& accessors, c
     resource::setPath(result.resource, std::move(resource_path));
   }
   result.animation.group_count = group_count;
-  std::unordered_map<std::string, SoundIndex, ResourcePathIdentityHash, ResourcePathIdentityEqual> sound_indices;
-  sound_indices.reserve(helper.sounds.size());
+  std::vector<glb::ImportedSoundSource> imported_sources;
+  imported_sources.reserve(helper.sounds.size());
+  const std::string sound_log_prefix = std::format("GLB -> Model: animation '{}'", source.name);
+  glb::SoundPathImporter sound_importer(result.sounds, &imported_sources, sound_log_prefix);
+  std::map<std::uint32_t, SoundHandle> frame_sounds;
   sound_sources.reserve(helper.sounds.size());
-  std::unordered_set<std::string_view> source_spellings;
-  source_spellings.reserve(helper.sounds.size());
-  std::vector<const std::string*> original_sound_paths;
-  original_sound_paths.reserve(helper.sounds.size());
-  for (const auto& [unused_frame, source_path] : helper.sounds) {
-    std::string identity(source_path);
-    normalizeResourcePathIdentity(identity);
-    auto [entry, inserted] = sound_indices.try_emplace(identity, static_cast<SoundIndex>(result.sounds.sounds.size()));
-    if (inserted) {
-      if (result.sounds.sounds.size() >= static_cast<std::size_t>(kNoSound)) return ARX_ANIMATION_TOO_MANY_SOUNDS;
-      result.sounds.sounds.push_back({identity, {}});
-      original_sound_paths.push_back(&entry->first);
-    }
-    if (source_spellings.insert(source_path).second) sound_sources.push_back({entry->second, source_path});
+  for (const auto& [frame, source_path] : helper.sounds) {
+    SoundHandle sound = kNoSoundHandle;
+    rc = soundPathImportError(sound_importer.import(SoundKind::kEffect, source_path, sound));
+    if (rc != ARX_OK) return rc;
+    frame_sounds.emplace(frame, sound);
   }
-  ResourcePathUniquifier sound_paths;
-  sound_paths.reserve(result.sounds.sounds.size());
-  for (Sound& sound : result.sounds.sounds) sound_paths.add(sound.path);
-  std::vector<ResourcePathRepair> sound_repairs(result.sounds.sounds.size());
-  if (sound_paths.apply(nullptr, sound_repairs) != ResourcePathError::kNone) return ARX_ANIMATION_BAD_SOUND_PATH;
-  for (std::size_t index = 0; index < sound_repairs.size(); ++index) {
-    const ResourcePathRepair repair = sound_repairs[index];
-    if (!hasResourcePathRepair(repair, ResourcePathRepair::kCharacters) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kTrailing) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kReserved) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kLength) &&
-        !hasResourcePathRepair(repair, ResourcePathRepair::kDuplicate))
-      continue;
-    log(ARX_LOG_WARN,
-        "GLB -> Model: animation '{}' sound path '{}' normalized to '{}'",
-        source.name,
-        *original_sound_paths[index],
-        result.sounds.sounds[index].path);
+  rc = soundPathImportError(sound_importer.finish());
+  if (rc != ARX_OK) return rc;
+  for (glb::ImportedSoundSource& source_reference : imported_sources) {
+    SoundIndex sound = kNoSound;
+    if (!sounds::effectIndex(source_reference.sound, sound)) return ARX_INTERNAL_ERROR;
+    sound_sources.push_back({sound, std::move(source_reference.path)});
   }
   result.animation.keyframes.resize(frames.size());
   result.animation.group_transforms.resize(frames.size() * result.animation.group_count);
@@ -871,11 +920,7 @@ ArxReturnCode importOne(const cgltf_data& data, glb::AccessorCache& accessors, c
     AnimationKeyframe& keyframe = result.animation.keyframes[frame_index];
     keyframe.frame = frame;
     keyframe.footstep = helper.footsteps.contains(frame);
-    if (const auto sample_found = helper.sounds.find(frame); sample_found != helper.sounds.end()) {
-      const auto sound = sound_indices.find(std::string_view(sample_found->second));
-      if (sound == sound_indices.end()) return ARX_INTERNAL_ERROR;
-      keyframe.sound = sound->second;
-    }
+    if (const auto sound = frame_sounds.find(frame); sound != frame_sounds.end()) keyframe.sound = sound->second;
     for (std::size_t node : context.relevant_preorder) {
       const auto found = channels.find(node);
       sampleTrs(context.bind_local[node],
@@ -971,12 +1016,12 @@ ArxReturnCode importOne(const cgltf_data& data, glb::AccessorCache& accessors, c
     }
   }
   const std::uint32_t last = result.animation.keyframes.back().frame;
-  if (helper.timing == TimingKind::kExtra) {
+  if (helper.timing.kind == TimingKind::kExtra) {
     if (last == static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()))
       return ARX_GLB_BAD_ANIMATION_HELPER;
     result.animation.frame_length = last + 1U;
-  } else if (helper.timing == TimingKind::kExact) {
-    result.animation.frame_length = helper.frame_length;
+  } else if (helper.timing.kind == TimingKind::kExact) {
+    result.animation.frame_length = helper.timing.frame_length;
   } else {
     result.animation.frame_length = last;
   }
@@ -985,7 +1030,7 @@ ArxReturnCode importOne(const cgltf_data& data, glb::AccessorCache& accessors, c
     log(ARX_LOG_WARN,
         "GLB -> Model: animation '{}' FRAME_LENGTH_{} discarded {} later frame(s) and {} event(s)",
         source.name,
-        helper.frame_length,
+        helper.timing.frame_length,
         discarded_frames,
         discarded_events);
   const ArxReturnCode validation = animation_detail::validateStructure(result);

@@ -100,6 +100,7 @@ struct ResourceSearchLocation {
 
 // --- Cinematic ---
 
+[[nodiscard]] std::string_view cinematicIllustrationDirectory() noexcept;
 [[nodiscard]] bool cinematicCin(CinematicPathView cinematic, std::string& out);
 [[nodiscard]] bool cinematicFromCin(std::string_view path, CinematicPathView& out) noexcept;
 [[nodiscard]] bool cinematicSelector(CinematicPathView cinematic, std::string& out);

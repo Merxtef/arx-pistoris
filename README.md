@@ -1,24 +1,25 @@
 # arx-pistoris
 
 Pistoris is a C++20 library and command-line converter for Arx Fatalis 3D
-resources. It reads and writes the native FTL, TEA, FTS, DLF, LLF, and AMB
-formats. It exchanges editable data through OBJ, GLB, and
+resources. The library reads and writes the native FTL, TEA, FTS, DLF, LLF,
+AMB, and CIN formats. It exchanges editable data through OBJ, GLB, and
 arx-convert-compatible JSON.
 
-Level, Model, Animation, and Ambiance are the current coherent editing classes.
+Level, Model, Animation, Ambiance, and Cinematic are the current coherent editing classes.
 Level owns geometry, rooms, portals, navigation, lighting, and scene objects as
 one asset. Model owns FTL geometry, skeleton, action points, and generic named
 selections. Animation owns one TEA-compatible timeline and its dense per-bone
 transforms. Ambiance owns one logical AMB resource and its semantic audio
-tracks. Level, Model, and Ambiance GLB are from-scratch authoring surfaces for
-ordinary DCC tools; Model GLB can carry Animation sidecars.
+tracks. Cinematic owns one CIN-compatible illustration timeline with effect and
+localized speech references. Level, Model, Ambiance, and Cinematic GLB are
+from-scratch authoring surfaces for ordinary DCC tools; Model GLB can carry
+Animation sidecars.
 
-The library has a C++20 API and a C ABI for Level, Model, Animation, and Ambiance
-operations and supported native carriers. The CLI owns filesystem discovery,
-mounts, sidecars, overwrite policy, and game-resource placement. The library
-itself operates on memory buffers and logical resource paths. Third-party
-source dependencies are vendored, and produced binaries have no third-party
-runtime dependencies.
+The library has a C++20 API and a C ABI for all five editing classes and
+supported native carriers. The CLI owns filesystem discovery, mounts, sidecars,
+overwrite policy, and game-resource placement. The library itself operates on
+memory buffers and logical resource paths. Third-party source dependencies are
+vendored, and produced binaries have no third-party runtime dependencies.
 
 ## License
 
@@ -43,17 +44,19 @@ affiliated with or endorsed by Arkane Studios or ZeniMax Media Inc.
 | DLF scene objects | read/write | - | Level companion | bidirectional |
 | LLF lighting | read/write | - | Level companion | bidirectional |
 | AMB ambiance | read/write | - | bidirectional | bidirectional |
+| CIN cinematic | read/write | - | bidirectional through Cinematic | - |
 
 FTS, DLF, and LLF combine into one Level. FTS is mandatory; LLF and DLF are
 optional inputs when using the loose-file workflow. Game-layout DLF input
 discovers its mandatory FTS and optional LLF through mounted resources.
 FTL and GLB convert to and from the Model editing class. TEA converts to the
 Animation editing class, and Animation sidecars accompany Model GLB.
-AMB and GLB convert to and from the Ambiance editing class.
+AMB and GLB convert to and from the Ambiance editing class. CIN and GLB convert
+to and from the Cinematic editing class.
 
 FTL, FTS, DLF, and LLF readers accept raw and PKWARE DCL-compressed data.
 Their writers use game-compatible compression by default and can emit raw data
-when requested. TEA and AMB remain uncompressed.
+when requested. TEA, AMB, and CIN remain uncompressed.
 
 The public interfaces are still pre-1.0. Source and ABI compatibility are not
 promised between minor releases.
@@ -81,9 +84,10 @@ See `arx-pistor --help` for the installed option set and defaults.
 - **[CLI Guide](docs/CLI.md)** - conversion, mounts, selectors, and output
   layouts.
 - **[Authoring Guide](docs/AUTHORING_GUIDE.md)** - practical Level, Model,
-  Animation, and Ambiance authoring guides.
+  Animation, Ambiance, and Cinematic authoring guides.
 - **[Authoring Reference](docs/AUTHORING_REFERENCE.md)** - exact authoring
-  names, structures, flags, and defaults by resource type.
+  names, structures, flags, and defaults for Level, Model, Animation,
+  Ambiance, and Cinematic.
 - **[API Guide](docs/API.md)** - C++ and C integration.
 - **[Fidelity and Limitations](docs/LIMITATIONS.md)** - deliberate losses and
   format constraints.

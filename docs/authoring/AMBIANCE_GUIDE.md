@@ -19,6 +19,10 @@ ordinal 4 as the master. Add two direct track children:
 - `TRACK_004__sfx/wind__gust.wav__wind` for a panned wind track. The sample path
   contains `__`; its final `__wind` component remains the required label.
 
+Keep the final descriptive label on every semantic node. Import can recover it
+from the root, keys, and automation helpers when omitted, but warns; track
+labels cannot be recovered safely because sample paths may contain `__`.
+
 The Ambiance root defines its coordinate frame. Moving, rotating, or scaling
 the complete root does not change imported data. Transforms below the root
 affect their descendants normally.

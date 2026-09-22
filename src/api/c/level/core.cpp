@@ -9,13 +9,14 @@
 #include "arx_pistoris/level/types.h"
 #include "arx_pistoris/model.h"
 #include "arx_pistoris/native.h"
+#include "arx_pistoris/native/text.h"
 #include "arx_pistoris/texture.h"
-#include "arx_pistoris/texture.hpp"
 
 #include "api/c/internal.h"
 #include "api/c/level/internal.h"
 #include "api/c/model/internal.h"  // IWYU pragma: keep
 #include "api/c/native/internal.h"
+#include "api/c/native/text_internal.h"
 #include "api/c/texture/internal.h"
 
 #include <cstddef>
@@ -61,9 +62,10 @@ ArxReturnCode arx_pistoris_level_reset(ArxLevel* level) noexcept {
 }
 
 ArxReturnCode arx_pistoris_level_import_native(const ArxFts* fts, const ArxLlf* llf, const ArxDlf* dlf,
-                                               ArxLevel** out_level,
-                                               ArxTextureSourcePaths** out_texture_source_paths) noexcept {
+                                               ArxLevel** out_level, ArxTextureSourcePaths** out_texture_source_paths,
+                                               ArxNativeTextMode text_mode) noexcept {
   if (!fts) return ARX_INVALID_HANDLE;
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
   if (!out_level) return ARX_INVALID_DATA_POINTER;
   *out_level = nullptr;
   if (out_texture_source_paths) *out_texture_source_paths = nullptr;
@@ -74,8 +76,12 @@ ArxReturnCode arx_pistoris_level_import_native(const ArxFts* fts, const ArxLlf* 
     if (out_texture_source_paths) paths = std::make_unique<ArxTextureSourcePaths>();
     const auto* lptr = llf ? &llf->value : nullptr;
     const auto* dptr = dlf ? &dlf->value : nullptr;
-    const ArxReturnCode rc =
-        pistoris::Level::importNative(result->value, fts->value, lptr, dptr, paths ? &paths->value : nullptr);
+    const ArxReturnCode rc = pistoris::Level::importNative(result->value,
+                                                           fts->value,
+                                                           lptr,
+                                                           dptr,
+                                                           paths ? &paths->value : nullptr,
+                                                           pistoris::c_api::nativeTextMode(text_mode));
     if (rc != ARX_OK) return rc;
     *out_level = result.release();
     if (out_texture_source_paths) *out_texture_source_paths = paths.release();
@@ -151,6 +157,7 @@ ArxReturnCode arx_pistoris_level_bake_native(const ArxLevel* level, const ArxLev
   if (!out_fts || !out_llf || !out_dlf) return ARX_INVALID_DATA_POINTER;
   if (!pistoris::c_api::valid(options->level_name) || !pistoris::c_api::valid(options->dlf_scene_path))
     return ARX_INVALID_DATA_POINTER;
+  if (!pistoris::c_api::validNativeTextMode(options->text_mode)) return ARX_INVALID_OPTIONS;
   *out_fts = nullptr;
   *out_llf = nullptr;
   *out_dlf = nullptr;
@@ -159,7 +166,8 @@ ArxReturnCode arx_pistoris_level_bake_native(const ArxLevel* level, const ArxLev
   return pistoris::c_api::guard([&]() -> ArxReturnCode {
     pistoris::Level::NativeBakeOptions cpp_options;
     cpp_options.level_name = pistoris::c_api::stringView(options->level_name);
-    cpp_options.textures.include_files = out_textures && options->textures.include_files != 0;
+    cpp_options.include_texture_files = out_textures && options->include_texture_files != 0;
+    cpp_options.text_mode = pistoris::c_api::nativeTextMode(options->text_mode);
     cpp_options.reconstruct_quads = options->reconstruct_quads != 0;
     cpp_options.dlf_scene_path = pistoris::c_api::stringView(options->dlf_scene_path);
 
@@ -194,12 +202,14 @@ ArxReturnCode arx_pistoris_level_bake_dlf(const ArxLevel* level, const ArxLevelD
   if (!out_dlf) return ARX_INVALID_DATA_POINTER;
   if (!pistoris::c_api::valid(options->level_name) || !pistoris::c_api::valid(options->dlf_scene_path))
     return ARX_INVALID_DATA_POINTER;
+  if (!pistoris::c_api::validNativeTextMode(options->text_mode)) return ARX_INVALID_OPTIONS;
   *out_dlf = nullptr;
 
   return pistoris::c_api::guard([&]() -> ArxReturnCode {
     const pistoris::Level::DlfBakeOptions cpp_options{pistoris::c_api::stringView(options->level_name),
                                                       options->target_fts_offset,
-                                                      pistoris::c_api::stringView(options->dlf_scene_path)};
+                                                      pistoris::c_api::stringView(options->dlf_scene_path),
+                                                      pistoris::c_api::nativeTextMode(options->text_mode)};
     auto result = std::make_unique<ArxDlf>();
     ArxReturnCode rc = level->value.bakeDlf(cpp_options, result->value);
     if (rc != ARX_OK) return rc;

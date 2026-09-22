@@ -13,6 +13,7 @@
 #include <format>
 #include <limits>
 #include <span>
+#include <string_view>
 #include <utility>
 
 namespace pistoris::glb {
@@ -207,6 +208,22 @@ ArxReturnCode parse(std::span<const std::uint8_t> bytes, Asset& out) {
   }
 
   out = std::move(tmp);
+  return ARX_OK;
+}
+
+ArxReturnCode validateRequiredExtensions(const cgltf_data& data, std::span<const std::string_view> supported) noexcept {
+  for (cgltf_size index = 0; index < data.extensions_required_count; ++index) {
+    const char* required = data.extensions_required[index];
+    if (required == nullptr) return ARX_GLB_BAD_FORMAT;
+    bool found = false;
+    for (std::string_view candidate : supported) {
+      if (required == candidate) {
+        found = true;
+        break;
+      }
+    }
+    if (!found) return ARX_GLB_UNSUPPORTED_FEATURE;
+  }
   return ARX_OK;
 }
 

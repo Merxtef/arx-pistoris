@@ -28,6 +28,7 @@ ArxReturnCode prepareImage(std::vector<std::uint8_t> encoded, PreparedImage& out
 ArxReturnCode prepareAudio(std::vector<std::uint8_t> encoded, PreparedAudio& out) noexcept;
 
 std::span<const std::string_view> imageLookupExtensions() noexcept;
+std::span<const std::string_view> audioLookupExtensions() noexcept;
 std::string_view imageExtension(ArxImageFormat format) noexcept;
 std::string_view audioExtension(ArxAudioFormat format) noexcept;
 

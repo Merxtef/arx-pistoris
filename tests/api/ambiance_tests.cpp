@@ -7,6 +7,7 @@
 #include "arx_pistoris/arx_pistoris.h"
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/native/text.h"
 
 #include "amb_helpers.h"
 #include "audio_helpers.h"
@@ -34,7 +35,7 @@ TEST_SUITE("C Ambiance API") {
 
     ArxAmbiance* ambiance = nullptr;
     ArxSoundSourceReferences* sound_sources = nullptr;
-    REQUIRE(arx_pistoris_ambiance_import_native(native, &ambiance, &sound_sources) == ARX_OK);
+    REQUIRE(arx_pistoris_ambiance_import_native(native, &ambiance, &sound_sources, ARX_NATIVE_TEXT_AUTO) == ARX_OK);
     REQUIRE(ambiance != nullptr);
     REQUIRE(sound_sources != nullptr);
     CHECK(arx_pistoris_ambiance_validate(ambiance) == ARX_OK);
@@ -75,7 +76,7 @@ TEST_SUITE("C Ambiance API") {
     REQUIRE(arx_pistoris_ambiance_set_sound_data(ambiance, 0, {wav.data(), wav.size()}) == ARX_OK);
     ArxAmb* baked = nullptr;
     ArxSoundFiles* baked_sounds = nullptr;
-    ArxNativeSoundBakeOptions bake_options = ARX_NATIVE_SOUND_BAKE_OPTIONS_INIT;
+    ArxNativeAmbianceBakeOptions bake_options = ARX_NATIVE_AMBIANCE_BAKE_OPTIONS_INIT;
     REQUIRE(arx_pistoris_ambiance_bake_native(ambiance, &bake_options, &baked, &baked_sounds) == ARX_OK);
     CHECK(arx_pistoris_amb_validate(baked) == ARX_OK);
     size_t baked_sound_count = 0;
@@ -225,7 +226,7 @@ TEST_SUITE("C Ambiance API") {
     ArxAmb* native = nullptr;
     REQUIRE(arx_pistoris_amb_read(bytes.data(), bytes.size(), &native) == ARX_OK);
     ArxAmbiance* ambiance = nullptr;
-    REQUIRE(arx_pistoris_ambiance_import_native(native, &ambiance, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_ambiance_import_native(native, &ambiance, nullptr, ARX_NATIVE_TEXT_AUTO) == ARX_OK);
 
     ArxAmbianceGlbExportOptions export_options = ARX_AMBIANCE_GLB_EXPORT_OPTIONS_INIT;
     uint8_t* encoded = nullptr;

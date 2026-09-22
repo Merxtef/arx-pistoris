@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/sound.h"
 #include "arx_pistoris/sound.hpp"
@@ -11,6 +12,24 @@
 #include <cstddef>
 
 // NOLINTBEGIN(readability-identifier-naming)
+
+ArxReturnCode arx_pistoris_sound_handle(ArxSoundKind kind, ArxSoundIndex index, ArxSoundHandle* out_handle) noexcept {
+  if (!out_handle) return ARX_INVALID_DATA_POINTER;
+  return pistoris::soundHandle(static_cast<pistoris::SoundKind>(kind), index, *out_handle);
+}
+
+ArxReturnCode arx_pistoris_sound_handle_kind(ArxSoundHandle handle, ArxSoundKind* out_kind) noexcept {
+  if (!out_kind) return ARX_INVALID_DATA_POINTER;
+  pistoris::SoundKind kind = pistoris::SoundKind::kEffect;
+  const ArxReturnCode rc = pistoris::soundHandleKind(handle, kind);
+  if (rc == ARX_OK) *out_kind = static_cast<ArxSoundKind>(kind);
+  return rc;
+}
+
+ArxReturnCode arx_pistoris_sound_handle_index(ArxSoundHandle handle, ArxSoundIndex* out_index) noexcept {
+  if (!out_index) return ARX_INVALID_DATA_POINTER;
+  return pistoris::soundHandleIndex(handle, *out_index);
+}
 
 ArxReturnCode arx_pistoris_sound_files_count(const ArxSoundFiles* files, size_t* out_count) noexcept {
   if (!files) return ARX_INVALID_HANDLE;

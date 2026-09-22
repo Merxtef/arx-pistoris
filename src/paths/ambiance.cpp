@@ -138,31 +138,6 @@ bool formatZoneAmbianceReference(std::string_view ambiance, std::string& out) {
   return true;
 }
 
-bool decodeNativeZoneAmbiance(std::string_view stored, std::string& out) {
-  if (equalAsciiInsensitive(stored, "none")) {
-    out = "none";
-    return true;
-  }
-
-  const std::size_t separator = stored.find_last_of("/\\");
-  const std::size_t extension = stored.find_last_of('.');
-  if (extension != std::string_view::npos && (separator == std::string_view::npos || extension > separator))
-    stored = stored.substr(0, extension);
-
-  std::string normalized;
-  if (!normalizeZoneAmbiance(stored, normalized) || normalized == "none") return false;
-  out = std::move(normalized);
-  return true;
-}
-
-bool encodeNativeZoneAmbiance(std::string_view ambiance, std::string& out) {
-  std::string normalized;
-  if (!normalizeZoneAmbiance(ambiance, normalized) || normalized != ambiance) return false;
-  if (normalized != "none") normalized.push_back('.');
-  out = std::move(normalized);
-  return true;
-}
-
 ResourceSearchLocation ambianceSearchLocation() noexcept { return {"sfx/ambiance", 8}; }
 
 }  // namespace pistoris::paths

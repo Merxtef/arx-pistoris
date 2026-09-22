@@ -20,8 +20,9 @@ _Static_assert((ARX_MODEL_FACE_BITS_ALL & ARX_FACE_BIT_QUAD) == 0, "Model face m
   _Static_assert(sizeof((type[]){initializer}) == sizeof(type), #type " initializer mismatch")
 
 ARX_ASSERT_INITIALIZER(ArxQuat, ARX_QUAT_IDENTITY_INIT);
-ARX_ASSERT_INITIALIZER(ArxNativeTextureBakeOptions, ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT);
-ARX_ASSERT_INITIALIZER(ArxNativeSoundBakeOptions, ARX_NATIVE_SOUND_BAKE_OPTIONS_INIT);
+ARX_ASSERT_INITIALIZER(ArxNativeModelBakeOptions, ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT);
+ARX_ASSERT_INITIALIZER(ArxNativeAnimationBakeOptions, ARX_NATIVE_ANIMATION_BAKE_OPTIONS_INIT);
+ARX_ASSERT_INITIALIZER(ArxNativeAmbianceBakeOptions, ARX_NATIVE_AMBIANCE_BAKE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxDlfWriteOptions, ARX_DLF_WRITE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxLlfWriteOptions, ARX_LLF_WRITE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxAmbianceGlbImportOptions, ARX_AMBIANCE_GLB_IMPORT_OPTIONS_INIT);
@@ -49,6 +50,12 @@ ARX_ASSERT_INITIALIZER(ArxLevelDlfBakeOptions, ARX_LEVEL_DLF_BAKE_OPTIONS_INIT);
 int main(void) {
   const ArxQuat identity = ARX_QUAT_IDENTITY_INIT;
   if (identity.w != 1.0f || identity.x != 0.0f || identity.y != 0.0f || identity.z != 0.0f) return 100;
+
+  ArxTextEncoding text_encoding = ARX_TEXT_ENCODING_LATIN1;
+  const char ascii[] = "ASCII";
+  if (arx_pistoris_binary_classify_text_encoding((ArxStringView){ascii, sizeof(ascii) - 1}, &text_encoding) != ARX_OK ||
+      text_encoding != ARX_TEXT_ENCODING_ASCII)
+    return 101;
 
   ArxLevel* level = NULL;
   if (arx_pistoris_level_create(&level) != ARX_OK || level == NULL) return 1;

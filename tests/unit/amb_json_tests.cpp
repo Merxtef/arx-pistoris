@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/text.hpp"
 
 #include "amb_helpers.h"
 #include "external/json.h"
@@ -17,11 +18,11 @@
 TEST_SUITE("amb_json") {
   TEST_CASE("ExportsArxConvertShapeAndLogicalOrder") {
     pistoris::amb::Data data = makeAmbData();
-    data.tracks.front().sample_path = "SFX\\AMBIANCE\\TEST.WAV";
+    data.tracks.front().sample_path = "sfx/ambiance/test.wav";
     data.tracks.front().keys.front().loop_minus_one = UINT32_MAX;
 
     std::string text;
-    REQUIRE(pistoris::exportAmbToJson(data, false, text) == ARX_OK);
+    REQUIRE(pistoris::exportAmbToJson(data, false, pistoris::NativeTextMode::kUtf8, text) == ARX_OK);
     const nlohmann::json json = nlohmann::json::parse(text);
     CHECK(json["$schema"] == "https://arx-tools.github.io/schemas/amb.schema.json");
     CHECK(json["tracks"][0]["filename"] == "sfx/ambiance/test.wav");
@@ -35,9 +36,9 @@ TEST_SUITE("amb_json") {
     source.tracks.front().keys.front().loop_minus_one = UINT32_MAX;
 
     std::string text;
-    REQUIRE(pistoris::exportAmbToJson(source, true, text) == ARX_OK);
+    REQUIRE(pistoris::exportAmbToJson(source, true, pistoris::NativeTextMode::kUtf8, text) == ARX_OK);
     pistoris::amb::Data result;
-    REQUIRE(pistoris::importJsonToAmb(text, &result) == ARX_OK);
+    REQUIRE(pistoris::importJsonToAmb(text, pistoris::NativeTextMode::kUtf8, &result) == ARX_OK);
     test_support::checkEquivalent(source, result);
   }
 
@@ -64,7 +65,7 @@ TEST_SUITE("amb_json") {
     };
 
     pistoris::amb::Data result;
-    REQUIRE(pistoris::importJsonToAmb(json.dump(), &result) == ARX_OK);
+    REQUIRE(pistoris::importJsonToAmb(json.dump(), pistoris::NativeTextMode::kUtf8, &result) == ARX_OK);
     const pistoris::amb::Key& imported = result.tracks.front().keys.front();
     CHECK(result.tracks.front().sample_path == "sfx/ambiance/test.wav");
     CHECK(imported.pitch.min == 2.0f);
@@ -80,12 +81,12 @@ TEST_SUITE("amb_json") {
   TEST_CASE("ImportValidatesSchemaTransactionally") {
     pistoris::amb::Data data = makeAmbData();
     data.tracks.front().sample_path = "unchanged";
-    CHECK(pistoris::importJsonToAmb("{}", &data) == ARX_JSON_BAD_SCHEMA);
+    CHECK(pistoris::importJsonToAmb("{}", pistoris::NativeTextMode::kUtf8, &data) == ARX_JSON_BAD_SCHEMA);
     CHECK(data.tracks.front().sample_path == "unchanged");
 
     const char* bad_loop =
         R"({"tracks":[{"filename":"a.wav","flags":4,"keys":[{"start":0,"loop":4294967297,"delayMin":0,"delayMax":0,"volume":{"min":0,"max":0,"interval":0,"flags":0},"pitch":{"min":0,"max":0,"interval":0,"flags":0},"pan":{"min":0,"max":0,"interval":0,"flags":0},"x":{"min":0,"max":0,"interval":0,"flags":0},"y":{"min":0,"max":0,"interval":0,"flags":0},"z":{"min":0,"max":0,"interval":0,"flags":0}}]}]})";
-    CHECK(pistoris::importJsonToAmb(bad_loop, &data) == ARX_JSON_BAD_SCHEMA);
+    CHECK(pistoris::importJsonToAmb(bad_loop, pistoris::NativeTextMode::kUtf8, &data) == ARX_JSON_BAD_SCHEMA);
     CHECK(data.tracks.front().sample_path == "unchanged");
   }
 }

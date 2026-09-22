@@ -50,15 +50,14 @@ bool resolveSounds(const RouteResolveContext& context, Invocation& invocation, b
       native ? SidecarRebaseDirection::kNone
              : automaticSidecarRebase(sidecarEndpoint(context.inputs[invocation.input], ARX_RESOURCE_KIND_ANIMATION),
                                       sidecarEndpoint(invocation.output, ARX_RESOURCE_KIND_ANIMATION));
-  return resolveSidecarRebase({.explicit_requested = context.conversion.rebase_sounds,
-                               .explicit_directory = context.conversion.sound_directory,
+  return resolveSidecarRebase({.explicit_requested = context.conversion.sounds.requested,
+                               .explicit_directory = context.conversion.sounds.directory,
                                .automatic = automatic,
                                .to_loose_directory = kLooseSoundDirectory,
                                .to_game_directory = pistoris::paths::soundDirectory()},
                               "sound",
                               context.io,
-                              invocation.rebase_sounds,
-                              invocation.sound_rebase_directory);
+                              invocation.sound_rebase);
 }
 
 }  // namespace

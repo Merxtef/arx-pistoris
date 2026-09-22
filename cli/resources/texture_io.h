@@ -4,8 +4,10 @@
 #pragma once
 
 #include "arx_pistoris/model/obj.hpp"  // IWYU pragma: export
+#include "arx_pistoris/native/cin.hpp"
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/texture.hpp"
 
 #include "console/diagnostics.h"
@@ -20,6 +22,7 @@
 #include <vector>
 
 namespace pistoris {
+class Cinematic;
 class Level;
 class Model;
 }  // namespace pistoris
@@ -41,10 +44,14 @@ bool loadTextureImages(pistoris::Level& level, IoService& io, const TextureInput
                        std::span<const std::string> source_paths = {});
 bool loadTextureImages(pistoris::Model& model, IoService& io, const TextureInput& input,
                        std::span<const std::string> source_paths = {});
-void loadNativeTextureFiles(const pistoris::ftl::Data& ftl, IoService& io, const TextureInput& input,
-                            std::vector<pistoris::NativeTextureFile>& out);
-void loadNativeTextureFiles(const pistoris::fts::Data& fts, IoService& io, const TextureInput& input,
-                            std::vector<pistoris::NativeTextureFile>& out);
+bool loadTextureImages(pistoris::Cinematic& cinematic, IoService& io, const TextureInput& input,
+                       std::span<const std::string> source_paths = {});
+void loadNativeTextureFiles(const pistoris::ftl::Data& ftl, pistoris::NativeTextMode text_mode, IoService& io,
+                            const TextureInput& input, std::vector<pistoris::NativeTextureFile>& out);
+void loadNativeTextureFiles(const pistoris::fts::Data& fts, pistoris::NativeTextMode text_mode, IoService& io,
+                            const TextureInput& input, std::vector<pistoris::NativeTextureFile>& out);
+void loadNativeTextureFiles(const pistoris::cin::Data& cin, pistoris::NativeTextMode text_mode, IoService& io,
+                            const TextureInput& input, std::vector<pistoris::NativeTextureFile>& out);
 bool addNativeTextureFileOutputs(ResourceOutputPlan& plan, IoService& io, const TextureOutput& output,
                                  std::span<const pistoris::NativeTextureFile> files, ResourceAssetId asset,
                                  DiagnosticCode failure_code, std::string_view owner);

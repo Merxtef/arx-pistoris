@@ -63,7 +63,7 @@ TEST_SUITE("fts") {
   TEST_CASE("FtsWriteReadRoundtrip") {
     pistoris::fts::Data in = makeMinimalFtsData();
     auto& texture = in.textures[24275104];
-    std::memcpy(texture.fic, "GRAPH\\LEVELS\\L1.BMP", 20);
+    std::memcpy(texture.fic, "graph/levels/l1", sizeof("graph/levels/l1"));
     in.scene.num_textures = 1;
     in.cells[0].polygons.resize(1);
     in.cells[0].polygons[0].tex = 0;
@@ -97,7 +97,7 @@ TEST_SUITE("fts") {
   TEST_CASE("FtsAllowsTextureIdsThatAreNotTextureIndices") {
     pistoris::fts::Data in = makeMinimalFtsData();
     auto& texture = in.textures[24275104];
-    std::memcpy(texture.fic, "GRAPH\\LEVELS\\L1.BMP", 20);
+    std::memcpy(texture.fic, "graph/levels/l1", sizeof("graph/levels/l1"));
     in.scene.num_textures = 1;
     in.cells[0].polygons.resize(1);
     in.cells[0].polygons[0].tex = 24275104;
@@ -195,8 +195,8 @@ TEST_SUITE("fts") {
 
   TEST_CASE("FtsGroupsRoomVerticesByCanonicalTextureResource") {
     pistoris::fts::Data in = makeMinimalFtsData();
-    setTexturePath(in, 1, "GRAPH\\OBJ3D\\TEXTURES\\wall.PNG");
-    setTexturePath(in, 2, "graph/obj3d/textures/wall_other.bmp");
+    setTexturePath(in, 1, "graph/obj3d/textures/wall");
+    setTexturePath(in, 2, "graph/obj3d/textures/wall_other");
     in.cells[0].polygons.resize(2);
     in.cells[0].polygons[0].tex = 1;
     in.cells[0].polygons[1].tex = 2;
@@ -206,7 +206,7 @@ TEST_SUITE("fts") {
     in.rooms[0].polygons.insert(in.rooms[0].polygons.end(), 10923, {0, 0, 1, 0});
     CHECK(pistoris::validateFts(&in) == ARX_OK);
 
-    setTexturePath(in, 2, "graph/obj3d/./textures/unused/../wall.bmp");
+    setTexturePath(in, 2, "graph/obj3d/textures/wall");
     CHECK(pistoris::validateFts(&in) == ARX_FTS_BAD_ROOM_TEXTURE_VERTEX_COUNT);
   }
 

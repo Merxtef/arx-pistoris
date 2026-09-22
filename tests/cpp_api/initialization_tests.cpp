@@ -5,7 +5,14 @@
 
 #include "arx_pistoris/ambiance.h"
 #include "arx_pistoris/ambiance.hpp"
+#include "arx_pistoris/ambiance/bake.hpp"
+#include "arx_pistoris/animation.h"
+#include "arx_pistoris/animation.hpp"
+#include "arx_pistoris/animation/bake.hpp"
+#include "arx_pistoris/base/image.h"
 #include "arx_pistoris/base/math.h"
+#include "arx_pistoris/cinematic.h"
+#include "arx_pistoris/cinematic/bake.hpp"
 #include "arx_pistoris/glb.hpp"
 #include "arx_pistoris/level.h"
 #include "arx_pistoris/level.hpp"
@@ -13,13 +20,11 @@
 #include "arx_pistoris/level/images.hpp"
 #include "arx_pistoris/model.h"
 #include "arx_pistoris/model.hpp"
+#include "arx_pistoris/model/bake.hpp"
 #include "arx_pistoris/model/obj.hpp"
 #include "arx_pistoris/native.h"
 #include "arx_pistoris/native.hpp"
-#include "arx_pistoris/sound.h"
-#include "arx_pistoris/sound.hpp"
-#include "arx_pistoris/texture.h"
-#include "arx_pistoris/texture.hpp"
+#include "arx_pistoris/native/text.h"
 
 TEST_SUITE("cpp_api") {
   TEST_CASE("GlbUnitRangeMatchesC") {
@@ -35,13 +40,27 @@ TEST_SUITE("cpp_api") {
     CHECK(c_quat.y == cpp_quat.y);
     CHECK(c_quat.z == cpp_quat.z);
 
-    const ArxNativeTextureBakeOptions c_texture = ARX_NATIVE_TEXTURE_BAKE_OPTIONS_INIT;
-    const pistoris::NativeTextureBakeOptions cpp_texture;
-    CHECK((c_texture.include_files != 0) == cpp_texture.include_files);
+    const ArxNativeModelBakeOptions c_model = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
+    const pistoris::NativeModelBakeOptions cpp_model;
+    CHECK((c_model.include_texture_files != 0) == cpp_model.include_texture_files);
+    CHECK(c_model.text_mode == static_cast<ArxNativeTextMode>(cpp_model.text_mode));
 
-    const ArxNativeSoundBakeOptions c_sound = ARX_NATIVE_SOUND_BAKE_OPTIONS_INIT;
-    const pistoris::NativeSoundBakeOptions cpp_sound;
-    CHECK((c_sound.include_files != 0) == cpp_sound.include_files);
+    const ArxNativeAnimationBakeOptions c_animation = ARX_NATIVE_ANIMATION_BAKE_OPTIONS_INIT;
+    const pistoris::NativeAnimationBakeOptions cpp_animation;
+    CHECK((c_animation.include_sound_files != 0) == cpp_animation.include_sound_files);
+    CHECK(c_animation.text_mode == static_cast<ArxNativeTextMode>(cpp_animation.text_mode));
+
+    const ArxNativeAmbianceBakeOptions c_ambiance = ARX_NATIVE_AMBIANCE_BAKE_OPTIONS_INIT;
+    const pistoris::NativeAmbianceBakeOptions cpp_ambiance;
+    CHECK((c_ambiance.include_sound_files != 0) == cpp_ambiance.include_sound_files);
+    CHECK(c_ambiance.text_mode == static_cast<ArxNativeTextMode>(cpp_ambiance.text_mode));
+
+    const ArxNativeCinematicBakeOptions c_cinematic = ARX_NATIVE_CINEMATIC_BAKE_OPTIONS_INIT;
+    const pistoris::NativeCinematicBakeOptions cpp_cinematic;
+    CHECK((c_cinematic.include_illustration_files != 0) == cpp_cinematic.include_illustration_files);
+    CHECK((c_cinematic.include_sound_files != 0) == cpp_cinematic.include_sound_files);
+    CHECK(c_cinematic.illustration_format == static_cast<ArxImageFormat>(cpp_cinematic.illustration_format));
+    CHECK(c_cinematic.text_mode == static_cast<ArxNativeTextMode>(cpp_cinematic.text_mode));
 
     const ArxDlfWriteOptions c_dlf = ARX_DLF_WRITE_OPTIONS_INIT;
     const pistoris::DlfWriteOptions cpp_dlf;
@@ -180,9 +199,10 @@ TEST_SUITE("cpp_api") {
     const ArxLevelNativeBakeOptions c_level_bake = ARX_LEVEL_NATIVE_BAKE_OPTIONS_INIT;
     const pistoris::Level::NativeBakeOptions cpp_level_bake;
     CHECK(c_level_bake.level_name.size == cpp_level_bake.level_name.size());
-    CHECK((c_level_bake.textures.include_files != 0) == cpp_level_bake.textures.include_files);
+    CHECK((c_level_bake.include_texture_files != 0) == cpp_level_bake.include_texture_files);
     CHECK((c_level_bake.reconstruct_quads != 0) == cpp_level_bake.reconstruct_quads);
     CHECK(c_level_bake.dlf_scene_path.size == cpp_level_bake.dlf_scene_path.size());
+    CHECK(c_level_bake.text_mode == static_cast<ArxNativeTextMode>(cpp_level_bake.text_mode));
 
     const ArxLevelDlfBakeOptions c_level_dlf = ARX_LEVEL_DLF_BAKE_OPTIONS_INIT;
     const pistoris::Level::DlfBakeOptions cpp_level_dlf;
@@ -191,6 +211,7 @@ TEST_SUITE("cpp_api") {
     CHECK(c_level_dlf.target_fts_offset.y == cpp_level_dlf.target_fts_offset.y);
     CHECK(c_level_dlf.target_fts_offset.z == cpp_level_dlf.target_fts_offset.z);
     CHECK(c_level_dlf.dlf_scene_path.size == cpp_level_dlf.dlf_scene_path.size());
+    CHECK(c_level_dlf.text_mode == static_cast<ArxNativeTextMode>(cpp_level_dlf.text_mode));
 
     const ArxModelGlbImportOptions c_model_import = ARX_MODEL_GLB_IMPORT_OPTIONS_INIT;
     const pistoris::Model::GlbImportOptions cpp_model_import;

@@ -14,12 +14,13 @@
 
 namespace pistoris {
 
-bool validDlfScenePath(std::string_view scene_path) noexcept;
+bool validDlfScenePath(std::string_view scene_path);
 ArxReturnCode loadDlf(dlf::Data* data, std::optional<llf::Data>* embedded_lighting, ReadCursor& cursor);
 ArxReturnCode loadDlf(dlf::Data* data, std::optional<llf::Data>* embedded_lighting, ReadCursor& prefix,
                       ReadCursor& payload);
 ArxReturnCode saveDlf(const dlf::Data* data, const llf::Data* embedded_lighting, std::string_view signer,
                       WriteCursor& cursor);
+ArxReturnCode canonicalizeDlf(dlf::Data* data);
 ArxReturnCode validateDlf(const dlf::Data* data);
 
 }  // namespace pistoris

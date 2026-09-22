@@ -5,10 +5,12 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.h"
+#include "arx_pistoris/native/text.h"
 
 #include "api/c/internal.h"
 #include "api/c/native/internal.h"
 #include "api/c/native/json_internal.h"
+#include "api/c/native/text_internal.h"
 #include "external/json.h"
 #include "utils/cursor.h"
 
@@ -46,12 +48,18 @@ ArxReturnCode arx_pistoris_amb_write(const ArxAmb* amb, uint8_t** out_data, size
   });
 }
 
-ArxReturnCode arx_pistoris_amb_to_json(const ArxAmb* amb, std::uint32_t pretty, char** out_json) noexcept {
-  return pistoris::c_api::toJson(amb, pretty, out_json, pistoris::exportAmbToJson);
+ArxReturnCode arx_pistoris_amb_to_json(const ArxAmb* amb, std::uint32_t pretty, ArxNativeTextMode text_mode,
+                                       char** out_json) noexcept {
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
+  return pistoris::c_api::toJson(
+      amb, pretty, pistoris::c_api::nativeTextMode(text_mode), out_json, pistoris::exportAmbToJson);
 }
 
-ArxReturnCode arx_pistoris_amb_from_json(const std::uint8_t* data, std::size_t size, ArxAmb** out_amb) noexcept {
-  return pistoris::c_api::fromJson(data, size, out_amb, pistoris::importJsonToAmb);
+ArxReturnCode arx_pistoris_amb_from_json(const std::uint8_t* data, std::size_t size, ArxNativeTextMode text_mode,
+                                         ArxAmb** out_amb) noexcept {
+  if (!pistoris::c_api::validNativeTextMode(text_mode)) return ARX_INVALID_OPTIONS;
+  return pistoris::c_api::fromJson(
+      data, size, pistoris::c_api::nativeTextMode(text_mode), out_amb, pistoris::importJsonToAmb);
 }
 
 ArxReturnCode arx_pistoris_amb_validate(const ArxAmb* amb) noexcept {

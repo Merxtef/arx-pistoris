@@ -3,7 +3,6 @@
 
 #include "doctest/doctest.h"
 
-#include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/paths/types.h"
 
 #include "formats/format.h"
@@ -12,45 +11,39 @@
 #include "resources/layout.h"
 #include "resources/selector.h"
 
-#include <algorithm>
-#include <iterator>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace {
 
-void setName(pistoris::tea::Data& tea, const char* name) {
-  const std::string_view value(name);
-  REQUIRE(value.size() < std::size(tea.name));
-  std::copy(value.begin(), value.end(), std::begin(tea.name));
-  tea.name[value.size()] = '\0';
+bool buildTeaTargets(std::span<const cli::AnimationOutputIdentity> animations, const cli::OutputTarget& base,
+                     std::vector<cli::OutputTarget>& targets, std::string& error) {
+  return cli::buildAnimationTargets(animations, base, {}, cli::Format::kTea, {}, targets, error);
 }
 
 }  // namespace
 
 TEST_SUITE("CLI animation output") {
-  TEST_CASE("Native animation output identities borrow native strings") {
-    pistoris::tea::Data tea;
-    setName(tea, "walk");
+  TEST_CASE("Animation output identities own semantic strings") {
     const std::string resource_path = "graph/obj3d/anims/npc/walk.tea";
 
-    const cli::AnimationOutputIdentity identity = cli::nativeAnimationOutputIdentity(tea, resource_path);
+    const cli::AnimationOutputIdentity identity{"walk", resource_path};
     CHECK(identity.name.compare("walk") == 0);
-    CHECK(identity.name.data() == tea.name);
     CHECK(identity.resource_path.compare(resource_path) == 0);
-    CHECK(identity.resource_path.data() == resource_path.data());
+    CHECK(identity.resource_path.data() != resource_path.data());
   }
 
-  TEST_CASE("Unnamed native animations derive numbered fallback paths") {
-    const std::vector<pistoris::tea::Data> teas(3);
+  TEST_CASE("Unnamed animations derive numbered fallback paths") {
+    const std::vector<cli::AnimationOutputIdentity> animations(3);
     cli::OutputTarget base;
     base.path = "exports/provided.tea";
     base.layout = cli::ResourceLayout::kLoose;
 
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildNativeAnimationTargets(teas, base, {}, targets, error));
+    REQUIRE(buildTeaTargets(animations, base, targets, error));
     REQUIRE(targets.size() == 3);
     CHECK(targets[0].path == "exports/provided.tea");
     CHECK(targets[1].path == "exports/provided2.tea");
@@ -58,16 +51,14 @@ TEST_SUITE("CLI animation output") {
     CHECK(targets[0].layout == cli::ResourceLayout::kLoose);
   }
 
-  TEST_CASE("Native animation targets disambiguate duplicate internal names case insensitively") {
-    std::vector<pistoris::tea::Data> teas(2);
-    setName(teas[0], "Idle");
-    setName(teas[1], "idle");
+  TEST_CASE("Animation targets disambiguate duplicate internal names case insensitively") {
+    const std::vector<cli::AnimationOutputIdentity> animations = {{"Idle", {}}, {"idle", {}}};
 
     cli::OutputTarget base;
     base.path = "provided.tea";
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildNativeAnimationTargets(teas, base, {}, targets, error));
+    REQUIRE(buildTeaTargets(animations, base, targets, error));
     REQUIRE(targets.size() == 2);
     CHECK(targets[0].path == "Idle.tea");
     CHECK(targets[1].path == "idle2.tea");
@@ -75,16 +66,13 @@ TEST_SUITE("CLI animation output") {
   }
 
   TEST_CASE("Animation target disambiguation reserves every natural name") {
-    std::vector<pistoris::tea::Data> teas(3);
-    setName(teas[0], "my anim");
-    setName(teas[1], "my?anim");
-    setName(teas[2], "my_anim2");
+    const std::vector<cli::AnimationOutputIdentity> animations = {{"my anim", {}}, {"my?anim", {}}, {"my_anim2", {}}};
 
     cli::OutputTarget base;
     base.path = "provided.tea";
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildNativeAnimationTargets(teas, base, {}, targets, error));
+    REQUIRE(buildTeaTargets(animations, base, targets, error));
     REQUIRE(targets.size() == 3);
     CHECK(targets[0].path == "my_anim.tea");
     CHECK(targets[1].path == "my_anim3.tea");
@@ -92,34 +80,31 @@ TEST_SUITE("CLI animation output") {
   }
 
   TEST_CASE("Animation targets sanitize portable reserved names") {
-    std::vector<pistoris::tea::Data> teas(1);
-    setName(teas[0], "NUL");
+    const std::vector<cli::AnimationOutputIdentity> animations = {{"NUL", {}}};
 
     cli::OutputTarget base;
     base.path = "provided.tea";
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildNativeAnimationTargets(teas, base, {}, targets, error));
+    REQUIRE(buildTeaTargets(animations, base, targets, error));
     REQUIRE(targets.size() == 1);
     CHECK(targets[0].path == "NUL_1.tea");
   }
 
   TEST_CASE("Animation targets preserve portable square brackets") {
-    std::vector<pistoris::tea::Data> teas(1);
-    setName(teas[0], "step_[metal]");
+    const std::vector<cli::AnimationOutputIdentity> animations = {{"step_[metal]", {}}};
 
     cli::OutputTarget base;
     base.path = "provided.tea";
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildNativeAnimationTargets(teas, base, {}, targets, error));
+    REQUIRE(buildTeaTargets(animations, base, targets, error));
     REQUIRE(targets.size() == 1);
     CHECK(targets[0].path == "step_[metal].tea");
   }
 
   TEST_CASE("Animation targets reserve the primary JSON output") {
-    std::vector<pistoris::tea::Data> teas(1);
-    setName(teas[0], "model");
+    const std::vector<cli::AnimationOutputIdentity> animations = {{"model", {}}};
 
     cli::OutputTarget base;
     base.path = "exports/model.json";
@@ -127,15 +112,14 @@ TEST_SUITE("CLI animation output") {
     std::vector<cli::OutputTarget> targets;
     std::string error;
     const std::string_view reserved_path = base.path;
-    REQUIRE(
-        cli::buildAnimationTargets(teas, base, {}, cli::Format::kJson, std::span(&reserved_path, 1), targets, error));
+    REQUIRE(cli::buildAnimationTargets(
+        animations, base, {}, cli::Format::kJson, std::span(&reserved_path, 1), targets, error));
     REQUIRE(targets.size() == 1);
     CHECK(targets[0].path == "exports/model2.json");
   }
 
   TEST_CASE("Resource animation targets keep the mounted output directory") {
-    std::vector<pistoris::tea::Data> teas(1);
-    setName(teas[0], "Walk");
+    const std::vector<cli::AnimationOutputIdentity> animations = {{"Walk", {}}};
 
     cli::OutputTarget base;
     base.path = "graph/obj3d/anims/npc/provided.tea";
@@ -144,7 +128,7 @@ TEST_SUITE("CLI animation output") {
     base.selector.name = "provided";
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildNativeAnimationTargets(teas, base, {}, targets, error));
+    REQUIRE(buildTeaTargets(animations, base, targets, error));
     REQUIRE(targets.size() == 1);
     CHECK(targets[0].path == "graph/obj3d/anims/npc/Walk.tea");
     CHECK(targets[0].address == cli::OutputAddress::kMountRelative);

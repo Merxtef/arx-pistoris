@@ -476,6 +476,7 @@ TEST_SUITE("paths") {
 
     CHECK(pistoris::paths::levelSearchLocation().base_path == "graph/levels");
     CHECK(pistoris::paths::levelSearchLocation().max_discovery_depth == 2);
+    CHECK(pistoris::paths::cinematicIllustrationDirectory() == "graph/interface/illustrations");
     CHECK(pistoris::paths::cinematicSearchLocation().base_path == "graph/interface/illustrations");
     CHECK(pistoris::paths::ambianceSearchLocation().max_discovery_depth == 8);
   }

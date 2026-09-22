@@ -4,6 +4,7 @@
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "level/data.h"
@@ -112,7 +113,7 @@ void logBuildWarnings(const NativeBuildWarnings& warnings) {
 }  // namespace
 
 ArxReturnCode buildLevel(const NativeLevelSource& source, LevelModules& out, LevelValidationState* out_validation,
-                         std::vector<std::string>* texture_source_paths) {
+                         std::vector<std::string>* texture_source_paths, NativeTextMode text_mode) {
   const fts::Data& fts = source.fts;
   ArxReturnCode rc = validateFts(&fts);
   if (rc != ARX_OK) return rc;
@@ -132,11 +133,11 @@ ArxReturnCode buildLevel(const NativeLevelSource& source, LevelModules& out, Lev
       use_llf_colors ? std::span<const ArxColor3>(source.llf->colors) : std::span<const ArxColor3>();
 
   std::vector<std::string> source_paths;
-  rc = buildFtsModules(fts, colors, tmp, warnings, texture_source_paths ? &source_paths : nullptr);
+  rc = buildFtsModules(fts, colors, tmp, warnings, texture_source_paths ? &source_paths : nullptr, text_mode);
   if (rc != ARX_OK) return rc;
   if (source.llf) buildLlfModules(fts, *source.llf, tmp.lighting, warnings);
   if (source.dlf) {
-    rc = buildDlfModules(*source.dlf, fts.scene.Mscenepos, tmp.scene, warnings);
+    rc = buildDlfModules(*source.dlf, fts.scene.Mscenepos, tmp.scene, warnings, text_mode);
     if (rc != ARX_OK) return rc;
   }
   warnings.repaired_portal_names += rooms::repairPortalNames(tmp.rooms.portals);

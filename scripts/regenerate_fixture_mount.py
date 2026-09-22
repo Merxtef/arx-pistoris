@@ -197,6 +197,8 @@ def expected_generated_files(catalog: dict[str, object]) -> set[Path]:
         add(animation["tea"])
     for ambiance in catalog["ambiances"]:
         add(ambiance["amb"])
+    for cinematic in catalog["cinematics"]:
+        add(cinematic["cin"])
     native_sidecars = catalog["native_sidecars"]
     if not isinstance(native_sidecars, dict):
         raise TypeError("Native sidecar metadata must be an object")
@@ -267,6 +269,15 @@ def regenerate(cli: Path, catalog_path: Path, output_mount: Path) -> None:
                     ambiance["selector"],
                 ],
                 f"Ambiance {ambiance['name']!r}",
+                output_ledger,
+            )
+
+        for cinematic in catalog["cinematics"]:
+            run_conversion(
+                cli,
+                generated_mount,
+                [str(fixture_path(fixtures_root, cinematic, "glb")), cinematic["selector"]],
+                f"Cinematic {cinematic['name']!r}",
                 output_ledger,
             )
 

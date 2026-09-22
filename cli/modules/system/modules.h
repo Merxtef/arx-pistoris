@@ -20,6 +20,7 @@ const Module& keepFirstResourceModule();
 const Module& mountModule();
 const Module& autoMountModule();
 const Module& writeMountModule();
+const Module& nativeTextModule();
 const Module& resourceListingModule();
 std::span<const ModuleRef> rootModules();
 

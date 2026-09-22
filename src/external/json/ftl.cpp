@@ -6,11 +6,13 @@
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "external/json.h"
 #include "external/json/native_common.h"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
 
 #include <cstddef>
@@ -47,7 +49,7 @@ ArxReturnCode getInt32Array(const Json& json, std::vector<std::int32_t>& out, st
   return ARX_OK;
 }
 
-ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
+ArxReturnCode importFtl(std::string_view text, NativeTextMode text_mode, ftl::Data& out) {
   Json root;
   ARX_RETURN_IF_ERR(json_detail::parse(text, root));
   if (!root.is_object() || !json_detail::validSchema(root, kFtlSchema)) return ARX_JSON_BAD_SCHEMA;
@@ -61,7 +63,7 @@ ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
       !json_detail::getString(*name, text_value)) {
     return ARX_JSON_BAD_SCHEMA;
   }
-  json_detail::copyTruncated(text_value, out.header.name);
+  if (!json_detail::encodeTruncated(text_value, text_mode, out.header.name)) return ARX_JSON_BAD_SCHEMA;
 
   const Json* vertices = nullptr;
   ARX_RETURN_IF_ERR(json_detail::arrayMember(root, "vertices", vertices, kFtlMaxVertices));
@@ -109,7 +111,7 @@ ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
     ftl::TextureContainer texture{};
     const Json* filename = json_detail::member(json, "filename");
     if (!filename || !json_detail::getString(*filename, text_value)) return ARX_JSON_BAD_SCHEMA;
-    json_detail::copyTruncated(text_value, texture.filename);
+    if (!json_detail::encodeTruncated(text_value, text_mode, texture.filename)) return ARX_JSON_BAD_SCHEMA;
     out.texture_containers.push_back(texture);
   }
 
@@ -128,7 +130,7 @@ ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
       return ARX_JSON_BAD_SCHEMA;
     }
     ARX_RETURN_IF_ERR(getInt32Array(*indices, group.indices, out.vertices.size()));
-    json_detail::copyTruncated(text_value, group.name);
+    if (!json_detail::encodeTruncated(text_value, text_mode, group.name)) return ARX_JSON_BAD_SCHEMA;
     out.groups.push_back(std::move(group));
   }
 
@@ -146,7 +148,7 @@ ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
         !json_detail::getSigned(*action_type, action.action) || !json_detail::getSigned(*sfx, action.sfx)) {
       return ARX_JSON_BAD_SCHEMA;
     }
-    json_detail::copyTruncated(text_value, action.name);
+    if (!json_detail::encodeTruncated(text_value, text_mode, action.name)) return ARX_JSON_BAD_SCHEMA;
     out.actions.push_back(action);
   }
 
@@ -159,10 +161,11 @@ ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
     const Json* selected = json_detail::member(json, "selected");
     if (!name || !selected || !json_detail::getString(*name, text_value)) return ARX_JSON_BAD_SCHEMA;
     ARX_RETURN_IF_ERR(getInt32Array(*selected, selection.selected, out.vertices.size()));
-    json_detail::copyTruncated(text_value, selection.name);
+    if (!json_detail::encodeTruncated(text_value, text_mode, selection.name)) return ARX_JSON_BAD_SCHEMA;
     out.selections.push_back(std::move(selection));
   }
 
+  ARX_RETURN_IF_ERR(canonicalizeFtl(&out));
   ARX_RETURN_IF_ERR(validateFtl(&out));
   log(ARX_LOG_INFO,
       "FTL JSON loaded: {} vertices, {} faces, {} textures, {} groups, {} actions, {} selections",
@@ -177,13 +180,16 @@ ArxReturnCode importFtl(std::string_view text, ftl::Data& out) {
 
 }  // namespace
 
-ArxReturnCode exportFtlToJson(const ftl::Data& data, bool pretty, std::string& out) {
+ArxReturnCode exportFtlToJson(const ftl::Data& data, bool pretty, NativeTextMode text_mode, std::string& out) {
   return json_detail::guarded("FTL export", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ARX_RETURN_IF_ERR(validateFtl(&data));
 
+    std::string decoded;
+    if (!json_detail::decodeFixed(data.header.name, text_mode, decoded)) return ARX_JSON_BAD_SCHEMA;
     Json root;
     root["$schema"] = kFtlSchema;
-    root["header"] = {{"origin", data.header.origin}, {"name", std::string(data.header.name)}};
+    root["header"] = {{"origin", data.header.origin}, {"name", decoded}};
 
     root["vertices"] = Json::array();
     for (const ftl::Vertex& vertex : data.vertices) {
@@ -204,12 +210,14 @@ ArxReturnCode exportFtlToJson(const ftl::Data& data, bool pretty, std::string& o
 
     root["textureContainers"] = Json::array();
     for (const ftl::TextureContainer& texture : data.texture_containers) {
-      root["textureContainers"].push_back({{"filename", std::string(texture.filename)}});
+      if (!json_detail::decodeFixed(texture.filename, text_mode, decoded)) return ARX_FTL_BAD_TEXTURE_PATH;
+      root["textureContainers"].push_back({{"filename", decoded}});
     }
 
     root["groups"] = Json::array();
     for (const ftl::Group& group : data.groups) {
-      root["groups"].push_back({{"name", std::string(group.name)},
+      if (!json_detail::decodeFixed(group.name, text_mode, decoded)) return ARX_FTL_BAD_GROUP_NAME;
+      root["groups"].push_back({{"name", decoded},
                                 {"origin", group.origin},
                                 {"indices", group.indices},
                                 {"blobShadowSize", group.blob_shadow_size}});
@@ -217,26 +225,27 @@ ArxReturnCode exportFtlToJson(const ftl::Data& data, bool pretty, std::string& o
 
     root["actions"] = Json::array();
     for (const ftl::Action& action : data.actions) {
-      root["actions"].push_back({{"name", std::string(action.name)},
-                                 {"vertexIdx", action.vertex_idx},
-                                 {"action", action.action},
-                                 {"sfx", action.sfx}});
+      if (!json_detail::decodeFixed(action.name, text_mode, decoded)) return ARX_FTL_BAD_ACTION_NAME;
+      root["actions"].push_back(
+          {{"name", decoded}, {"vertexIdx", action.vertex_idx}, {"action", action.action}, {"sfx", action.sfx}});
     }
 
     root["selections"] = Json::array();
     for (const ftl::Selection& selection : data.selections) {
-      root["selections"].push_back({{"name", std::string(selection.name)}, {"selected", selection.selected}});
+      if (!json_detail::decodeFixed(selection.name, text_mode, decoded)) return ARX_FTL_BAD_SELECTION_NAME;
+      root["selections"].push_back({{"name", decoded}, {"selected", selection.selected}});
     }
 
     return json_detail::dump(root, pretty, out);
   });
 }
 
-ArxReturnCode importJsonToFtl(std::string_view text, ftl::Data* out) {
+ArxReturnCode importJsonToFtl(std::string_view text, NativeTextMode text_mode, ftl::Data* out) {
   if (!out) return ARX_INVALID_DATA_POINTER;
-  return json_detail::guarded("FTL import", [&] {
+  return json_detail::guarded("FTL import", [&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     ftl::Data temporary;
-    const ArxReturnCode rc = importFtl(text, temporary);
+    const ArxReturnCode rc = importFtl(text, text_mode, temporary);
     if (rc == ARX_OK) *out = std::move(temporary);
     return rc;
   });

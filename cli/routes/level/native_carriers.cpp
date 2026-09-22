@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 
 #include "base/bytes.h"
@@ -19,8 +20,8 @@
 
 namespace cli::level {
 
-ArxReturnCode decodeFts(const ClassifiedPath& input, pistoris::Fts& out) {
-  return input.facts.format == Format::kJson ? pistoris::fromJson(byteStringView(input.buffer), out)
+ArxReturnCode decodeFts(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Fts& out) {
+  return input.facts.format == Format::kJson ? pistoris::fromJson(byteStringView(input.buffer), out, text_mode)
                                              : pistoris::readFts(input.buffer, out);
 }
 
@@ -29,11 +30,11 @@ ArxReturnCode decodeLlf(const ClassifiedPath& input, pistoris::Llf& out) {
                                              : pistoris::readLlf(input.buffer, out);
 }
 
-ArxReturnCode decodeDlf(const ClassifiedPath& input, pistoris::Dlf& out,
+ArxReturnCode decodeDlf(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Dlf& out,
                         std::optional<pistoris::Llf>* embedded_lighting) {
   if (input.facts.format == Format::kJson) {
     if (embedded_lighting) embedded_lighting->reset();
-    return pistoris::fromJson(byteStringView(input.buffer), out);
+    return pistoris::fromJson(byteStringView(input.buffer), out, text_mode);
   }
   return pistoris::readDlf(input.buffer, out, embedded_lighting);
 }
@@ -46,9 +47,12 @@ void applyLevelNumber(std::uint32_t level, pistoris::Fts& fts, pistoris::Dlf* dl
 
 void applyLevelNumber(std::uint32_t level, pistoris::Dlf& dlf) {
   const std::string level_name = "level" + std::to_string(level);
-  [[maybe_unused]] const bool path_generated = pistoris::paths::dlfSceneFromLevelName(level_name, dlf.scene_path);
+  std::string scene_path;
+  [[maybe_unused]] const bool path_generated = pistoris::paths::dlfSceneFromLevelName(level_name, scene_path);
   assert(path_generated);
-  dlf.scene_path.push_back('/');
+  assert(scene_path.size() < sizeof(dlf.scene_path));
+  std::memcpy(dlf.scene_path, scene_path.c_str(), scene_path.size() + 1U);
+  std::memset(dlf.scene_path + scene_path.size() + 1U, 0, sizeof(dlf.scene_path) - scene_path.size() - 1U);
 }
 
 }  // namespace cli::level

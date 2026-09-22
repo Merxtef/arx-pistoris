@@ -20,6 +20,7 @@
 #include "arx_pistoris/base/status.h"       // IWYU pragma: export
 #include "arx_pistoris/base/string_view.h"  // IWYU pragma: export
 #include "arx_pistoris/binary.h"            // IWYU pragma: export
+#include "arx_pistoris/cinematic.h"         // IWYU pragma: export
 #include "arx_pistoris/glb.h"               // IWYU pragma: export
 #include "arx_pistoris/level.h"             // IWYU pragma: export
 #include "arx_pistoris/level/images.h"      // IWYU pragma: export

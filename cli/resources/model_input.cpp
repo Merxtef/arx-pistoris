@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/runtime.hpp"
 
@@ -58,7 +59,7 @@ bool isModelInput(FileFacts facts) noexcept {
 }
 
 bool convertModelInput(const ClassifiedPath& input, std::span<const ModelMaterialLibraryInput> material_libraries,
-                       const pistoris::Model::GlbImportOptions& glb_options, DiagnosticCode failure_code,
+                       const ModelInputConversionOptions& options, DiagnosticCode failure_code,
                        std::string_view description, ConvertedModelInput& out) {
   ConvertedModelInput converted;
   ArxReturnCode rc = ARX_OK;
@@ -66,13 +67,17 @@ bool convertModelInput(const ClassifiedPath& input, std::span<const ModelMateria
     case Format::kFtl: {
       pistoris::Ftl native;
       rc = pistoris::readFtl(input.buffer, native);
-      if (rc == ARX_OK) rc = pistoris::Model::importNative(converted.model, native, &converted.texture_source_paths);
+      if (rc == ARX_OK)
+        rc = pistoris::Model::importNative(
+            converted.model, native, &converted.texture_source_paths, options.native_text_mode);
       break;
     }
     case Format::kJson: {
       pistoris::Ftl native;
-      rc = pistoris::fromJson(byteStringView(input.buffer), native);
-      if (rc == ARX_OK) rc = pistoris::Model::importNative(converted.model, native, &converted.texture_source_paths);
+      rc = pistoris::fromJson(byteStringView(input.buffer), native, pistoris::NativeTextMode::kUtf8);
+      if (rc == ARX_OK)
+        rc = pistoris::Model::importNative(
+            converted.model, native, &converted.texture_source_paths, pistoris::NativeTextMode::kUtf8);
       break;
     }
     case Format::kObj: {
@@ -88,7 +93,7 @@ bool convertModelInput(const ClassifiedPath& input, std::span<const ModelMateria
       rc = pistoris::Model::importGlb(converted.model,
                                       converted.animations,
                                       input.buffer,
-                                      glb_options,
+                                      options.glb,
                                       nullptr,
                                       &converted.texture_source_paths,
                                       &converted.sound_sources);

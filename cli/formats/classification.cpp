@@ -4,6 +4,7 @@
 #include "formats/classification.h"
 
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/cin.hpp"
 #include "arx_pistoris/native/tea.hpp"
 
 #include "base/ascii.h"
@@ -173,6 +174,11 @@ bool isGlb(std::span<const std::uint8_t> buffer) noexcept {
   return buffer.size() >= 4 && std::memcmp(buffer.data(), "glTF", 4) == 0;
 }
 
+bool isCin(std::span<const std::uint8_t> buffer) noexcept {
+  constexpr std::size_t kMagicSize = pistoris::kCinMagic.size();
+  return buffer.size() >= kMagicSize && std::memcmp(buffer.data(), pistoris::kCinMagic.data(), kMagicSize) == 0;
+}
+
 bool isAmb(std::span<const std::uint8_t> buffer) noexcept {
   std::uint32_t magic = 0;
   if (buffer.size() < sizeof(magic)) return false;
@@ -190,6 +196,7 @@ bool isDlf(std::span<const std::uint8_t> buffer) noexcept {
 FileFacts classifyInput(std::span<const std::uint8_t> buffer, std::string_view path) {
   const Format extension_format = formatFromPath(path);
   if (isTea(buffer)) return classified(Format::kTea, PayloadKind::kTea);
+  if (isCin(buffer)) return classified(Format::kCin, PayloadKind::kCin);
   if (isGlb(buffer)) return classified(Format::kGlb, PayloadKind::kGlb);
   if (isAmb(buffer)) return classified(Format::kAmb, PayloadKind::kAmb);
   if (isDlf(buffer)) return classified(Format::kDlf, PayloadKind::kDlf);

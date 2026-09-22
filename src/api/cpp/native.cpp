@@ -7,6 +7,7 @@
 
 #include "api/status_boundary.h"
 #include "native/amb.h"
+#include "native/cin.h"
 #include "native/dlf.h"
 #include "native/ftl.h"
 #include "native/fts.h"
@@ -39,6 +40,25 @@ ArxReturnCode writeAmb(const Amb& amb, std::vector<std::uint8_t>& out) noexcept 
   return statusBoundary([&] {
     WriteCursor cursor;
     ArxReturnCode rc = saveAmb(&amb, cursor);
+    if (rc == ARX_OK) out = cursor.take();
+    return rc;
+  });
+}
+
+ArxReturnCode readCin(std::span<const std::uint8_t> data, Cin& out) noexcept {
+  return statusBoundary([&] {
+    Cin tmp;
+    ReadCursor cursor(data.data(), data.size());
+    const ArxReturnCode rc = loadCin(&tmp, cursor);
+    if (rc == ARX_OK) out = std::move(tmp);
+    return rc;
+  });
+}
+
+ArxReturnCode writeCin(const Cin& cin, std::vector<std::uint8_t>& out) noexcept {
+  return statusBoundary([&] {
+    WriteCursor cursor;
+    const ArxReturnCode rc = saveCin(&cin, cursor);
     if (rc == ARX_OK) out = cursor.take();
     return rc;
   });
@@ -147,6 +167,10 @@ ArxReturnCode writeTea(const Tea& tea, std::vector<std::uint8_t>& out) noexcept 
 
 ArxReturnCode validate(const Amb& amb) noexcept {
   return statusBoundary([&] { return validateAmb(&amb); });
+}
+
+ArxReturnCode validate(const Cin& cin) noexcept {
+  return statusBoundary([&] { return validateCin(&cin); });
 }
 
 ArxReturnCode validate(const Dlf& dlf) noexcept {

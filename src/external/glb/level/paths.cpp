@@ -8,6 +8,7 @@
 #include "arx_pistoris/runtime/types.h"
 
 #include "coordinates.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
 #include "external/glb/utils/tokens.h"
 #include "external/glb/utils/transform.h"
@@ -38,6 +39,7 @@ struct ParsedPathNode {
   std::uint32_t ordinal = 0;
   PathNodeType type = PathNodeType::kStandard;
   std::uint32_t time_ms = 0;
+  glb::ParsedLabel label;
   std::size_t node_index = 0;
   ArxVector3 position = {};
 };
@@ -67,25 +69,26 @@ std::string_view pathNodeType(PathNodeType type) {
 }
 
 bool parsePathNodeName(std::string_view name, ParsedPathNode& out) {
-  std::vector<std::string_view> tokens;
-  splitDoubleUnderscore(name, tokens);
-  if (tokens.size() != 4 || tokens.back().empty()) return false;
-
-  auto ordinal = parseUnsignedToken(tokens[0]);
-  if (!ordinal) return false;
-
-  auto type = pathNodeType(tokens[1]);
-  if (!type) return false;
-
-  constexpr std::string_view kTime = "TIME_";
-  if (!tokens[2].starts_with(kTime)) return false;
-  auto time = parseUnsignedToken(tokens[2].substr(kTime.size()));
-  if (!time) return false;
-
-  out.ordinal = *ordinal;
-  out.type = *type;
-  out.time_ms = *time;
-  return true;
+  glb::ParsedLabel label;
+  const bool parsed = glb::parseRecoverableLabel(name,
+                                                 out,
+                                                 &label,
+                                                 glb::ConventionOptions{{"STANDARD", "BEZIER"}, {"TIME_"}},
+                                                 [](std::span<const std::string_view> tokens, ParsedPathNode& value) {
+                                                   if (tokens.size() != 3) return false;
+                                                   const auto ordinal = parseUnsignedToken(tokens[0]);
+                                                   const auto type = pathNodeType(tokens[1]);
+                                                   constexpr std::string_view kTime = "TIME_";
+                                                   if (!ordinal || !type || !tokens[2].starts_with(kTime)) return false;
+                                                   const auto time = parseUnsignedToken(tokens[2].substr(kTime.size()));
+                                                   if (!time) return false;
+                                                   value.ordinal = *ordinal;
+                                                   value.type = *type;
+                                                   value.time_ms = *time;
+                                                   return true;
+                                                 });
+  if (parsed) out.label = label;
+  return parsed;
 }
 
 std::string pathNodeName(const PathNode& node, std::string_view helper_label, std::size_t ordinal) {
@@ -150,6 +153,8 @@ ArxReturnCode importPaths(const cgltf_data& data, const std::vector<math::Mat4>&
       ParsedPathNode parsed_node;
       if (!parsePathNodeName(child->name != nullptr ? child->name : "", parsed_node)) return ARX_GLB_BAD_LEVEL_PATH;
       if (!glb::simpleEmptyNode(*child)) return ARX_GLB_BAD_LEVEL_PATH;
+      glb::reportConventionLabel(
+          "GLB -> Level path node", child->name != nullptr ? child->name : "", parsed_node.label);
       if (std::find(node_ordinals.begin(), node_ordinals.end(), parsed_node.ordinal) != node_ordinals.end())
         return ARX_GLB_BAD_LEVEL_PATH;
       node_ordinals.push_back(parsed_node.ordinal);

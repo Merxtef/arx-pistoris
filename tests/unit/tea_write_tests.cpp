@@ -142,7 +142,7 @@ TEST_SUITE("tea") {
     auto d1 = parse(fixture);
     REQUIRE(d1.keyframes.size() == 1);
     REQUIRE(d1.keyframes[0].sample.has_value());
-    CHECK(std::string(d1.keyframes[0].sample->name) == "footstep.wav");
+    CHECK(std::string(d1.keyframes[0].sample->name) == "footstep");
 
     auto bytes = save(d1);
     auto d2 = parse(bytes);

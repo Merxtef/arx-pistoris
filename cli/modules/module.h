@@ -59,8 +59,10 @@ constexpr RouteMask routeBit(RouteKind kind) {
       return 1u << 1;
     case RouteKind::kAmbiance:
       return 1u << 2;
-    case RouteKind::kLevel:
+    case RouteKind::kCinematic:
       return 1u << 3;
+    case RouteKind::kLevel:
+      return 1u << 4;
     default:
       return 0;
   }

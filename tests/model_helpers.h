@@ -44,22 +44,22 @@ inline pistoris::Ftl makeSemanticModelFtl() {
   result.faces.push_back(face);
 
   result.texture_containers.emplace_back();
-  setFtlName("GRAPH\\OBJ3D\\TEXTURES\\MY_TEX.BMP",
+  setFtlName("graph/obj3d/textures/my_tex",
              result.texture_containers[0].filename,
              sizeof(result.texture_containers[0].filename));
 
   result.groups.resize(2);
-  setFtlName("ROOT", result.groups[0].name, sizeof(result.groups[0].name));
+  setFtlName("root", result.groups[0].name, sizeof(result.groups[0].name));
   result.groups[0].origin = 4;
   result.groups[0].indices = {0, 1, 2, 3, 4, 5, 6, 7};
   result.groups[0].blob_shadow_size = 2.0f;
-  setFtlName("Chest", result.groups[1].name, sizeof(result.groups[1].name));
+  setFtlName("chest", result.groups[1].name, sizeof(result.groups[1].name));
   result.groups[1].origin = 5;
   result.groups[1].indices = {2, 5, 6, 7};
   result.groups[1].blob_shadow_size = 1.0f;
 
   result.actions.emplace_back();
-  setFtlName("VIEW_ATTACH", result.actions[0].name, sizeof(result.actions[0].name));
+  setFtlName("view_attach", result.actions[0].name, sizeof(result.actions[0].name));
   result.actions[0].vertex_idx = 6;
 
   const auto add_selection = [&](std::string_view name, std::vector<std::int32_t> selected) {
@@ -71,7 +71,7 @@ inline pistoris::Ftl makeSemanticModelFtl() {
   add_selection("chest", {2, 5});
   add_selection("1st", {1, 2});
   add_selection("cut_head", {7, 0, 1, 4, 6});
-  add_selection("HEAD", {2});
+  add_selection("head", {2});
   add_selection("unused_authoring_selection", {3});
 
   return result;

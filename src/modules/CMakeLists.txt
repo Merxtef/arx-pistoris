@@ -20,6 +20,11 @@ arx_add_internal_object_library(arx_pistoris_module_animation
   animation/validation.cpp
 )
 
+arx_add_internal_object_library(arx_pistoris_module_cinematic
+  cinematic/operations.cpp
+  cinematic/validation.cpp
+)
+
 arx_add_internal_object_library(arx_pistoris_module_geometry
   geometry/index.cpp
   geometry/operations.cpp
@@ -126,6 +131,7 @@ arx_add_internal_object_library(arx_pistoris_module_skeleton
 )
 
 arx_add_internal_object_library(arx_pistoris_module_sounds
+  sounds/handles.cpp
   sounds/inspection.cpp
   sounds/operations.cpp
   sounds/preparation.cpp
@@ -136,6 +142,7 @@ set(ARX_PISTORIS_MODULE_TARGETS
   arx_pistoris_module_action_points
   arx_pistoris_module_ambiance
   arx_pistoris_module_animation
+  arx_pistoris_module_cinematic
   arx_pistoris_module_geometry
   arx_pistoris_module_inventory_icon
   arx_pistoris_module_lights

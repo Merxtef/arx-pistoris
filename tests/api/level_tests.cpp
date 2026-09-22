@@ -7,6 +7,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/level/types.h"
+#include "arx_pistoris/native/text.h"
 
 #include "image_helpers.h"
 
@@ -273,7 +274,7 @@ TEST_SUITE("C Level API") {
     ArxLevelNativeBakeOptions options{};
     options.level_name = view("level7");
     options.reconstruct_quads = 1;
-    options.textures.include_files = 0;
+    options.include_texture_files = 0;
 
     ArxFts* fts = nullptr;
     ArxLlf* llf = nullptr;
@@ -285,7 +286,7 @@ TEST_SUITE("C Level API") {
     CHECK(arx_pistoris_dlf_validate(dlf) == ARX_OK);
 
     char* fts_json = nullptr;
-    CHECK(arx_pistoris_fts_to_json(fts, 1, &fts_json) == ARX_JSON_BAD_SCHEMA);
+    CHECK(arx_pistoris_fts_to_json(fts, 1, ARX_NATIVE_TEXT_UTF8, &fts_json) == ARX_JSON_BAD_SCHEMA);
     CHECK(fts_json == nullptr);
 
     char* llf_json = nullptr;
@@ -299,10 +300,11 @@ TEST_SUITE("C Level API") {
     arx_pistoris_free_string(llf_json);
 
     char* dlf_json = nullptr;
-    REQUIRE(arx_pistoris_dlf_to_json(dlf, 0, view("api"), &dlf_json) == ARX_OK);
+    REQUIRE(arx_pistoris_dlf_to_json(dlf, 0, view("api"), ARX_NATIVE_TEXT_UTF8, &dlf_json) == ARX_OK);
     CHECK(std::string_view(dlf_json).find("\"lastModifiedBy\":\"arx-pistoris/api\"") != std::string_view::npos);
     ArxDlf* json_dlf = nullptr;
-    REQUIRE(arx_pistoris_dlf_from_json(reinterpret_cast<const uint8_t*>(dlf_json), std::strlen(dlf_json), &json_dlf) ==
+    REQUIRE(arx_pistoris_dlf_from_json(
+                reinterpret_cast<const uint8_t*>(dlf_json), std::strlen(dlf_json), ARX_NATIVE_TEXT_UTF8, &json_dlf) ==
             ARX_OK);
     CHECK(arx_pistoris_dlf_validate(json_dlf) == ARX_OK);
     arx_pistoris_dlf_destroy(json_dlf);
@@ -310,9 +312,9 @@ TEST_SUITE("C Level API") {
 
     const std::array<uint8_t, 2> bad_json = {'{', ']'};
     ArxFts* json_fts = fts;
-    CHECK(arx_pistoris_fts_from_json(bad_json.data(), bad_json.size(), &json_fts) != ARX_OK);
+    CHECK(arx_pistoris_fts_from_json(bad_json.data(), bad_json.size(), ARX_NATIVE_TEXT_UTF8, &json_fts) != ARX_OK);
     CHECK(json_fts == nullptr);
-    CHECK(arx_pistoris_fts_to_json(nullptr, 0, &fts_json) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_fts_to_json(nullptr, 0, ARX_NATIVE_TEXT_UTF8, &fts_json) == ARX_INVALID_HANDLE);
 
     uint8_t* dlf_bytes = nullptr;
     size_t dlf_byte_count = 0;
@@ -377,7 +379,8 @@ TEST_SUITE("C Level API") {
 
     ArxLevel* from_native = nullptr;
     ArxTextureSourcePaths* native_sources = nullptr;
-    REQUIRE(arx_pistoris_level_import_native(fts, llf, dlf, &from_native, &native_sources) == ARX_OK);
+    REQUIRE(arx_pistoris_level_import_native(fts, llf, dlf, &from_native, &native_sources, ARX_NATIVE_TEXT_AUTO) ==
+            ARX_OK);
     REQUIRE(native_sources != nullptr);
     std::size_t native_source_count = 1;
     REQUIRE(arx_pistoris_texture_source_paths_count(native_sources, &native_source_count) == ARX_OK);

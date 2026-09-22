@@ -44,7 +44,7 @@ arx-pistor --help cli formats
 ```
 
 Help displays one page at a time. Primary topics are `cli`, `level`, `model`,
-`animation`, and `ambiance`. Topic names accept unambiguous prefixes for
+`animation`, `ambiance`, and `cinematic`. Topic names accept unambiguous prefixes for
 interactive use; use full names in scripts. An unrecognized word leaves the
 current general page selected, while an ambiguous prefix is an error.
 
@@ -56,10 +56,11 @@ current general page selected, while an ambiguous prefix is an error.
 | TEA animation | read/write | - | with an FTL skeleton | bidirectional |
 | FTS/DLF/LLF Level | read/write | - | bidirectional | bidirectional |
 | AMB ambiance | read/write | - | bidirectional | bidirectional |
+| CIN cinematic | read/write | - | bidirectional | - |
 
-GLB is the primary editable authoring format for Level, Model, and Ambiance
-data. Model GLB can also carry Animation sidecars; OBJ supports limited static
-Model authoring.
+GLB is the primary editable authoring format for Level, Model, Ambiance, and
+Cinematic data. Model GLB can also carry Animation sidecars; OBJ supports
+limited static Model authoring.
 
 JSON follows arx-convert schemas. A compound suffix such as `.ftl.json`,
 `.tea.json`, `.fts.json`, `.dlf.json`, `.llf.json`, or `.amb.json` explicitly
@@ -69,8 +70,8 @@ that converter still validates the document. The CLI translates JSON to or
 from native carriers before other work; it is not a separate editing model.
 
 Conversions limited to native formats and compatible JSON can complete without
-a Level, Model, Animation, or Ambiance rebuild. GLB or OBJ conversion normally
-requires a resource rebuild; debug-output exceptions are identified below.
+a Level, Model, Animation, Ambiance, or Cinematic rebuild. GLB or OBJ conversion
+normally requires a resource rebuild; debug-output exceptions are identified below.
 Options that edit, generate, transform, or rebase resource data also require a
 rebuild. Images and audio may be processed independently. The sections below
 state where either kind of processing changes paths, encoding, or normalization.
@@ -97,7 +98,7 @@ absolute.
 
 Relative loose outputs use `.` independently of the read mounts. With
 `--auto-mount`, a game-layout destination such as `level:40` or a relative DLF,
-FTL, TEA, or AMB path instead uses the standard game resource folder. Set an
+FTL, TEA, AMB, or CIN path instead uses the standard game resource folder. Set an
 explicit output root with:
 
 ```text
@@ -169,6 +170,21 @@ Relative raw paths are also resolved through mounts. Fully absolute raw paths
 bypass mounts. Logical resource paths use portable `/` separators and reject
 traversal, host-reserved characters, and ambiguous drive-relative or
 root-relative forms.
+
+`--native-text <auto|utf8|latin1>` controls text at native carrier boundaries.
+For native input, `auto` (the default) reads valid UTF-8 as UTF-8 and falls back
+to Latin-1; use an explicit mode when that guess is ambiguous. For rebuilt
+native output, `auto` and `utf8` write UTF-8, while `latin1` fails on text it
+cannot encode. JSON itself is always UTF-8; the option controls only its native
+carrier side. Direct native binary-to-binary conversion does not transcode
+carrier text, although native readers still canonicalize resource references
+and sidecar lookup decodes them using this mode. Rebuilt carrier references use
+the requested encoding whether or not sidecars are written; sidecar paths stay
+UTF-8. Latin-1 is intended for legacy compatibility. ASCII references are
+portable, while non-ASCII lookup depends on the target runtime, resource
+provider, and filesystem normalization. Native resource paths use the spelling
+the game uses for lookup rather than preserving their serialized spelling.
+Values accept unambiguous prefixes.
 
 ## Level Inputs
 
@@ -385,25 +401,26 @@ GLB. `--dlf-only` omits both images.
 
 ## Level Textures
 
-Texture loading has a format-reference pass followed by a game-resource pass.
-For loose FTS and JSON input, the first pass resolves the original native
-texture references relative to the input parent. For GLB input it resolves
-external image URIs relative to the input parent. An explicit folder replaces
-the parent only for this first pass:
+For loose input, texture loading first resolves the format's original image
+references relative to the input parent: native references for FTS and JSON,
+or external image URIs for GLB. Still-missing images are then sought by their
+normalized logical resource paths under that same parent. An explicit folder
+replaces the parent for both local lookups:
 
 ```text
 --input-texture-folder <path>
 ```
 
-Mount-relative DLF input is already in the game layout and skips the first
-pass. The second pass resolves every texture still missing image bytes from its
-normalized logical resource path through active mounts. It is never affected
-by `--input-texture-folder`.
+Finally, still-missing images are sought by their logical resource paths
+through active mounts. Mount-relative DLF input is already in the game layout
+and uses only this mounted lookup. Mounted lookup is never affected by
+`--input-texture-folder`.
 
 Native references and logical resource paths use the game's extension search
 order: `.png`, `.jpg`, `.jpeg`, `.bmp`, then `.tga`. The first existing file is
-authoritative. GLB external URIs use their exact suffix. Missing images warn
-only after both passes and remain valid path-only Level textures.
+authoritative. GLB external URIs use their exact suffix in the first local
+lookup. Missing images warn only after all applicable lookups and remain valid
+path-only Level textures.
 
 Rebase texture resource identities before output conversion:
 
@@ -488,9 +505,9 @@ Full native output reconstructs compatible FTS quads by default. Use
 `--no-quad-reconstruction` to keep surviving clipped triangles separate.
 
 Every DLF and LLF native or JSON write records the current modification time
-and `arx-pistoris` signer. `--sign-level <text>` changes the signer to
-`arx-pistoris/<text>`. If output contains neither DLF nor LLF, the option has
-no effect.
+and `arx-pistoris` signer. `--sign-level <text>` accepts printable ASCII and
+changes the signer to `arx-pistoris/<text>`. If output contains neither DLF nor
+LLF, the option has no effect.
 
 Native writers compress by default. Use `--no-compression` for raw output.
 
@@ -564,17 +581,19 @@ mount-relative FTL input supplies its class path automatically; a tweak uses the
 base Model class. Loose absolute FTL, GLB, OBJ, and JSON inputs require
 `--preview-class-path` for a usable class helper; without it the preview contains
 the visible `<class-path>` placeholder.
-The entity label comes from the input filename after known extensions and an
-exact final `_base` suffix are removed; an empty result becomes `asset`.
+For the generated Level entity label, the CLI repeatedly removes known format
+suffixes from the input filename. It then removes a final `_base` only when at
+least one character precedes it; an empty result becomes `asset`. The input
+filename is unchanged.
 
 A mount-relative FTL path or Model selector uses the game resource layout. It
 skips format-relative lookup and resolves logical Model texture paths through
 mounts. An absolute FTL path is loose: its original native references are
-resolved relative to the FTL parent, then unresolved textures fall back to
-their logical game resource paths through mounts. OBJ and GLB use the same
-two-pass process, with exact format paths in the first pass. For these loose
-inputs, `--input-texture-folder` replaces the input parent for the first pass
-only.
+resolved relative to the FTL parent. OBJ and GLB first resolve their exact
+format paths there. For all loose Model inputs, unresolved textures then try
+their logical resource paths under the same parent before falling back to
+active mounts. `--input-texture-folder` replaces the parent for both local
+lookups, but does not affect mounted lookup.
 
 OBJ input reads the material libraries declared by `mtllib` through the same
 IO service. `map_Kd` paths are resolved relative to the OBJ; the material name
@@ -804,8 +823,87 @@ and copies available sidecars without transcoding them. `--trim-to-master`
 requires an Ambiance rebuild even when both endpoints are AMB or JSON.
 
 For reference inputs with format-specific texture lookup,
-`--input-texture-folder` replaces the reference Model input parent. Missing
-images still fall back to logical game resource paths through active mounts.
+`--input-texture-folder` replaces the reference Model input parent for both
+local texture lookups. Missing images still fall back to logical game resource
+paths through active mounts.
+
+## Cinematic Workflows
+
+For the editable Cinematic hierarchy, see the
+[Cinematic authoring guide](authoring/CINEMATIC_GUIDE.md) or the exact
+[Cinematic naming reference](authoring/CINEMATIC_REFERENCE.md).
+
+Export a mounted CIN resource to GLB and bake the edited result back into the
+game layout:
+
+```text
+arx-pistor --auto-mount cinematic:intro intro.glb
+arx-pistor --auto-mount intro.glb cinematic:intro
+```
+
+For loose CIN input or output, use an absolute CIN path. For example, on
+Windows (substitute an absolute path for your platform):
+
+```text
+arx-pistor C:/project/intro.cin intro.glb
+arx-pistor intro.glb C:/project/intro.cin
+```
+
+A relative CIN path uses the game resource layout, not the loose-file layout.
+
+Cinematic GLB embeds illustration images. Loose CIN input looks for native
+image references, then logical illustration paths, relative to the CIN parent
+or `--input-texture-folder`; unresolved images fall back to mounts. CIN output
+writes available illustration sidecars; `--skip-texture-export` keeps only the
+native references. GLB output always needs valid illustration images and does
+not accept that skip option. When output is rebuilt through the Cinematic
+representation, game-layout CIN uses BMP illustration sidecars so an older BMP
+cannot hide a new TGA at the same logical path. Rebuilt loose CIN retains
+compatible BMP or TGA images and converts others to TGA while preserving
+transparency.
+
+CIN effect references resolve below `sfx/`. Speech references are
+language-independent, so the CLI looks for matching files below every
+`speech/<language>/` directory and registers a language only after loading a
+valid file. For loose CIN input these roots are relative to the CIN parent or
+`--input-sound-folder`; WAV, MP3, and Ogg are tried in that order. Mounted CIN
+input uses active resource mounts and follows the game's WAV-only lookup.
+
+CIN-to-CIN conversion preserves the native carrier when its sidecars can be
+copied without changing representation. This covers same-layout conversion and
+mounted-to-loose export. Loose-to-game conversion with sidecar export rebuilds
+the Cinematic so game output is written as BMP and WAV; skipping both sidecar
+exports leaves the carrier eligible for direct conversion.
+
+Canonical Cinematic GLB uses logical audio references without adding a physical
+extension. Effect sidecars are named `<path>.<extension>`, while speech sidecars
+are named `<path>[<language>].<extension>`. On input, a terminal `.wav`, `.mp3`,
+or `.ogg` in a reference is treated as a preferred lookup hint and removed
+from the logical identity; the other supported formats are still tried. A
+recognized `[<language>]` suffix on a speech filename is accepted with a
+warning and also removed from the logical identity; it does not limit
+discovery to that language. Unknown suffixes remain part of the path. Output
+uses the extension of the encoded audio actually written.
+
+`--skip-sound-export` preserves and canonicalizes references without reading,
+discovering, or writing audio files. `--input-sound-folder` replaces the loose
+input parent for audio lookup. `--rebase-sounds` changes both effect and speech
+paths; use `--rebase-sfx` or `--rebase-speech` to change one namespace. The
+aggregate option cannot be combined with either targeted option, while both
+targeted options may be used together.
+
+For a `cinematic:` selector written to loose GLB, automatic rebasing uses
+`textures/` for illustrations, `sounds/` for effects, and `speech/` for speech.
+Loose GLB written to a `cinematic:` selector uses the canonical illustration
+directory and native sound roots. Explicit rebase options override the matching
+automatic choice. Raw paths and same-layout conversions do not automatically
+rebase logical paths; GLB audio filename hints are still canonicalized on input.
+
+Canonical Cinematic GLB export uses 100 image pixels per GLB unit. Import derives
+camera depth from the illustration and vertical field of view; camera aspect
+does not change the baked values. Horizontal framing follows the game's display
+and letterbox mode. General GLB coordinate options are accepted for
+command-line uniformity but do not change Cinematic conversion.
 
 ## Output Safety
 

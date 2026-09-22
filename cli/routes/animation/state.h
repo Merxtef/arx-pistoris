@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/animation.hpp"
 #include "arx_pistoris/native/tea.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/sound.hpp"
 
 #include <variant>
@@ -15,6 +16,7 @@ namespace cli::animation {
 struct NativeAnimation {
   pistoris::Tea animation;
   std::vector<pistoris::SoundFile> sound_files;
+  pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 
 struct IntermediateAnimation {

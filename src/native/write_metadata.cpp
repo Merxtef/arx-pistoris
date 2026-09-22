@@ -3,6 +3,9 @@
 
 #include "native/write_metadata.h"
 
+#include "arx_pistoris/base/status.h"
+
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -13,15 +16,6 @@ namespace pistoris {
 namespace {
 
 constexpr std::string_view kWriter = "arx-pistoris";
-
-bool utf8Continuation(char value) noexcept { return (static_cast<unsigned char>(value) & 0xc0U) == 0x80U; }
-
-std::size_t truncatedUtf8Size(std::string_view value, std::size_t capacity) noexcept {
-  if (value.size() <= capacity) return value.size();
-  std::size_t size = capacity;
-  while (size > 0 && utf8Continuation(value[size])) --size;
-  return size;
-}
 
 std::int32_t currentUnixTime() noexcept {
   const auto seconds =
@@ -34,16 +28,17 @@ std::int32_t currentUnixTime() noexcept {
 
 }  // namespace
 
-NativeWriteMetadata nativeWriteMetadata(std::string_view signer) noexcept {
+ArxReturnCode nativeWriteMetadata(std::string_view signer, NativeWriteMetadata& out) noexcept {
+  for (const unsigned char value : signer)
+    if (value < 0x20U || value > 0x7eU) return ARX_INVALID_OPTIONS;
+
   NativeWriteMetadata result;
   std::memcpy(result.last_user.data(), kWriter.data(), kWriter.size());
   result.last_user_size = kWriter.size();
 
-  const std::size_t nul = signer.find('\0');
-  if (nul != std::string_view::npos) signer = signer.substr(0, nul);
   if (!signer.empty()) {
     const std::size_t capacity = result.last_user.size() - result.last_user_size - 2;
-    const std::size_t size = truncatedUtf8Size(signer, capacity);
+    const std::size_t size = std::min(signer.size(), capacity);
     if (size != 0) {
       result.last_user[result.last_user_size++] = '/';
       std::memcpy(result.last_user.data() + result.last_user_size, signer.data(), size);
@@ -51,7 +46,8 @@ NativeWriteMetadata nativeWriteMetadata(std::string_view signer) noexcept {
     }
   }
   result.modified_at = currentUnixTime();
-  return result;
+  out = result;
+  return ARX_OK;
 }
 
 }  // namespace pistoris

@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/sound.hpp"
 
 #include "utils/identifier.h"
 
@@ -37,7 +38,7 @@ struct AnimationKeyframe {
   ArxVector3 root_translation{};
   ArxQuat root_rotation{};
   bool footstep = false;
-  SoundIndex sound = kNoSound;
+  SoundHandle sound = kNoSoundHandle;
 };
 
 struct AnimationData {

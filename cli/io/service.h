@@ -33,6 +33,16 @@ enum class ImageLookupMode : std::uint8_t {
   kGamePriority,
 };
 
+enum class AudioLookupMode : std::uint8_t {
+  kExact,
+  kFormatPriority,
+};
+
+struct EnumeratedFile {
+  std::string relative_path;
+  PathLocation location;
+};
+
 class IoService {
  public:
   IoService(OverwriteMode overwrite, bool dry_run, const std::vector<std::string>& read_mounts,
@@ -54,6 +64,9 @@ class IoService {
   ResourceReadResult readImage(const PathLocation& base, std::string_view path, ImageLookupMode mode,
                                std::vector<std::uint8_t>& out, std::string* selected_path = nullptr,
                                std::string* resolved_path = nullptr);
+  ResourceReadResult readAudio(const PathLocation& base, std::string_view path, AudioLookupMode mode,
+                               std::vector<std::uint8_t>& out, std::string* selected_path = nullptr,
+                               std::string* resolved_path = nullptr);
   bool isAbsolutePath(std::string_view requested, bool& out, std::string& error) const;
 
   bool resolveOutputLocation(std::string_view requested, OutputLocation& out, std::string& error) const;
@@ -62,6 +75,8 @@ class IoService {
                                   std::string* resolved_path = nullptr);
   ResourceEnumerationResult enumerateResources(std::string_view base_path, std::uint32_t max_depth,
                                                std::vector<std::string>& out);
+  ResourceEnumerationResult enumerateFiles(const PathLocation& directory, std::uint32_t max_depth,
+                                           std::vector<EnumeratedFile>& out);
   ResourceEnumerationResult enumerateFiles(const PathLocation& directory, std::vector<PathLocation>& out);
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] bool hasReadMounts() const noexcept;

@@ -5,10 +5,13 @@
 
 #include "arx_pistoris/base/math.hpp"
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/text.hpp"
 
 #include "nlohmann/json.hpp"
 #include "utils/log.h"
+#include "utils/native_text.h"
 #include "utils/return_code.h"
+#include "utils/utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -158,19 +161,18 @@ std::string fixedString(const char (&value)[N]) {
 }
 
 template <std::size_t N>
-bool copyFixed(std::string_view source, char (&out)[N]) {
-  if (source.size() >= N || source.find('\0') != std::string_view::npos) return false;
-  source.copy(out, source.size());
-  std::memset(out + source.size(), 0, N - source.size());
-  return true;
+bool decodeFixed(const char (&value)[N], NativeTextMode mode, std::string& out) {
+  return native_text::decode(fixedString(value), mode, out);
 }
 
 template <std::size_t N>
-void copyTruncated(std::string_view source, char (&out)[N]) {
-  static_assert(N != 0);
-  const std::size_t size = std::min(source.size(), N - 1);
-  source.copy(out, size);
-  std::memset(out + size, 0, N - size);
+bool encodeFixed(std::string_view source, NativeTextMode mode, char (&out)[N]) {
+  return native_text::encodeFixed(source, mode, out);
+}
+
+template <std::size_t N>
+bool encodeTruncated(std::string_view source, NativeTextMode mode, char (&out)[N]) {
+  return native_text::encodeTruncated(source, mode, out);
 }
 
 inline std::string lowerSlashes(std::string_view source) {
@@ -200,6 +202,7 @@ ArxReturnCode guarded(const char* label, Fn&& fn) {
 }
 
 inline ArxReturnCode parse(std::string_view text, Json& out) {
+  if (!utf8::valid(text)) return ARX_TEXT_INVALID_UTF8;
   out = Json::parse(text, nullptr, false);
   return out.is_discarded() ? ARX_JSON_BAD_FORMAT : ARX_OK;
 }

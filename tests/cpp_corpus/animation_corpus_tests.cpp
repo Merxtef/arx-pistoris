@@ -42,8 +42,9 @@ TEST_SUITE("animation_corpus") {
       if (test_support::isCommittedFixture(path)) fixture_hydrations += hydration->hydrated;
 
       pistoris::NativeAnimationBundle baked;
-      if (!test_support::checkCorpusStatus(
-              path, "bake Animation to native bundle", animation.bakeNativeBundle({.include_files = true}, baked)))
+      if (!test_support::checkCorpusStatus(path,
+                                           "bake Animation to native bundle",
+                                           animation.bakeNativeBundle({.include_sound_files = true}, baked)))
         continue;
       if (!test_support::validateSoundFiles(animation, std::span<const pistoris::SoundFile>(baked.sound_files)))
         continue;

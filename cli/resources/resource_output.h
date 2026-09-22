@@ -22,6 +22,7 @@ enum class ResourceFileKind : std::uint8_t {
 enum class ResourceAssetKind : std::uint8_t {
   kAmbiance,
   kAnimation,
+  kCinematic,
   kLevel,
   kModel,
 };

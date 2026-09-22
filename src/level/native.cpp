@@ -3,10 +3,12 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.hpp"
+#include "arx_pistoris/native/text.hpp"
 
 #include "api/status_boundary.h"
 #include "level/data.h"
 #include "level/native/api.h"
+#include "utils/native_text.h"
 
 #include <string>
 #include <utility>
@@ -15,14 +17,16 @@
 namespace pistoris {
 
 ArxReturnCode Level::importNative(Level& out, const fts::Data& fts, const llf::Data* llf, const dlf::Data* dlf,
-                                  std::vector<std::string>* texture_source_paths) noexcept {
+                                  std::vector<std::string>* texture_source_paths, NativeTextMode text_mode) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
     Level tmp;
     std::vector<std::string> source_paths;
     ArxReturnCode rc = level_native::buildLevel({fts, llf, dlf},
                                                 static_cast<LevelModules&>(*tmp.data_),
                                                 &tmp.data_->validation,
-                                                texture_source_paths ? &source_paths : nullptr);
+                                                texture_source_paths ? &source_paths : nullptr,
+                                                text_mode);
     if (rc != ARX_OK) return rc;
     out.swap(tmp);
     if (texture_source_paths) *texture_source_paths = std::move(source_paths);

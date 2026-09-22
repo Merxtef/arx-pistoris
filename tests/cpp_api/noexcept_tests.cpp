@@ -12,6 +12,7 @@
 #include "arx_pistoris/native.hpp"
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -30,7 +31,7 @@ static_assert(noexcept(std::declval<pistoris::Level&>().setResourcePath({})));
 static_assert(noexcept(std::declval<const pistoris::Animation&>().bakeNative(std::declval<pistoris::Tea&>())));
 static_assert(noexcept(std::declval<const pistoris::Ambiance&>().bakeNative(std::declval<pistoris::Amb&>())));
 static_assert(noexcept(std::declval<const pistoris::Model&>().bakeNativeBundle(
-    std::declval<const pistoris::NativeTextureBakeOptions&>(), std::declval<pistoris::NativeModelBundle&>())));
+    std::declval<const pistoris::NativeModelBakeOptions&>(), std::declval<pistoris::NativeModelBundle&>())));
 static_assert(noexcept(std::declval<const pistoris::Level&>().bakeNativeBundle(
     std::declval<const pistoris::Level::NativeBakeOptions&>(), std::declval<pistoris::NativeLevelBundle&>())));
 
@@ -43,6 +44,9 @@ static_assert(noexcept(pistoris::Model::importObj(std::declval<pistoris::Model&>
 static_assert(noexcept(pistoris::readFtl({}, std::declval<pistoris::Ftl&>())));
 static_assert(noexcept(pistoris::writeTea(std::declval<const pistoris::Tea&>(),
                                           std::declval<std::vector<std::uint8_t>&>())));
+static_assert(noexcept(pistoris::binary::classifyTextEncoding({})));
+static_assert(noexcept(pistoris::binary::latin1ToUtf8({}, std::declval<std::string&>())));
+static_assert(noexcept(pistoris::binary::utf8ToLatin1({}, std::declval<std::string&>())));
 static_assert(noexcept(pistoris::binary::validateEncodedImage({})));
 static_assert(noexcept(pistoris::level_images::renderLoadingScreenPng(
     {}, pistoris::level_images::LoadingScreenLayout::kOriginal, std::declval<std::vector<std::uint8_t>&>())));

@@ -32,6 +32,11 @@ For a new Level:
 Use ordinary names for organizational nodes. Reserve `arx_` names for the
 documented semantic objects.
 
+Keep the final descriptive labels shown on semantic roots and helpers. Import
+can recover labels from fixed helper grammars when omitted, but warns. Keep the
+labels on entity `CLASS` and zone `AMBIANCE` helpers because their payloads may
+contain `__` and have no other reliable end delimiter.
+
 [Exact coordinate rules](LEVEL_REFERENCE.md#level-space)
 
 ## Geometry and Materials

@@ -16,7 +16,7 @@ namespace {
 
 inline constexpr FormatMask kTextureFileOutputs = formatBit(Format::kFtl) | formatBit(Format::kFts) |
                                                   formatBit(Format::kDlf) | formatBit(Format::kJson) |
-                                                  formatBit(Format::kObj);
+                                                  formatBit(Format::kObj) | formatBit(Format::kCin);
 
 class SkipTextureExportModule final : public OutputFormatModule<kTextureFileOutputs> {
  public:

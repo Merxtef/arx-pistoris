@@ -56,7 +56,6 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <vector>
 
 namespace pistoris {
@@ -68,6 +67,11 @@ constexpr std::size_t kDlfMaxNodeLinks = 0x10000;
 constexpr std::size_t kDlfMaxFogs = 0x10000;
 constexpr std::size_t kDlfMaxPaths = 0x10000;
 constexpr std::size_t kDlfMaxPathNodes = 0x100000;
+constexpr std::size_t kDlfScenePathCapacity = 512;
+constexpr std::size_t kDlfEntityClassPathCapacity = 512;
+constexpr std::size_t kDlfZoneNameCapacity = 64;
+constexpr std::size_t kDlfZoneAmbianceCapacity = 128;
+constexpr std::size_t kDlfPathNameCapacity = 64;
 
 namespace dlf {
 
@@ -77,7 +81,7 @@ struct PlayerSpawn {
 };
 
 struct Entity {
-  std::string class_path;
+  char class_path[kDlfEntityClassPathCapacity] = {};
   std::int32_t ident = -1;
   ArxVector3 position = {};
   ArxAngle angle = {};
@@ -97,12 +101,12 @@ struct Fog {
 };
 
 struct ZoneAmbiance {
-  std::string name;
+  char name[kDlfZoneAmbianceCapacity] = {};
   float volume = 100.0f;
 };
 
 struct Zone {
-  std::string name;
+  char name[kDlfZoneNameCapacity] = {};
   ArxVector3 position = {};
   std::vector<ArxVector3> points;
   std::int32_t height = 0;
@@ -124,7 +128,7 @@ struct PathNode {
 };
 
 struct Path {
-  std::string name;
+  char name[kDlfPathNameCapacity] = {};
   ArxVector3 position = {};
   std::vector<PathNode> nodes;
 };
@@ -132,7 +136,7 @@ struct Path {
 struct Data {
   float version = kDlfVersion;
   PlayerSpawn player_spawn;
-  std::string scene_path;
+  char scene_path[kDlfScenePathCapacity] = {};
   std::vector<Entity> entities;
   std::vector<Fog> fogs;
   std::vector<Zone> zones;

@@ -5,6 +5,7 @@
 
 #include "routes/ambiance/route.h"
 #include "routes/animation/route.h"
+#include "routes/cinematic/route.h"
 #include "routes/descriptor.h"
 #include "routes/level/route.h"
 #include "routes/model/route.h"
@@ -17,6 +18,7 @@ RouteRegistryView routeRegistry() {
   static const RouteDescriptor kRoutes[] = {
       animation::routeDescriptor(),
       ambiance::routeDescriptor(),
+      cinematic::routeDescriptor(),
       model::routeDescriptor(),
       level::routeDescriptor(),
   };

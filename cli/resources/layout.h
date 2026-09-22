@@ -22,6 +22,7 @@ constexpr ResourceLayout primaryResourceLayout(Format format, PathAddress addres
     case Format::kTea:
     case Format::kDlf:
     case Format::kAmb:
+    case Format::kCin:
       return ResourceLayout::kGame;
     default:
       return ResourceLayout::kLoose;

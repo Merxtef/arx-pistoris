@@ -9,6 +9,7 @@
 #include "arx_pistoris/base/audio.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/native/text.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -21,8 +22,14 @@ typedef struct arx_pistoris_animation ArxAnimation;
 typedef struct arx_pistoris_animation_list ArxAnimationList;
 typedef struct arx_pistoris_sound_files ArxSoundFiles;
 typedef struct arx_pistoris_sound_source_references ArxSoundSourceReferences;
-typedef struct ArxNativeSoundBakeOptions ArxNativeSoundBakeOptions;
 typedef struct ArxSoundView ArxSoundView;
+
+typedef struct ArxNativeAnimationBakeOptions {
+  uint8_t include_sound_files;
+  ArxNativeTextMode text_mode;
+} ArxNativeAnimationBakeOptions;
+
+#define ARX_NATIVE_ANIMATION_BAKE_OPTIONS_INIT {1U, ARX_NATIVE_TEXT_AUTO}
 
 /*
  * Input string, encoded-audio, and group-transform storage required only for call duration
@@ -47,10 +54,11 @@ ARX_API void arx_pistoris_animation_list_destroy(ArxAnimationList* list) ARX_NOE
 // --- Conversion ---
 
 ARX_API ArxReturnCode arx_pistoris_animation_import_native(const ArxTea* native, ArxAnimation** out_animation,
-                                                           ArxSoundSourceReferences** out_sound_sources) ARX_NOEXCEPT;
+                                                           ArxSoundSourceReferences** out_sound_sources,
+                                                           ArxNativeTextMode text_mode) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_animation_bake_native(const ArxAnimation* animation,
-                                                         const ArxNativeSoundBakeOptions* options, ArxTea** out_native,
-                                                         ArxSoundFiles** out_sounds) ARX_NOEXCEPT;
+                                                         const ArxNativeAnimationBakeOptions* options,
+                                                         ArxTea** out_native, ArxSoundFiles** out_sounds) ARX_NOEXCEPT;
 
 // --- Validation ---
 

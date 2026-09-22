@@ -55,7 +55,7 @@ ArxAmbiancePannedKey pannedKey() {
 TEST_SUITE("C++ Ambiance API") {
   TEST_CASE("Converts native data losslessly through semantic keys") {
     pistoris::Amb native = makeAmbData();
-    native.tracks.front().sample_path = R"(sfx\ambiance\test.wav)";
+    native.tracks.front().sample_path = "sfx/ambiance/test.wav";
     pistoris::Ambiance ambiance;
     REQUIRE(pistoris::Ambiance::importNative(ambiance, native) == ARX_OK);
     CHECK(ambiance.resourcePath().empty());
@@ -251,6 +251,10 @@ TEST_SUITE("C++ Ambiance API") {
     const ArxAmbiancePannedTrackInput bad_pointer{sound, nullptr, 1};
     CHECK(ambiance.addPannedTrack(bad_pointer, index) == ARX_INVALID_DATA_POINTER);
     CHECK(ambiance.copyTracks(1, 0, nullptr) == ARX_INDEX_OUT_OF_RANGE);
+
+    const ArxAmbiancePannedTrackInput no_sound{pistoris::kNoSound, &key, 1};
+    CHECK(ambiance.addPannedTrack(no_sound, index) == ARX_AMBIANCE_BAD_TRACK_SOUND);
+    CHECK(index == pistoris::kInvalidAmbianceTrackIndex);
 
     if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
       const ArxAmbiancePannedTrackInput too_many{

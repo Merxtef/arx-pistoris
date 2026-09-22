@@ -322,7 +322,7 @@ TEST_SUITE("tea") {
     pistoris::tea::Data d;
     REQUIRE(load(buf, d) == ARX_OK);
     REQUIRE(d.keyframes[0].sample.has_value());
-    CHECK(std::strcmp(d.keyframes[0].sample->name, "test.wav") == 0);
+    CHECK(std::strcmp(d.keyframes[0].sample->name, "test") == 0);
   }
 
   TEST_CASE("TeaKeyframeWithMorph") {

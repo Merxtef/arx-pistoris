@@ -6,10 +6,13 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/cinematic.hpp"
 #include "arx_pistoris/level.hpp"
 #include "arx_pistoris/model.hpp"
+#include "arx_pistoris/native/cin.hpp"
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/texture.h"
@@ -18,6 +21,7 @@
 #include "base/resource_path.h"
 #include "console/diagnostics.h"
 #include "console/logging.h"
+#include "io/native_text.h"
 #include "io/path_location.h"
 #include "io/service.h"
 #include "media/encoded.h"
@@ -197,6 +201,25 @@ bool loadTextures(std::span<const TextureLookup> textures, std::span<const std::
         ++loaded_count;
       }
     }
+
+    for (std::size_t index = 0; index < textures.size(); ++index) {
+      if (loaded[index] || textures[index].path.empty()) continue;
+      const TextureLoadResult result = tryLoadTexture(
+          io,
+          input.source_base,
+          textures[index].path,
+          ImageLookupMode::kGamePriority,
+          owner,
+          textures[index].path,
+          [&](std::vector<std::uint8_t> encoded, std::string_view selected_path) {
+            return apply(
+                static_cast<pistoris::TextureIndex>(index), selectedExtension(selected_path), std::move(encoded));
+          });
+      if (result == TextureLoadResult::kLoaded) {
+        loaded[index] = true;
+        ++loaded_count;
+      }
+    }
   }
 
   const PathLocation mounts;
@@ -255,7 +278,8 @@ bool loadAssetTextureImages(Asset& asset, IoService& io, const TextureInput& inp
 
 template <typename Range, typename PathOf>
 void loadNativePaths(const Range& native_paths, PathOf&& path_of, IoService& io, const TextureInput& input,
-                     std::string_view owner, std::vector<pistoris::NativeTextureFile>& out) {
+                     pistoris::NativeTextMode text_mode, std::string_view owner,
+                     std::vector<pistoris::NativeTextureFile>& out) {
   std::vector<TextureLookup> textures;
   std::vector<std::string> source_paths;
   textures.reserve(native_paths.size());
@@ -264,13 +288,23 @@ void loadNativePaths(const Range& native_paths, PathOf&& path_of, IoService& io,
   textures_by_path.reserve(native_paths.size());
   for (const auto& entry : native_paths) {
     const std::string_view native_path = path_of(entry);
-    std::string logical_path = nativeLogicalPath(native_path);
+    std::string utf8_path;
+    const ArxReturnCode rc = io_detail::nativeTextToUtf8(native_path, text_mode, utf8_path);
+    if (rc != ARX_OK) {
+      log(ARX_LOG_WARN,
+          "%.*s native texture path cannot be decoded; skipping referenced image (code %d)",
+          static_cast<int>(owner.size()),
+          owner.data(),
+          static_cast<int>(rc));
+      continue;
+    }
+    std::string logical_path = nativeLogicalPath(utf8_path);
     const std::string identity = textureIdentity(logical_path);
     const bool inserted =
         textures_by_path.emplace(identity, static_cast<pistoris::TextureIndex>(textures.size())).second;
     if (inserted) {
       textures.push_back({std::move(logical_path), false});
-      source_paths.emplace_back(native_path);
+      source_paths.push_back(std::move(utf8_path));
     }
   }
 
@@ -306,8 +340,13 @@ bool loadTextureImages(pistoris::Model& model, IoService& io, const TextureInput
   return loadAssetTextureImages(model, io, input, source_paths, "Model");
 }
 
-void loadNativeTextureFiles(const pistoris::ftl::Data& ftl, IoService& io, const TextureInput& input,
-                            std::vector<pistoris::NativeTextureFile>& out) {
+bool loadTextureImages(pistoris::Cinematic& cinematic, IoService& io, const TextureInput& input,
+                       std::span<const std::string> source_paths) {
+  return loadAssetTextureImages(cinematic, io, input, source_paths, "Cinematic");
+}
+
+void loadNativeTextureFiles(const pistoris::ftl::Data& ftl, pistoris::NativeTextMode text_mode, IoService& io,
+                            const TextureInput& input, std::vector<pistoris::NativeTextureFile>& out) {
   loadNativePaths(
       ftl.texture_containers,
       [](const pistoris::ftl::TextureContainer& container) {
@@ -315,17 +354,30 @@ void loadNativeTextureFiles(const pistoris::ftl::Data& ftl, IoService& io, const
       },
       io,
       input,
+      text_mode,
       "Model",
       out);
 }
 
-void loadNativeTextureFiles(const pistoris::fts::Data& fts, IoService& io, const TextureInput& input,
-                            std::vector<pistoris::NativeTextureFile>& out) {
+void loadNativeTextureFiles(const pistoris::fts::Data& fts, pistoris::NativeTextMode text_mode, IoService& io,
+                            const TextureInput& input, std::vector<pistoris::NativeTextureFile>& out) {
   std::vector<std::pair<std::int32_t, std::string_view>> ordered;
   ordered.reserve(fts.textures.size());
   for (const auto& [id, texture] : fts.textures) ordered.emplace_back(id, texture.fic);
   std::sort(ordered.begin(), ordered.end(), [](const auto& lhs, const auto& rhs) { return lhs.first < rhs.first; });
-  loadNativePaths(ordered, [](const auto& entry) { return entry.second; }, io, input, "Level", out);
+  loadNativePaths(ordered, [](const auto& entry) { return entry.second; }, io, input, text_mode, "Level", out);
+}
+
+void loadNativeTextureFiles(const pistoris::cin::Data& cin, pistoris::NativeTextMode text_mode, IoService& io,
+                            const TextureInput& input, std::vector<pistoris::NativeTextureFile>& out) {
+  loadNativePaths(
+      cin.bitmaps,
+      [](const pistoris::cin::Bitmap& bitmap) -> std::string_view { return bitmap.path; },
+      io,
+      input,
+      text_mode,
+      "Cinematic",
+      out);
 }
 
 bool addNativeTextureFileOutputs(ResourceOutputPlan& plan, IoService& io, const TextureOutput& output,

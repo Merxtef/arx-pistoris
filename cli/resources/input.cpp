@@ -33,6 +33,7 @@ bool validateClassification(const ClassifiedPath& input) {
     case Format::kFtl:
     case Format::kTea:
     case Format::kAmb:
+    case Format::kCin:
     case Format::kGlb:
     case Format::kFts:
     case Format::kLlf:

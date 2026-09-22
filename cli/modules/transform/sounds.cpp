@@ -29,8 +29,8 @@ class RebaseSoundsModule final : public SharedConversionModule {
       diagnostic(DiagnosticCode::kMissingArgument, "--rebase-sounds: expected argument");
       return {.ok = false};
     }
-    ctx.options.conversion.rebase_sounds = true;
-    ctx.options.conversion.sound_directory = ctx.argv[++ctx.index];
+    ctx.options.conversion.sounds.requested = true;
+    ctx.options.conversion.sounds.directory = ctx.argv[++ctx.index];
     return {};
   }
 };

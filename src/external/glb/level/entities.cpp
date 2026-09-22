@@ -12,6 +12,7 @@
 #include "coordinates.h"
 #include "external/glb/model/mesh_export.h"
 #include "external/glb/node_graph.h"
+#include "external/glb/utils/names.h"
 #include "external/glb/utils/node.h"
 #include "external/glb/utils/tokens.h"
 #include "external/glb/utils/transform.h"
@@ -132,11 +133,9 @@ ArxReturnCode entityClassPath(const cgltf_data& data, const cgltf_node& root, st
     if (index < 0 || static_cast<std::size_t>(index) >= data.nodes_count) return ARX_GLB_BAD_FORMAT;
     const std::string_view name = child.name != nullptr ? child.name : "";
     if (!name.starts_with(kPrefix)) continue;
-    const std::size_t label_separator = name.rfind("__");
-    if (label_separator == std::string_view::npos || label_separator < kPrefix.size() ||
-        label_separator + 2 == name.size() || !glb::simpleEmptyNode(child))
-      return ARX_GLB_BAD_LEVEL_ENTITY;
-    const std::string_view encoded = name.substr(kPrefix.size(), label_separator - kPrefix.size());
+    const std::optional<glb::LabeledValue> labeled = glb::splitRequiredLabel(name.substr(kPrefix.size()));
+    if (!labeled || !glb::simpleEmptyNode(child)) return ARX_GLB_BAD_LEVEL_ENTITY;
+    const std::string_view encoded = labeled->value;
     std::string candidate;
     bool candidate_legacy_teo = false;
     if (constexpr std::string_view kModelPrefix = "model:"; encoded.starts_with(kModelPrefix)) {

@@ -28,12 +28,14 @@ arx_add_internal_object_library(arx_pistoris_utils
   utils/math/mat4.cpp
   utils/math/triangulation.cpp
   utils/name_tokens.cpp
+  utils/native_text.cpp
   utils/pkware.cpp
   utils/portable_filename.cpp
   utils/resource_path.cpp
   utils/spatial/arx_level_grid_index.cpp
   utils/spatial/xz_point_index.cpp
   utils/text_cursor.cpp
+  utils/text_encoding.cpp
 )
 target_link_libraries(arx_pistoris_utils PRIVATE mapbox_earcut arx_pistoris_audio_codecs arx_pistoris_stb
                                                    arx_pistoris_pkware)
@@ -46,11 +48,14 @@ arx_add_internal_object_library(arx_pistoris_external
 
 arx_add_internal_object_library(arx_pistoris_native
   native/amb.cpp
+  native/cin.cpp
+  native/cin_resource_path.cpp
   native/dlf.cpp
   native/ftl.cpp
   native/fts.cpp
   native/lighting_layout.cpp
   native/llf.cpp
+  native/resource_path.cpp
   native/resource_lookup.cpp
   native/storage.cpp
   native/tea.cpp
@@ -71,6 +76,7 @@ arx_add_internal_object_library(arx_pistoris_editing
   ambiance/ambiance.cpp
   ambiance/timing.cpp
   animation/animation.cpp
+  cinematic/cinematic.cpp
   level/images.cpp
   level/level.cpp
   level/minimap/generation.cpp
@@ -87,6 +93,7 @@ arx_add_internal_object_library(arx_pistoris_editing
 arx_add_internal_object_library(arx_pistoris_native_conversion
   ambiance/native.cpp
   animation/native.cpp
+  cinematic/native.cpp
   level/native/bake.cpp
   level/native/build.cpp
   level/native/dlf.cpp
@@ -103,9 +110,15 @@ arx_add_internal_object_library(arx_pistoris_native_conversion
 
 arx_add_internal_object_library(arx_pistoris_glb
   ambiance/glb.cpp
+  cinematic/glb.cpp
   external/glb/accessor.cpp
   external/glb/ambiance/export.cpp
   external/glb/ambiance/import.cpp
+  external/glb/cinematic/coordinates.cpp
+  external/glb/cinematic/export.cpp
+  external/glb/cinematic/import.cpp
+  external/glb/cinematic/names.cpp
+  external/glb/cinematic/surface.cpp
   external/glb/container.cpp
   external/glb/geometry_material.cpp
   external/glb/level/anchor_metadata.cpp
@@ -154,6 +167,7 @@ arx_add_internal_object_library(arx_pistoris_glb
   external/glb/primitive_indices.cpp
   external/glb/utils/image.cpp
   external/glb/utils/names.cpp
+  external/glb/utils/sound.cpp
   external/glb/utils/texture.cpp
   external/glb/utils/tokens.cpp
   external/glb/utils/transform.cpp
@@ -222,6 +236,10 @@ set(ARX_PISTORIS_C_API_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/animation/core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/animation/edit.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/animation/list.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/c/cinematic/access.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/c/cinematic/core.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/c/cinematic/edit.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/c/cinematic/glb.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/level/access.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/level/core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/level/edit.cpp
@@ -232,6 +250,7 @@ set(ARX_PISTORIS_C_API_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/model/edit.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/model/generation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/native/amb.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/api/c/native/cin.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/native/dlf.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/native/ftl.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/api/c/native/fts.cpp

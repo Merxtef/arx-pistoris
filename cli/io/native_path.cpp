@@ -3,7 +3,8 @@
 
 #include "io/native_path.h"
 
-#include <cstddef>
+#include "arx_pistoris/binary.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -14,6 +15,7 @@
 #ifdef _WIN32
 #include "io/paths.h"
 
+#include <cstddef>
 #include <iterator>
 #include <limits>
 
@@ -27,48 +29,6 @@
 
 namespace cli::io_detail {
 namespace {
-
-bool validUtf8(std::string_view text) {
-  const auto continuation = [](unsigned char value) { return value >= 0x80 && value <= 0xbf; };
-  for (std::size_t index = 0; index < text.size();) {
-    const unsigned char first = static_cast<unsigned char>(text[index++]);
-    if (first <= 0x7f) continue;
-
-    if (first >= 0xc2 && first <= 0xdf) {
-      if (index >= text.size() || !continuation(static_cast<unsigned char>(text[index]))) return false;
-      ++index;
-      continue;
-    }
-
-    if (first >= 0xe0 && first <= 0xef) {
-      if (index + 1 >= text.size()) return false;
-      const unsigned char second = static_cast<unsigned char>(text[index++]);
-      const unsigned char third = static_cast<unsigned char>(text[index++]);
-      if (!continuation(third) || (first == 0xe0 && (second < 0xa0 || second > 0xbf)) ||
-          (first == 0xed && (second < 0x80 || second > 0x9f)) ||
-          (first != 0xe0 && first != 0xed && !continuation(second))) {
-        return false;
-      }
-      continue;
-    }
-
-    if (first >= 0xf0 && first <= 0xf4) {
-      if (index + 2 >= text.size()) return false;
-      const unsigned char second = static_cast<unsigned char>(text[index++]);
-      const unsigned char third = static_cast<unsigned char>(text[index++]);
-      const unsigned char fourth = static_cast<unsigned char>(text[index++]);
-      if (!continuation(third) || !continuation(fourth) || (first == 0xf0 && (second < 0x90 || second > 0xbf)) ||
-          (first == 0xf4 && (second < 0x80 || second > 0x8f)) ||
-          (first != 0xf0 && first != 0xf4 && !continuation(second))) {
-        return false;
-      }
-      continue;
-    }
-
-    return false;
-  }
-  return true;
-}
 
 #ifdef _WIN32
 bool utf8ToWide(std::string_view utf8, std::wstring& out) {
@@ -121,7 +81,7 @@ bool pathFromUtf8(std::string_view utf8, std::filesystem::path& out, std::string
     error = "path contains an embedded NUL";
     return false;
   }
-  if (!validUtf8(utf8)) {
+  if (pistoris::binary::classifyTextEncoding(utf8) == pistoris::binary::TextEncoding::kLatin1) {
     error = "path is not valid UTF-8";
     return false;
   }

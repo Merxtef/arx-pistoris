@@ -7,6 +7,7 @@
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
 #include "arx_pistoris/native/llf.hpp"
+#include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/texture.hpp"
 
 #include <optional>
@@ -26,6 +27,7 @@ struct NativeLevelFiles {
   std::optional<pistoris::Fts> fts;
   std::optional<pistoris::Llf> llf;
   std::optional<pistoris::Dlf> dlf;
+  pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 
 struct IntermediateLevel {

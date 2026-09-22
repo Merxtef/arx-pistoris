@@ -125,14 +125,14 @@ Error decode(std::span<const std::uint8_t> encoded, Decoded& out) noexcept {
   return Error::kNone;
 }
 
-struct PngWriteContext {
+struct EncodedWriteContext {
   std::vector<std::uint8_t> bytes;
   bool failed = false;
   bool bad_alloc = false;
 };
 
-void appendPng(void* context, void* data, int size) noexcept {
-  auto& out = *static_cast<PngWriteContext*>(context);
+void appendEncoded(void* context, void* data, int size) noexcept {
+  auto& out = *static_cast<EncodedWriteContext*>(context);
   if (out.failed || size < 0) {
     out.failed = true;
     return;
@@ -156,9 +156,41 @@ Error encodePng(const Info& info, std::span<const std::uint8_t> pixels, std::vec
   const std::size_t row_bytes = static_cast<std::size_t>(width) * static_cast<std::size_t>(components);
   if (pixels.size() != row_bytes * static_cast<std::size_t>(height)) return Error::kMalformed;
 
-  PngWriteContext context;
+  EncodedWriteContext context;
   const int written =
-      stbi_write_png_to_func(appendPng, &context, width, height, components, pixels.data(), width * components);
+      stbi_write_png_to_func(appendEncoded, &context, width, height, components, pixels.data(), width * components);
+  if (context.bad_alloc) return Error::kOutOfMemory;
+  if (written == 0 || context.failed || context.bytes.empty()) return Error::kMalformed;
+  out = std::move(context.bytes);
+  return Error::kNone;
+}
+
+Error encodeTga(const Info& info, std::span<const std::uint8_t> pixels, std::vector<std::uint8_t>& out) {
+  const int width = static_cast<int>(info.width);
+  const int height = static_cast<int>(info.height);
+  const int components = static_cast<int>(info.components);
+  const std::size_t pixel_bytes =
+      static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * static_cast<std::size_t>(components);
+  if (pixels.size() != pixel_bytes) return Error::kMalformed;
+
+  EncodedWriteContext context;
+  const int written = stbi_write_tga_to_func(appendEncoded, &context, width, height, components, pixels.data());
+  if (context.bad_alloc) return Error::kOutOfMemory;
+  if (written == 0 || context.failed || context.bytes.empty()) return Error::kMalformed;
+  out = std::move(context.bytes);
+  return Error::kNone;
+}
+
+Error encodeBmp(const Info& info, std::span<const std::uint8_t> pixels, std::vector<std::uint8_t>& out) {
+  const int width = static_cast<int>(info.width);
+  const int height = static_cast<int>(info.height);
+  const int components = static_cast<int>(info.components);
+  const std::size_t pixel_bytes =
+      static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * static_cast<std::size_t>(components);
+  if (pixels.size() != pixel_bytes) return Error::kMalformed;
+
+  EncodedWriteContext context;
+  const int written = stbi_write_bmp_to_func(appendEncoded, &context, width, height, components, pixels.data());
   if (context.bad_alloc) return Error::kOutOfMemory;
   if (written == 0 || context.failed || context.bytes.empty()) return Error::kMalformed;
   out = std::move(context.bytes);
@@ -528,6 +560,44 @@ Error placeDecodedToPng(const Decoded& decoded, std::uint32_t canvas_width, std:
   return Error::kNone;
 }
 
+Error transcodeRaster(std::span<const std::uint8_t> encoded, Format target, BmpColorKey bmp_color_key,
+                      std::vector<std::uint8_t>& out, Info* out_info) {
+  Decoded decoded;
+  Error error = decode(encoded, decoded);
+  if (error != Error::kNone) return error;
+
+  std::vector<std::uint8_t> color_keyed;
+  Info info = decoded.info;
+  error = applyBmpColorKey(decoded, bmp_color_key, color_keyed);
+  if (error != Error::kNone) return error;
+  if (!color_keyed.empty()) info.components = 4;
+  const std::size_t pixel_bytes = static_cast<std::size_t>(info.width) * info.height * info.components;
+  std::span<const std::uint8_t> pixels = color_keyed.empty()
+                                             ? std::span<const std::uint8_t>(decoded.pixels, pixel_bytes)
+                                             : std::span<const std::uint8_t>(color_keyed);
+  std::vector<std::uint8_t> expanded;
+  if (info.components == 2) {
+    try {
+      expanded.resize(static_cast<std::size_t>(info.width) * info.height * 4U);
+    } catch (const std::bad_alloc&) {
+      return Error::kOutOfMemory;
+    }
+    for (std::size_t index = 0, count = static_cast<std::size_t>(info.width) * info.height; index < count; ++index) {
+      expanded[index * 4U] = pixels[index * 2U];
+      expanded[index * 4U + 1U] = pixels[index * 2U];
+      expanded[index * 4U + 2U] = pixels[index * 2U];
+      expanded[index * 4U + 3U] = pixels[index * 2U + 1U];
+    }
+    pixels = expanded;
+    info.components = 4;
+  }
+  error = target == Format::kBmp ? encodeBmp(info, pixels, out) : encodeTga(info, pixels, out);
+  if (error != Error::kNone) return error;
+  info.format = target;
+  if (out_info != nullptr) *out_info = info;
+  return Error::kNone;
+}
+
 }  // namespace
 
 Format detectFormat(std::span<const std::uint8_t> encoded) noexcept {
@@ -689,6 +759,16 @@ Error transcodeToPng(std::span<const std::uint8_t> encoded, std::vector<std::uin
   out = std::move(prepared.png);
   if (out_info != nullptr) *out_info = prepared.png_info;
   return Error::kNone;
+}
+
+Error transcodeToTga(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out, Info* out_info,
+                     BmpColorKey bmp_color_key) {
+  return transcodeRaster(encoded, Format::kTga, bmp_color_key, out, out_info);
+}
+
+Error transcodeToBmp(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out, Info* out_info,
+                     BmpColorKey bmp_color_key) {
+  return transcodeRaster(encoded, Format::kBmp, bmp_color_key, out, out_info);
 }
 
 Error normalizeToPowerOfTwo(std::span<const std::uint8_t> encoded, std::vector<std::uint8_t>& out, Info* out_info,

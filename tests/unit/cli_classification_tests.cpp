@@ -4,6 +4,7 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/native/amb.hpp"
+#include "arx_pistoris/native/cin.hpp"
 
 #include "formats/classification.h"
 #include "formats/format.h"
@@ -36,7 +37,8 @@ std::vector<std::uint8_t> jsonBytes(std::string_view text) { return {text.begin(
 
 TEST_SUITE("CLI classification") {
   TEST_CASE("Primary resource layouts distinguish game carriers from loose formats") {
-    for (const cli::Format format : {cli::Format::kFtl, cli::Format::kTea, cli::Format::kDlf, cli::Format::kAmb}) {
+    for (const cli::Format format :
+         {cli::Format::kFtl, cli::Format::kTea, cli::Format::kDlf, cli::Format::kAmb, cli::Format::kCin}) {
       CHECK(cli::primaryResourceLayout(format, cli::PathAddress::kMountRelative) == cli::ResourceLayout::kGame);
       CHECK(cli::primaryResourceLayout(format, cli::PathAddress::kAbsolute) == cli::ResourceLayout::kLoose);
     }
@@ -67,6 +69,13 @@ TEST_SUITE("CLI classification") {
     const cli::FileFacts facts = cli::classifyInput(bytes, "ambiance.bin");
     CHECK(facts.format == cli::Format::kAmb);
     CHECK(facts.kind == cli::PayloadKind::kAmb);
+  }
+
+  TEST_CASE("CIN magic provides stable native identity") {
+    std::vector<std::uint8_t> bytes(pistoris::kCinMagic.begin(), pistoris::kCinMagic.end());
+    const cli::FileFacts facts = cli::classifyInput(bytes, "cinematic.bin");
+    CHECK(facts.format == cli::Format::kCin);
+    CHECK(facts.kind == cli::PayloadKind::kCin);
   }
 
   TEST_CASE("Extension selects native formats without stable stored identity") {

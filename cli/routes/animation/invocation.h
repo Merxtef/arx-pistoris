@@ -8,6 +8,7 @@
 #include "formats/options.h"
 #include "pipeline/execution_context.h"
 #include "pipeline/options.h"
+#include "resources/sidecar_io.h"
 #include "resources/sound_io.h"
 #include "routes/animation/state.h"
 #include "routes/descriptor.h"
@@ -27,8 +28,7 @@ struct Invocation final : RouteInvocation {
   SoundIoOptions sound_options;
   SoundInput sound_input;
   SoundOutput sound_output;
-  bool rebase_sounds = false;
-  std::string sound_rebase_directory;
+  ResolvedSidecarRebase sound_rebase;
   const OutputConverterDescriptor* output_converter = nullptr;
   AnimationInput state;
 };

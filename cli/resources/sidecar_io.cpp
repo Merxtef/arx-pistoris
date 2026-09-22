@@ -72,10 +72,9 @@ bool resolveSidecarInputBase(const ClassifiedPath& input, bool use_format_source
   return false;
 }
 
-bool resolveSidecarRebase(const SidecarRebasePolicy& policy, std::string_view resource, IoService& io, bool& enabled,
-                          std::string& out) {
-  enabled = false;
-  out.clear();
+bool resolveSidecarRebase(const SidecarRebasePolicy& policy, std::string_view resource, IoService& io,
+                          ResolvedSidecarRebase& out) {
+  out = {};
   std::string_view directory;
   if (policy.explicit_requested) {
     directory = policy.explicit_directory;
@@ -84,9 +83,13 @@ bool resolveSidecarRebase(const SidecarRebasePolicy& policy, std::string_view re
   } else if (policy.automatic == SidecarRebaseDirection::kToGame) {
     directory = policy.to_game_directory;
   }
-  if (!policy.explicit_requested && directory.empty()) return true;
+  if (!policy.explicit_requested && policy.automatic == SidecarRebaseDirection::kNone) return true;
+  if (!policy.explicit_requested && directory.empty()) {
+    out.enabled = true;
+    return true;
+  }
   std::string error;
-  if (!io.normalizeResourcePath(directory, out, error)) {
+  if (!io.normalizeResourcePath(directory, out.directory, error)) {
     diagnostic(DiagnosticCode::kResourcePathInvalid,
                "Invalid %.*s resource directory '%.*s': %s",
                static_cast<int>(resource.size()),
@@ -96,7 +99,7 @@ bool resolveSidecarRebase(const SidecarRebasePolicy& policy, std::string_view re
                error.c_str());
     return false;
   }
-  enabled = true;
+  out.enabled = true;
   return true;
 }
 

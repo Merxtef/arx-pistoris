@@ -6,6 +6,7 @@
 #include "arx_pistoris/animation/types.h"
 #include "arx_pistoris/base/audio.h"
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/text.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -22,7 +23,7 @@ struct Data;
 }
 
 struct NativeAnimationBundle;
-struct NativeSoundBakeOptions;
+struct NativeAnimationBakeOptions;
 struct SoundSourceReference;
 
 class Model;
@@ -48,9 +49,10 @@ class Animation {
   // --- Conversion ---
 
   [[nodiscard]] static ArxReturnCode importNative(Animation& out, const tea::Data& native,
-                                                  std::vector<SoundSourceReference>* sound_sources = nullptr) noexcept;
+                                                  std::vector<SoundSourceReference>* sound_sources = nullptr,
+                                                  NativeTextMode text_mode = NativeTextMode::kAuto) noexcept;
   [[nodiscard]] ArxReturnCode bakeNative(tea::Data& out) const noexcept;
-  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeSoundBakeOptions& options,
+  [[nodiscard]] ArxReturnCode bakeNativeBundle(const NativeAnimationBakeOptions& options,
                                                NativeAnimationBundle& out) const noexcept;
 
   // --- Validation ---
