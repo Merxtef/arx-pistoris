@@ -20,6 +20,7 @@
 #include "palette.h"
 #include "paths.h"
 #include "player_spawn.h"
+#include "room_distance_metadata.h"
 #include "utils/log.h"
 #include "zones.h"
 
@@ -58,6 +59,8 @@ ArxReturnCode exportLevelToGlb(const LevelModules& level, const ArxAabb& referen
   if (rc != ARX_OK) return rc;
 
   glb_level_export::exportPortals(level, referenced_bounds, room_projection, palette, builder);
+  if (room_projection.preserve_distances)
+    builder.setRootTransformExtrasJson(glb_level::roomDistanceRootMetadataJson(level.rooms));
   glb_level_export::exportNavigation(level, referenced_bounds, options, palette, builder);
   const std::uint64_t defaulted_light_fallstarts =
       glb_level_export::exportLights(level, referenced_bounds, options, builder);

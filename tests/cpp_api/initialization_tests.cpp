@@ -86,6 +86,10 @@ TEST_SUITE("cpp_api") {
     CHECK(c_weld.metric == static_cast<ArxLevelWeldMetric>(cpp_weld.metric));
     CHECK(c_weld.degenerate_faces == static_cast<ArxLevelDegenerateFacePolicy>(cpp_weld.degenerate_faces));
 
+    const ArxLevelPortalSnapOptions c_portal_snap = ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT;
+    const pistoris::Level::PortalSnapOptions cpp_portal_snap;
+    CHECK(c_portal_snap.radius == cpp_portal_snap.radius);
+
     const ArxLevelNavSurfaceSourceOptions c_nav_source = ARX_LEVEL_NAV_SURFACE_SOURCE_OPTIONS_INIT;
     const pistoris::Level::NavSurfaceSourceOptions cpp_nav_source;
     CHECK(c_nav_source.clearance == cpp_nav_source.clearance);

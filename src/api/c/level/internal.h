@@ -41,6 +41,10 @@ inline Level::VertexWeldOptions weldOptions(const ArxLevelVertexWeldOptions& val
           static_cast<Level::DegenerateFacePolicy>(value.degenerate_faces)};
 }
 
+inline Level::PortalSnapOptions portalSnapOptions(const ArxLevelPortalSnapOptions& value) noexcept {
+  return {value.radius};
+}
+
 inline Level::NavSurfaceSourceOptions navSourceOptions(const ArxLevelNavSurfaceSourceOptions& value) noexcept {
   return {value.clearance, value.support_min_up_cos, value.support_ignore_flags};
 }

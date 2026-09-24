@@ -256,6 +256,17 @@ struct GeometryRemap {
   FaceIndexRemap faces;
 };
 
+class VertexFaceIndex {
+ public:
+  [[nodiscard]] std::span<const FaceIndex> incidentFaces(VertexIndex vertex) const noexcept;
+
+ private:
+  std::vector<std::size_t> offsets_;
+  std::vector<FaceIndex> faces_;
+
+  friend Error buildVertexFaceIndex(const GeometryData& geometry, VertexFaceIndex& out);
+};
+
 // --- Validation ---
 
 Error validateVertex(const Vertex& vertex) noexcept;
@@ -274,6 +285,7 @@ Error validateTranslation(const GeometryData& geometry, const ArxVector3& offset
 
 std::size_t vertexCapacityForAppend(const GeometryData& geometry, std::size_t count, std::size_t limit) noexcept;
 Error collectTextureUsage(const GeometryData& geometry, std::size_t texture_count, std::vector<std::uint8_t>& out);
+Error buildVertexFaceIndex(const GeometryData& geometry, VertexFaceIndex& out);
 std::array<ArxVector3, 3> facePositions(const GeometryData& geometry, const Face& face);
 ArxVector3 faceNormalOr(const GeometryData& geometry, const Face& face, ArxVector3 fallback);
 ArxAabb triangleBounds(const std::array<ArxVector3, 3>& vertices);
@@ -300,6 +312,7 @@ VertexIndex addOrFindVertex(GeometryData& geometry, PositionIndex& index, const 
 
 // --- Repair ---
 
+void refreshFaceNormals(GeometryData& geometry) noexcept;
 // Nonempty output is an order-preserving compaction map
 std::size_t compactVertices(GeometryData& geometry, VertexIndexRemap* out_vertex_remap = nullptr);
 Error weldVertices(GeometryData& geometry, const VertexWeldOptions& options = {}, GeometryRemap* out_remap = nullptr);

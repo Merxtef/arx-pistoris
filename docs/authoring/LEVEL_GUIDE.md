@@ -104,7 +104,13 @@ arx_portal__cellar__hall__north_door
 
 The mesh must have exactly three or four unique perimeter positions. Its
 material carries no portal data, so no special authored portal material is
-needed.
+needed. Keep four-corner portals planar.
+
+For a slightly uneven imported portal, `--flatten-portals` can clean up its
+plane before `--snap-to-portals` moves nearby geometry onto it. Snapping skips
+uncertain or unsafe moves instead of changing the portal or removing geometry.
+Flattening discards stored room distances when it changes a portal; regenerate
+them after the geometry is ready.
 
 [Exact portal syntax](LEVEL_REFERENCE.md#portal)
 
@@ -134,7 +140,11 @@ arx_nav_surface__walkable
 face flags do not carry navigation meaning. The navigation surface is separate
 from visible Level geometry and supports anchor generation.
 
-It may be authored directly or generated from Level geometry through the CLI.
+It may be authored directly or rebuilt with `--gen-navigation`. The preset
+generates and prunes the navigation surface, then generates, connects, and
+prunes anchors. Use the individual navigation flags when retaining part of the
+existing data. Included flags and their options remain available alongside the
+preset.
 
 [Exact navigation-surface syntax](LEVEL_REFERENCE.md#navigation-surface)
 
@@ -156,9 +166,9 @@ arx_anchor__RADIUS_0.35__HEIGHT_1.2__BLOCKED__low_arch
 The anchor's local scale must be identity. `RADIUS` and `HEIGHT` define its
 size; import discards any other local scale with a warning.
 
-Anchor connections use opaque GLB metadata for roundtrip preservation. DCC
-tools may discard that metadata. Generate connections explicitly after
-structural anchor edits; generation replaces the preserved graph.
+Level GLB can preserve anchor connections as opaque round-trip data. Editing
+tools may discard that data. Generate connections explicitly after structural
+anchor edits; generation replaces the preserved graph.
 
 [Exact anchor syntax](LEVEL_REFERENCE.md#anchor)
 
@@ -290,20 +300,27 @@ Loading screens are not authored in Level GLB. Place one beside the GLB as
 
 ## Generated Data
 
-Level GLB does not store native cell slicing or room-distance records. Anchor
-connections use the best-effort opaque metadata described above. Room mesh
-`COLOR_0` stores baked corner lighting; missing colors use neutral gray. Native
-baking rebuilds cell layout and compatible quads.
+Level GLB preserves complete room distances and anchor connections as opaque
+best-effort data. Keep imported custom properties or metadata when
+re-exporting GLB if that generated data should survive the edit. If rooms or
+portals no longer match the stored data, Pistoris discards all saved room
+distances and continues importing the Level. Room mesh `COLOR_0` stores baked
+corner lighting; missing colors use neutral gray. Native baking rebuilds cell
+layout and compatible quads.
 
 Generate navigation, anchors, anchor connections, room distances, or static
-lighting only when the Level needs them. See [Level Operations](../CLI.md#level-operations)
-for commands and operation order.
+lighting after edits that make the saved data stale. Generation remains an
+explicit operation and replaces recovered data. See
+[Level Operations](../CLI.md#level-operations) for commands and operation
+order.
 
 ## Export Checklist
 
 - Export the intended collection as GLB.
 - Preserve semantic object and material names.
 - Preserve hierarchy and object transforms.
+- Preserve imported custom properties or metadata when generated data should
+  roundtrip.
 - Export UVs, vertex colors, and punctual lights where used.
 - Embed the minimap base-color image where used.
 - Do not flatten semantic helper nodes into meshes.

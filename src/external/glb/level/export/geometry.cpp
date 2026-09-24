@@ -16,6 +16,7 @@
 #include "external/glb/level/export/internal.h"
 #include "external/glb/level/material.h"
 #include "external/glb/level/objects.h"
+#include "external/glb/level/room_distance_metadata.h"
 #include "external/glb/utils/texture.h"
 #include "external/glb/writer.h"
 #include "external/material_name.h"
@@ -280,6 +281,8 @@ ArxReturnCode exportRoomGeometry(const LevelModules& level, const ArxAabb& refer
     std::string name = roomNodeName(level.rooms.definitions[room_index]);
     int mesh = builder.addMesh(name, std::move(primitives));
     int node = builder.addNode(std::move(name), mesh);
+    if (room_projection.preserve_distances)
+      builder.setNodeExtrasJson(node, glb_level::roomDistanceRoomMetadataJson(room_index));
     builder.setNodeTranslation(node,
                                {room_center.x - room_root.x, room_center.y - room_root.y, room_center.z - room_root.z});
     builder.addChild(room_parent, node);

@@ -630,7 +630,7 @@ TEST_SUITE("CLI mounts") {
   TEST_CASE("Mounted item icon output uses its game resource path") {
     TemporaryDirectory temp;
     const std::vector<std::uint8_t> icon = makeTestBmp(255, 0, 0);
-    cli::IoService io(cli::OverwriteMode::kAsk, false, mountPaths(temp.path()), temp.path().string());
+    cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, mountPaths(temp.path()), temp.path().string());
 
     cli::OutputTarget output;
     output.path = "game/graph/obj3d/interactive/items/weapons/shield/shield.ftl";
@@ -641,16 +641,66 @@ TEST_SUITE("CLI mounts") {
     REQUIRE(cli::resolveInventoryIconOutput(output, io, descriptor));
     CHECK(descriptor.enabled);
     CHECK(descriptor.item_only);
+    CHECK(descriptor.bmp_companion);
     CHECK(descriptor.stem.path == "graph/obj3d/interactive/items/weapons/shield/shield[icon]");
     CHECK(descriptor.stem.address == cli::PathAddress::kMountRelative);
+
+    pistoris::Model stale_icon;
+    const std::vector<std::uint8_t> stale_source = makeTestBmp(0, 0, 255);
+    REQUIRE(stale_icon.setInventoryIcon({stale_source.data(), stale_source.size()}) == ARX_OK);
+    std::vector<std::uint8_t> stale_png;
+    REQUIRE(stale_icon.renderIconPng({}, stale_png) == ARX_OK);
+    const std::filesystem::path shield_stem =
+        temp.path() / "graph" / "obj3d" / "interactive" / "items" / "weapons" / "shield" / "shield[icon]";
+    writeBytes(shield_stem.string() + ".png", stale_png);
 
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kModel, output.path);
     REQUIRE(cli::addInventoryIconOutput(plan, descriptor, icon, ARX_IMAGE_FORMAT_BMP, asset));
     REQUIRE(plan.resolve(false, false));
     REQUIRE(plan.write(io));
-    CHECK(readBytes(temp.path() / "graph" / "obj3d" / "interactive" / "items" / "weapons" / "shield" /
-                    "shield[icon].bmp") == icon);
+    const std::vector<std::uint8_t> projected_png = readBytes(shield_stem.string() + ".png");
+    const std::vector<std::uint8_t> projected_bmp = readBytes(shield_stem.string() + ".bmp");
+    CHECK(projected_png != stale_png);
+    ArxImageInfo projected_info{};
+    REQUIRE(pistoris::binary::inspectEncodedImage(projected_png, projected_info) == ARX_OK);
+    CHECK(projected_info.format == ARX_IMAGE_FORMAT_PNG);
+    CHECK(projected_info.width == 32);
+    CHECK(projected_info.height == 32);
+    CHECK(projected_info.components == 4);
+    REQUIRE(pistoris::binary::inspectEncodedImage(projected_bmp, projected_info) == ARX_OK);
+    CHECK(projected_info.format == ARX_IMAGE_FORMAT_BMP);
+    CHECK(projected_info.width == 32);
+    CHECK(projected_info.height == 32);
+    CHECK(projected_info.components == 4);
+
+    cli::OutputTarget converted_output = output;
+    converted_output.path = "game/graph/obj3d/interactive/items/weapons/dagger/dagger.ftl";
+    cli::InventoryIconOutput converted_descriptor;
+    REQUIRE(cli::resolveInventoryIconOutput(converted_output, io, converted_descriptor));
+    const std::vector<std::uint8_t> tga = makeTestTga();
+    cli::ResourceOutputPlan converted_plan;
+    const cli::ResourceAssetId converted_asset =
+        converted_plan.addAsset(cli::ResourceAssetKind::kModel, converted_output.path);
+    REQUIRE(
+        cli::addInventoryIconOutput(converted_plan, converted_descriptor, tga, ARX_IMAGE_FORMAT_TGA, converted_asset));
+    REQUIRE(converted_plan.resolve(false, false));
+    REQUIRE(converted_plan.write(io));
+    const std::vector<std::uint8_t> converted = readBytes(temp.path() / "graph" / "obj3d" / "interactive" / "items" /
+                                                          "weapons" / "dagger" / "dagger[icon].bmp");
+    const std::vector<std::uint8_t> converted_png = readBytes(temp.path() / "graph" / "obj3d" / "interactive" /
+                                                              "items" / "weapons" / "dagger" / "dagger[icon].png");
+    ArxImageInfo converted_info{};
+    REQUIRE(pistoris::binary::inspectEncodedImage(converted, converted_info) == ARX_OK);
+    CHECK(converted_info.format == ARX_IMAGE_FORMAT_BMP);
+    CHECK(converted_info.width == 32);
+    CHECK(converted_info.height == 32);
+    CHECK(converted_info.components == 4);
+    REQUIRE(pistoris::binary::inspectEncodedImage(converted_png, converted_info) == ARX_OK);
+    CHECK(converted_info.format == ARX_IMAGE_FORMAT_PNG);
+    CHECK(converted_info.width == 32);
+    CHECK(converted_info.height == 32);
+    CHECK(converted_info.components == 4);
 
     output.path = "game/graph/obj3d/interactive/items/weapons/shield/tweaks/golden.ftl";
     REQUIRE(cli::resolveInventoryIconOutput(output, io, descriptor));
@@ -694,6 +744,7 @@ TEST_SUITE("CLI mounts") {
     output.format = cli::Format::kGlb;
     cli::InventoryIconOutput output_descriptor;
     REQUIRE(cli::resolveInventoryIconOutput(output, io, output_descriptor));
+    CHECK_FALSE(output_descriptor.bmp_companion);
 
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kModel, output.path);
@@ -703,7 +754,7 @@ TEST_SUITE("CLI mounts") {
     CHECK(readBytes(temp.path() / "copy[icon].tga") == icon);
   }
 
-  TEST_CASE("Intermediate Model icons always render as PNG") {
+  TEST_CASE("Intermediate Model icons render supported output formats") {
     const std::vector<std::uint8_t> icon = makeTestBmp();
     pistoris::Model model;
     REQUIRE(model.setInventoryIcon({icon.data(), icon.size()}) == ARX_OK);
@@ -714,6 +765,12 @@ TEST_SUITE("CLI mounts") {
     ArxImageInfo info{};
     REQUIRE(pistoris::binary::inspectEncodedImage(rendered, info) == ARX_OK);
     CHECK(info.format == ARX_IMAGE_FORMAT_PNG);
+    CHECK(info.width == 32);
+    CHECK(info.height == 32);
+
+    REQUIRE(cli::projectInventoryIconBmp(model, {}, rendered));
+    REQUIRE(pistoris::binary::inspectEncodedImage(rendered, info) == ARX_OK);
+    CHECK(info.format == ARX_IMAGE_FORMAT_BMP);
     CHECK(info.width == 32);
     CHECK(info.height == 32);
 

@@ -238,12 +238,14 @@ sword[icon].png
 
 PNG, JPEG, BMP, and TGA are accepted. The CLI discovers the adjacent icon
 automatically; `--input-icon` selects an explicit image. GLB and OBJ outputs
-write a PNG at 32 pixels per inventory slot. By default the image determines
-its footprint, up to three slots on its longest axis. Use
+write a PNG at 32 pixels per inventory slot. Loose FTL output writes BMP, while
+game-layout FTL output writes PNG plus the BMP compatibility copy required by
+stable Libertatis releases. By default the image determines its footprint, up
+to three slots on its longest axis. Use
 `--icon-slots <WIDTH> <HEIGHT>` to set either axis to one through three slots or
 `-` to derive it. Content keeps its aspect ratio and is centered by default.
 Use `--icon-layout` to place it at a corner or stretch it to fill the footprint.
-BMP black pixels follow the engine's transparent color-key behavior. See the
+RGB BMP input treats exact black as transparent during rendering. See the
 [CLI Guide](../CLI.md#model-and-animation-workflows) for game-layout placement
 and conversion details.
 

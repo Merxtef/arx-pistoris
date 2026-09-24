@@ -36,6 +36,7 @@ struct InventoryIconInput {
 struct InventoryIconOutput {
   bool enabled = false;
   bool item_only = false;
+  bool bmp_companion = false;
   PathLocation stem;
 };
 
@@ -50,6 +51,8 @@ bool resolveInventoryIconOutput(const OutputTarget& output, IoService& io, Inven
 bool readInventoryIcon(IoService& io, const InventoryIconInput& input, LoadedInventoryIcon& out);
 bool projectInventoryIcon(const pistoris::Model& model, const pistoris::Model::InventoryIconRenderOptions& options,
                           std::vector<std::uint8_t>& out);
+bool projectInventoryIconBmp(const pistoris::Model& model, const pistoris::Model::InventoryIconRenderOptions& options,
+                             std::vector<std::uint8_t>& out);
 bool addInventoryIconOutput(ResourceOutputPlan& plan, const InventoryIconOutput& output,
                             std::span<const std::uint8_t> encoded, ArxImageFormat format, ResourceAssetId asset);
 bool addInventoryIconOutput(ResourceOutputPlan& plan, const InventoryIconOutput& output, const pistoris::Model& model,

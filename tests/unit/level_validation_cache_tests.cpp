@@ -49,6 +49,8 @@ TEST_SUITE("Level validation cache") {
           ARX_LEVEL_OVERLAPPING_VERTEX_WELD_SEGMENTS);
 
     CHECK(level_validation::roomsError(rooms::Error::kNoRooms) == ARX_LEVEL_NO_ROOMS);
+    CHECK(level_validation::roomsError(rooms::Error::kTooManyVertices) == ARX_LEVEL_TOO_MANY_VERTICES);
+    CHECK(level_validation::roomsError(rooms::Error::kTooManyFaces) == ARX_LEVEL_TOO_MANY_FACES);
     CHECK(level_validation::roomsError(rooms::Error::kTooManyRooms) == ARX_LEVEL_TOO_MANY_ROOMS);
     CHECK(level_validation::roomsError(rooms::Error::kBadRoomName) == ARX_LEVEL_BAD_ROOM_NAME);
     CHECK(level_validation::roomsError(rooms::Error::kDuplicateRoomName) == ARX_LEVEL_DUPLICATE_ROOM_NAME);

@@ -33,6 +33,7 @@
 #include "objects.h"
 #include "paths.h"
 #include "player_spawn.h"
+#include "room_distance_metadata.h"
 #include "topology.h"
 #include "utils/identifier.h"
 #include "utils/log.h"
@@ -486,6 +487,7 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
     }
     tmp.rooms.portals.push_back(std::move(portal));
   }
+  glb_level::restoreRoomDistanceMetadata(data, graph, discovery.rooms, discovery.portals, units, tmp.rooms);
 
   if (tmp.geometry.faces.empty()) return ARX_GLB_NO_LEVEL_GEOMETRY;
   if (!glb::makeTexturePathsUnique(tmp.textures.textures, "GLB -> Level")) return ARX_GLB_BAD_LEVEL_MATERIAL;

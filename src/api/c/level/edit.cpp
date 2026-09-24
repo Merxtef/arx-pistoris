@@ -145,6 +145,15 @@ ArxReturnCode arx_pistoris_level_weld_vertices(ArxLevel* level, const ArxLevelVe
   });
 }
 
+ArxReturnCode arx_pistoris_level_snap_geometry_to_portals(ArxLevel* level,
+                                                          const ArxLevelPortalSnapOptions* options) noexcept {
+  if (!level) return ARX_INVALID_HANDLE;
+  return pistoris::c_api::guard([&] {
+    if (!options) return level->value.snapGeometryToPortals();
+    return level->value.snapGeometryToPortals(pistoris::c_api::portalSnapOptions(*options));
+  });
+}
+
 ArxReturnCode arx_pistoris_level_set_texture(ArxLevel* level, ArxTextureIndex index,
                                              const ArxTextureView* texture) noexcept {
   if (!level) return ARX_INVALID_HANDLE;
@@ -254,6 +263,11 @@ ArxReturnCode arx_pistoris_level_add_portal(ArxLevel* level, const ArxLevelPorta
 ArxReturnCode arx_pistoris_level_remove_portal(ArxLevel* level, ArxPortalIndex index) noexcept {
   if (!level) return ARX_INVALID_HANDLE;
   return pistoris::c_api::guard([&] { return level->value.removePortal(index); });
+}
+
+ArxReturnCode arx_pistoris_level_flatten_portals(ArxLevel* level) noexcept {
+  if (!level) return ARX_INVALID_HANDLE;
+  return pistoris::c_api::guard([&] { return level->value.flattenPortals(); });
 }
 
 ArxReturnCode arx_pistoris_level_set_room_distance(ArxLevel* level, const ArxLevelRoomDistance* distance) noexcept {

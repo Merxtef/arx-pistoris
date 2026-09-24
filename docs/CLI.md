@@ -462,21 +462,36 @@ warning listing the required identical sidecars.
 Requested editing and generation operations run in this order:
 
 1. Vertex welding.
-2. Navigation-surface generation.
-3. Navigation-island pruning.
-4. Anchor generation.
-5. Anchor connection generation.
-6. Anchor-island pruning.
-7. Room-distance generation.
-8. Static-lighting generation.
-9. Minimap generation.
+2. Portal flattening.
+3. Portal geometry snapping.
+4. Navigation-surface generation.
+5. Navigation-island pruning.
+6. Anchor generation.
+7. Anchor connection generation.
+8. Anchor-island pruning.
+9. Room-distance generation.
+10. Static-lighting generation.
+11. Minimap generation.
+
+`--gen-navigation` selects steps 4 through 8 as one complete navigation
+rebuild. Use the individual operation flags when only part of the existing
+navigation data should be replaced. Included flags and their options may also
+be specified explicitly alongside the preset.
+
+Level GLB can preserve room distances and anchor connections as opaque data
+for round-trip edits. Compatible data is recovered before these operations
+run; stale room-distance data is discarded as a complete set. Explicit
+generation flags replace recovered data. Missing or discarded data never
+triggers generation by itself.
 
 Common examples:
 
 ```text
 arx-pistor --kind level authored.glb baked.fts --weld-vertices
 
-arx-pistor --kind level authored.glb baked.fts --gen-nav-surface --gen-anchors --connect-anchors
+arx-pistor --kind level authored.glb baked.fts --flatten-portals --snap-to-portals
+
+arx-pistor --kind level authored.glb baked.fts --gen-navigation
 
 arx-pistor --kind level authored.glb baked.fts --gen-room-distances --gen-static-lighting
 
@@ -485,6 +500,22 @@ arx-pistor --kind level authored.glb baked.fts --gen-minimap
 
 Generation never occurs merely because data is absent. Use
 `arx-pistor --help level` for every option and default.
+
+`--flatten-portals` projects each accepted Level portal quad onto its canonical
+plane. Triangular and already-planar portals remain unchanged. If any quad
+changes, stored room distances are discarded because they reference the old
+portal geometry; request `--gen-room-distances` to rebuild them later in the
+same conversion. The operation is atomic and does not make otherwise invalid
+portals importable.
+
+`--snap-to-portals` moves nearby Level geometry onto the bounded portal
+surfaces. `--portal-snap-radius <UNITS=1>` sets the maximum 3D distance in Arx
+units. Vertices shared with an unrelated room, equally close conflicting
+portals, and moves that would collapse or reverse a face are left unchanged
+with a warning. The operation does not delete or split faces. All other Level
+data is preserved rather than regenerated. When snapping makes navigation,
+anchors, room distances, static lighting, or the minimap stale, request their
+generation explicitly; those operations run after snapping in the order above.
 
 `--gen-minimap` replaces any loaded minimap with an internal `640 x 640`
 image sampled from the full Level domain. Mounted native output then projects
@@ -543,7 +574,7 @@ GLB input rebuild the FTS before producing debug output.
 Inspect navigation or room-distance state:
 
 ```text
-arx-pistor --kind level authored.glb navigation.glb --gen-nav-surface --gen-anchors --connect-anchors --debug-navigation
+arx-pistor --kind level authored.glb navigation.glb --gen-navigation --debug-navigation
 
 arx-pistor --kind level authored.glb distances.glb --gen-room-distances --debug-room-distances
 ```
@@ -612,14 +643,17 @@ Override discovery with an exact file path:
 ```
 
 Missing automatic icons are ignored; a missing or invalid explicit icon fails
-the conversion. GLB and OBJ outputs, and native or JSON output using Model or
-icon editing options, write a retained icon as PNG at 32 pixels per slot.
-Loose outputs place it beside the main file as
-`<output-stem>[icon].png`. Mounted FTL output writes it at the engine item-icon
-path and omits it with a warning when the destination is not an item class. BMP
-black pixels use the engine's transparent color-key behavior. Without a Model
-rebuild, output preserves the encoded image and uses its detected image
-extension.
+the conversion. GLB, OBJ, and JSON output using Model or icon editing options
+write a retained icon as PNG at 32 pixels per slot. FTL output using those
+options writes BMP for compatibility with stable Libertatis releases. Loose
+outputs place the icon beside the main file as `<output-stem>[icon].<ext>`.
+Mounted FTL output writes the projected icon as PNG plus a BMP compatibility
+copy at the engine item-icon path, and omits both with a warning when the
+destination is not an item class. The PNG has the engine's highest image
+priority, so an older image cannot shadow the new icon. RGB BMP input treats
+exact black as transparent and applies the engine-style antialiasing during
+rendering. Without icon editing, loose output preserves the encoded image and
+uses its detected image extension.
 
 Control the stored footprint and rendered content with Model route options:
 

@@ -8,6 +8,8 @@
 
 #include <array>
 #include <cstdint>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -65,6 +67,19 @@ TEST_SUITE("CLI resource output") {
 
     REQUIRE(plan.resolve(true, false));
     CHECK(plan.selectedCount() == 2);
+  }
+
+  TEST_CASE("Owned payloads remain valid after their source is released") {
+    constexpr std::array<std::uint8_t, 3> kExpected{1, 2, 3};
+    cli::ResourceOutputPlan plan;
+    const cli::ResourceAssetId first = plan.addAsset(cli::ResourceAssetKind::kModel, "model:first");
+    const cli::ResourceAssetId second = plan.addAsset(cli::ResourceAssetKind::kModel, "model:second");
+    std::vector<std::uint8_t> owned(kExpected.begin(), kExpected.end());
+    plan.addOwned(cli::ResourceFileKind::kImage, target("icons/item.png"), std::move(owned), first);
+    plan.add(cli::ResourceFileKind::kImage, target("icons/item.png"), kExpected.data(), kExpected.size(), second);
+
+    REQUIRE(plan.resolve(true, false));
+    CHECK(plan.selectedCount() == 1);
   }
 
   TEST_CASE("Resource output cannot replace a reserved asset output") {

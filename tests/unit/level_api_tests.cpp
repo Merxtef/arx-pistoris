@@ -54,6 +54,10 @@ constexpr bool cOptionDefaultsMatchCpp() {
       kCWeld.degenerate_faces != static_cast<ArxLevelDegenerateFacePolicy>(kCppWeld.degenerate_faces))
     return false;
 
+  constexpr ArxLevelPortalSnapOptions kCPortalSnap = ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT;
+  constexpr Level::PortalSnapOptions kCppPortalSnap{};
+  if (kCPortalSnap.radius != kCppPortalSnap.radius) return false;
+
   constexpr ArxLevelNavSurfaceSourceOptions kCNavSource = ARX_LEVEL_NAV_SURFACE_SOURCE_OPTIONS_INIT;
   constexpr Level::NavSurfaceSourceOptions kCppNavSource{};
   if (kCNavSource.clearance != kCppNavSource.clearance ||
@@ -785,6 +789,68 @@ TEST_SUITE("Level edit API") {
     CHECK(test::vertex(level, shared).position.x == doctest::Approx(1.0f));
     CHECK(level.vertexCount() == 5);
     CHECK(level.validateMesh() == ARX_OK);
+  }
+
+  TEST_CASE("Portal snapping preserves room distances and rejects invalid options atomically") {
+    Level level;
+    REQUIRE(test::addRoom(level, {"first"}) == 0);
+    REQUIRE(test::addRoom(level, {"second"}) == 1);
+
+    test::MeshSnapshot mesh;
+    mesh.vertices = {vertex(0.25f, 0.5f, 0.5f), vertex(2.0f, 0.0f, 0.0f), vertex(2.0f, 1.0f, 0.0f)};
+    mesh.faces = {triangle()};
+    mesh.face_rooms = {0};
+    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+
+    Portal snap_portal;
+    snap_portal.name = "portal";
+    snap_portal.room_1 = 0;
+    snap_portal.room_2 = 1;
+    snap_portal.vertices = {{{0.0f, 0.0f, 0.0f}, {0.0f, 2.0f, 0.0f}, {0.0f, 2.0f, 2.0f}, {0.0f, 0.0f, 2.0f}}};
+    REQUIRE(test::addPortal(level, snap_portal) == 0);
+    const std::array<RoomDistance, 1> distances = {{{.distance = 0.0f, .low_room_portal = 0, .high_room_portal = 0}}};
+    REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
+
+    REQUIRE(level.snapGeometryToPortals({.radius = 0.5f}) == ARX_OK);
+    CHECK(test::vertex(level, 0).position == ArxVector3{0.0f, 0.5f, 0.5f});
+    REQUIRE(test::roomDistances(level).size() == 1);
+    CHECK(test::roomDistances(level)[0].low_room_portal == 0);
+
+    const ArxVector3 snapped = test::vertex(level, 0).position;
+    CHECK(level.snapGeometryToPortals({.radius = 0.0f}) == ARX_INVALID_OPTIONS);
+    CHECK(test::vertex(level, 0).position == snapped);
+  }
+
+  TEST_CASE("Portal flattening is atomic and clears room distances only when geometry changes") {
+    Level level = makeLevelWithRoomAndTriangle();
+    REQUIRE(test::addRoom(level, {"second"}) == 1);
+    Portal non_planar = portal(0, 1);
+    non_planar.vertices[2].z = 0.01f;
+    REQUIRE(test::addPortal(level, non_planar) == 0);
+    const std::array<RoomDistance, 1> distances = {{{.distance = 0.0f, .low_room_portal = 0, .high_room_portal = 0}}};
+    REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
+
+    REQUIRE(level.flattenPortals() == ARX_OK);
+    CHECK(test::portal(level, 0).vertices[2] == ArxVector3{1.0f, 1.0f, 0.0f});
+    CHECK(level.roomDistanceCount() == 0);
+
+    REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
+    REQUIRE(level.flattenPortals() == ARX_OK);
+    CHECK(level.roomDistanceCount() == 1);
+  }
+
+  TEST_CASE("Portal flattening rejects out-of-bounds projections atomically") {
+    Level level = makeLevelWithRoomAndTriangle();
+    REQUIRE(test::addRoom(level, {"second"}) == 1);
+    Portal portal_value = portal(0, 1);
+    portal_value.vertices = {{{0.01f, 0.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 1.0f}, {0.0f, 0.0f, 1.0f}}};
+    REQUIRE(test::addPortal(level, portal_value) == 0);
+    const std::array<RoomDistance, 1> distances = {{{.distance = 0.0f, .low_room_portal = 0, .high_room_portal = 0}}};
+    REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
+
+    CHECK(level.flattenPortals() == ARX_LEVEL_PORTAL_OUT_OF_BOUNDS);
+    CHECK(test::portal(level, 0).vertices[2] == portal_value.vertices[2]);
+    CHECK(level.roomDistanceCount() == 1);
   }
 
   TEST_CASE("Welding preserves faces that would become degenerate by default") {

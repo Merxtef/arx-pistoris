@@ -14,11 +14,16 @@ const Module& weldRadiusModule();
 const Module& weldMetricModule();
 const Module& weldDegenerateFacesModule();
 
+const Module& flattenPortalsModule();
+const Module& snapToPortalsModule();
+const Module& portalSnapRadiusModule();
+
 const Module& dlfOnlyModule();
 const Module& noQuadReconstructionModule();
 const Module& ftsSceneDirectoryModule();
 const Module& signLevelModule();
 
+const Module& generateNavigationModule();
 const Module& generateNavSurfaceModule();
 const Module& navFromFloorModule();
 const Module& navRadiusModule();

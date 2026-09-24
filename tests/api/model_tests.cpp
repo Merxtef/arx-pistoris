@@ -75,10 +75,25 @@ TEST_SUITE("C Model API") {
     CHECK(info.height == 64);
     arx_pistoris_free_bytes(rendered);
 
+    REQUIRE(arx_pistoris_model_render_icon_bmp(model, &options, &rendered, &rendered_size) == ARX_OK);
+    REQUIRE(rendered != nullptr);
+    REQUIRE(rendered_size != 0);
+    REQUIRE(arx_pistoris_binary_inspect_encoded_image({rendered, rendered_size}, &info) == ARX_OK);
+    CHECK(info.format == ARX_IMAGE_FORMAT_BMP);
+    CHECK(info.width == 96);
+    CHECK(info.height == 64);
+    CHECK(info.components == 4);
+    arx_pistoris_free_bytes(rendered);
+
     options.layout = 255;
     rendered = &sentinel;
     rendered_size = 1;
     CHECK(arx_pistoris_model_render_icon_png(model, &options, &rendered, &rendered_size) == ARX_INVALID_OPTIONS);
+    CHECK(rendered == nullptr);
+    CHECK(rendered_size == 0);
+    rendered = &sentinel;
+    rendered_size = 1;
+    CHECK(arx_pistoris_model_render_icon_bmp(model, &options, &rendered, &rendered_size) == ARX_INVALID_OPTIONS);
     CHECK(rendered == nullptr);
     CHECK(rendered_size == 0);
 

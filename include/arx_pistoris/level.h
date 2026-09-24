@@ -28,7 +28,7 @@ typedef struct arx_pistoris_model ArxModel;
 /* Input string, byte-view, and array storage required only for call duration */
 /* Functions taking ArxLevel* invalidate collection indices and borrowed views */
 /* Successful add returns an index valid for the resulting Level state */
-/* NULL GLB, welding, and generation options select defaults */
+/* NULL GLB, repair, and generation options select defaults */
 /* uint8_t presence and options: zero false, nonzero true */
 
 typedef uint32_t ArxLevelWeldMetric;
@@ -49,6 +49,13 @@ typedef struct ArxLevelVertexWeldOptions {
 } ArxLevelVertexWeldOptions;
 
 #define ARX_LEVEL_VERTEX_WELD_OPTIONS_INIT {1.0e-4f, ARX_LEVEL_WELD_EUCLIDEAN, ARX_LEVEL_DEGENERATE_FACE_PRESERVE}
+
+typedef struct ArxLevelPortalSnapOptions {
+  // Positive finite maximum 3D geometry-to-portal distance in Arx units
+  float radius;
+} ArxLevelPortalSnapOptions;
+
+#define ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT {1.0f}
 
 typedef struct ArxLevelNavSurfaceSourceOptions {
   // Applied along Arx up (-Y)
@@ -413,6 +420,8 @@ ARX_API ArxReturnCode arx_pistoris_level_compact_textures(ArxLevel* level, size_
 ARX_API ArxReturnCode arx_pistoris_level_rebase_texture_paths(ArxLevel* level, ArxStringView directory) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_weld_vertices(ArxLevel* level,
                                                        const ArxLevelVertexWeldOptions* options) ARX_NOEXCEPT;
+ARX_API ArxReturnCode
+arx_pistoris_level_snap_geometry_to_portals(ArxLevel* level, const ArxLevelPortalSnapOptions* options) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_set_texture(ArxLevel* level, ArxTextureIndex index,
                                                      const ArxTextureView* texture) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_add_texture(ArxLevel* level, const ArxTextureView* texture,
@@ -440,6 +449,7 @@ ARX_API ArxReturnCode arx_pistoris_level_set_portal(ArxLevel* level, ArxPortalIn
 ARX_API ArxReturnCode arx_pistoris_level_add_portal(ArxLevel* level, const ArxLevelPortal* portal,
                                                     ArxPortalIndex* out_index) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_remove_portal(ArxLevel* level, ArxPortalIndex index) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_flatten_portals(ArxLevel* level) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_set_room_distance(ArxLevel* level,
                                                            const ArxLevelRoomDistance* distance) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_replace_room_distances(ArxLevel* level, const ArxLevelRoomDistance* distances,

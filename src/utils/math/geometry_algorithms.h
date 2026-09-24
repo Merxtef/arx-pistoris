@@ -15,61 +15,79 @@ namespace pistoris::math {
 inline Vec2<double> xz(const ArxVector3& value) { return {value.x, value.z}; }
 inline Vec3<double> toVec3d(const ArxVector3& value) { return {value.x, value.y, value.z}; }
 
-inline double distancePointSegmentSquared(const Vec3<double>& point, const Vec3<double>& first,
+inline Vec3<double> closestPointOnSegment(const Vec3<double>& point, const Vec3<double>& first,
                                           const Vec3<double>& second) {
   const Vec3<double> segment = second - first;
   const double length_squared = lengthSquared(segment);
-  if (length_squared == 0.0) return lengthSquared(point - first);
+  if (length_squared == 0.0) return first;
   const double proportion = std::clamp(dot(point - first, segment) / length_squared, 0.0, 1.0);
-  return lengthSquared(point - (first + segment * proportion));
+  return first + segment * proportion;
 }
 
-inline double distancePointTriangleSquared(const Vec3<double>& point, const Vec3<double>& a, const Vec3<double>& b,
+inline double distancePointSegmentSquared(const Vec3<double>& point, const Vec3<double>& first,
+                                          const Vec3<double>& second) {
+  return lengthSquared(point - closestPointOnSegment(point, first, second));
+}
+
+inline Vec3<double> closestPointOnTriangle(const Vec3<double>& point, const Vec3<double>& a, const Vec3<double>& b,
                                            const Vec3<double>& c) {
+  const auto closest_on_edges = [&] {
+    const std::array candidates = {
+        closestPointOnSegment(point, a, b),
+        closestPointOnSegment(point, b, c),
+        closestPointOnSegment(point, c, a),
+    };
+    return *std::ranges::min_element(
+        candidates, {}, [&](const Vec3<double>& candidate) { return lengthSquared(point - candidate); });
+  };
+
   const Vec3<double> ab = b - a;
   const Vec3<double> ac = c - a;
+  const double area_squared = lengthSquared(cross(ab, ac));
+  if (!(area_squared > 0.0) || !std::isfinite(area_squared)) return closest_on_edges();
+
   const Vec3<double> ap = point - a;
   const double d1 = dot(ab, ap);
   const double d2 = dot(ac, ap);
-  if (d1 <= 0.0 && d2 <= 0.0) return lengthSquared(point - a);
+  if (d1 <= 0.0 && d2 <= 0.0) return a;
 
   const Vec3<double> bp = point - b;
   const double d3 = dot(ab, bp);
   const double d4 = dot(ac, bp);
-  if (d3 >= 0.0 && d4 <= d3) return lengthSquared(point - b);
+  if (d3 >= 0.0 && d4 <= d3) return b;
 
   const double vc = d1 * d4 - d3 * d2;
   if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
     const double weight = d1 / (d1 - d3);
-    return lengthSquared(point - (a + ab * weight));
+    return a + ab * weight;
   }
 
   const Vec3<double> cp = point - c;
   const double d5 = dot(ab, cp);
   const double d6 = dot(ac, cp);
-  if (d6 >= 0.0 && d5 <= d6) return lengthSquared(point - c);
+  if (d6 >= 0.0 && d5 <= d6) return c;
 
   const double vb = d5 * d2 - d1 * d6;
   if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
     const double weight = d2 / (d2 - d6);
-    return lengthSquared(point - (a + ac * weight));
+    return a + ac * weight;
   }
 
   const double va = d3 * d6 - d5 * d4;
   if (va <= 0.0 && d4 >= d3 && d5 >= d6) {
     const double weight = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-    return lengthSquared(point - (b + (c - b) * weight));
+    return b + (c - b) * weight;
   }
 
   const double denominator = va + vb + vc;
-  if (!(denominator > 0.0) || !std::isfinite(denominator)) {
-    return std::min({distancePointSegmentSquared(point, a, b),
-                     distancePointSegmentSquared(point, b, c),
-                     distancePointSegmentSquared(point, c, a)});
-  }
+  if (!(denominator > 0.0) || !std::isfinite(denominator)) return closest_on_edges();
   const double inverse = 1.0 / denominator;
-  const Vec3<double> closest = a + ab * (vb * inverse) + ac * (vc * inverse);
-  return lengthSquared(point - closest);
+  return a + ab * (vb * inverse) + ac * (vc * inverse);
+}
+
+inline double distancePointTriangleSquared(const Vec3<double>& point, const Vec3<double>& a, const Vec3<double>& b,
+                                           const Vec3<double>& c) {
+  return lengthSquared(point - closestPointOnTriangle(point, a, b, c));
 }
 
 inline ArxVector3 lerp(const ArxVector3& a, const ArxVector3& b, double ratio) {

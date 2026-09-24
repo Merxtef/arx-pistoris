@@ -193,11 +193,26 @@ Room references are normalized with the same grammar as room definitions.
 `<portal-name>` becomes the unique Level portal name; import normalizes it and
 resolves collisions with `_N` suffixes.
 
-The mesh must resolve to three or four perimeter positions. Materials carry no
-portal data and are ignored. Canonical export assigns `arx_portal` for
-visualization.
+The mesh must resolve to three or four perimeter positions. Author quad
+positions on one plane. `--flatten-portals` can project an accepted mildly
+nonplanar quad onto its canonical plane after import, but cannot recover a
+portal rejected as invalid. Materials carry no portal data and are ignored.
+Canonical export assigns `arx_portal` for visualization.
 
 [Worked portal example](LEVEL_GUIDE.md#portals)
+
+## Room Distances
+
+Room distances have no authored GLB notation. Canonical export can preserve a
+complete, nonempty collection as opaque round-trip data when every Level room
+has exported geometry. Import either restores the complete collection or
+discards it without failing Level import when the stored room or portal
+structure no longer matches.
+
+Keep imported custom properties or metadata when re-exporting GLB if the
+stored distances should survive the edit. Geometry edits can still make a
+recovered collection stale; generate room distances explicitly when updated
+correctness is required.
 
 ## Player Spawn
 
@@ -250,19 +265,12 @@ Option order is arbitrary on import and canonical on export as `RADIUS`,
 Nonempty anchor names are unique. Empty Level names export as
 `anchor_<ordinal>`. Name collisions receive `_N` suffixes.
 
-Anchor nodes may carry opaque roundtrip metadata:
-
-```json
-{"arx_pistoris_anchor":{"id":3,"links":[5,9]}}
-```
-
-`id` and every `links` entry are nonnegative JSON integers no greater than
-`4294967294`. IDs are file-local. Canonical export stores each connection once
-on its lower-ID endpoint. Import also accepts reverse and duplicate
-declarations. Missing anchors, self-references, malformed entries, and
-ambiguous IDs discard only the affected declarations. Editing tools may remove
-`extras`; generate connections explicitly after structural anchor edits when
-the graph matters.
+Anchor connections have no authored GLB notation. Canonical export can
+preserve the current graph as opaque round-trip data. Import keeps usable
+connections and ignores unusable declarations without failing Level import.
+Keep imported custom properties or metadata when re-exporting GLB, and
+generate connections explicitly after structural anchor edits when the graph
+matters.
 
 [Worked anchor example](LEVEL_GUIDE.md#anchors)
 
@@ -415,9 +423,9 @@ accepted only when its resulting FTL path is an engine-recognized entity class.
 Full class paths are lowercase portable `/` paths without a final extension
 and may omit `graph/`. The final `__` separates the required label, so a class
 path may contain `__`. If a full path contains `graph` after a prefix, the
-engine discards the prefix; import stores the effective path and warns. Legacy
-`.teo` is normalized by external import with a warning but is not a Level
-class-path form.
+engine discards the prefix; import stores the effective path and warns. Import
+normalizes legacy `.teo` with a warning, but `.teo` is not a Level class-path
+form.
 
 The entity root may carry one static preview mesh. It is ignored without a
 warning and never becomes Level geometry or a Level texture.

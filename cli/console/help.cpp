@@ -18,6 +18,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace {
@@ -152,6 +153,11 @@ class HelpPrinter {
   void wrapped(std::string_view text, std::size_t indent = 0) const {
     spaces(indent);
     writeWrapped(text, indent, indent);
+  }
+
+  void wrapped(std::string_view text, std::size_t indent, std::size_t continuation_indent) const {
+    spaces(indent);
+    writeWrapped(text, indent, continuation_indent);
   }
 
   void entry(std::size_t depth, std::string_view prefix, std::string_view usage, std::string_view description,
@@ -295,6 +301,33 @@ bool moduleVisible(const cli::RegisteredModule& registered, const cli::RouteDesc
   return false;
 }
 
+void printImplicationSummary(const HelpPrinter& printer, const cli::RegisteredModule& registered) {
+  const std::span<const cli::ModuleImplication> implications = registered.module->implications();
+  if (implications.empty()) return;
+
+  std::string summary = "Includes: ";
+  bool first = true;
+  for (std::size_t index = 0; index < implications.size(); ++index) {
+    const cli::Module* target = &implications[index].target();
+    bool duplicate = false;
+    for (std::size_t previous = 0; previous < index; ++previous) {
+      if (&implications[previous].target() == target) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (duplicate) continue;
+    if (!first) summary += ", ";
+    summary += target->stableName();
+    first = false;
+  }
+  summary += ". Included flags and their options may also be specified explicitly.";
+
+  constexpr std::string_view kPrefix = "Includes: ";
+  const std::size_t indent = 4 + registered.depth * 2;
+  printer.wrapped(summary, indent, indent + kPrefix.size());
+}
+
 bool printModuleHelp(const HelpPrinter& printer, const cli::RouteDescriptor* route, cli::HelpSection section) {
   bool any = false;
   cli::ModuleRegistryView registry = cli::moduleRegistry();
@@ -303,6 +336,7 @@ bool printModuleHelp(const HelpPrinter& printer, const cli::RouteDescriptor* rou
     const cli::ModuleHelp help = registered.module->help(route);
     if (help.section != section || (!help.usage && !help.description) || !moduleVisible(registered, route)) continue;
     printer.entry(registered.depth, {}, view(help.usage), view(help.description));
+    printImplicationSummary(printer, registered);
     any = true;
   }
   return any;

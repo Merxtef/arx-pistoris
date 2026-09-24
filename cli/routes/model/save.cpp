@@ -340,10 +340,10 @@ bool writeFtlIntermediate(IntermediateModel& source, const ExecutionContext& exe
   }
   std::vector<AnimationWriteEntry> animations;
   std::vector<std::uint8_t> rendered_icon;
-  return projectInventoryIcon(source.model, invocation.options.inventory_icon_render, rendered_icon) &&
+  return projectInventoryIconBmp(source.model, invocation.options.inventory_icon_render, rendered_icon) &&
          pairBakedAnimationOutputs(files, invocation, animations) &&
          writeFtlFiles(
-             files.ftl, animations, texture_files, rendered_icon, ARX_IMAGE_FORMAT_PNG, execution, invocation);
+             files.ftl, animations, texture_files, rendered_icon, ARX_IMAGE_FORMAT_BMP, execution, invocation);
 }
 
 bool writeJsonNative(NativeModelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {

@@ -1080,9 +1080,18 @@ f 1 2 3
     CHECK(info.width == 96);
     CHECK(info.height == 64);
 
+    REQUIRE(copied.renderIconBmp(options, rendered) == ARX_OK);
+    REQUIRE(pistoris::binary::inspectEncodedImage(rendered, info) == ARX_OK);
+    CHECK(info.format == ARX_IMAGE_FORMAT_BMP);
+    CHECK(info.width == 96);
+    CHECK(info.height == 64);
+    CHECK(info.components == 4);
+
     options.width_slots = -2;
     const std::vector<std::uint8_t> before = rendered;
     CHECK(copied.renderIconPng(options, rendered) == ARX_INVALID_OPTIONS);
+    CHECK(rendered == before);
+    CHECK(copied.renderIconBmp(options, rendered) == ARX_INVALID_OPTIONS);
     CHECK(rendered == before);
   }
 

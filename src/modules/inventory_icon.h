@@ -68,6 +68,7 @@ void clear(InventoryIconData& icon) noexcept;
 // --- Generation ---
 
 Error renderPng(const InventoryIconData& icon, const RenderOptions& options, std::vector<std::uint8_t>& out);
+Error renderBmp(const InventoryIconData& icon, const RenderOptions& options, std::vector<std::uint8_t>& out);
 
 }  // namespace inventory_icon
 }  // namespace pistoris

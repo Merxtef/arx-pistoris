@@ -1280,6 +1280,57 @@ ArxReturnCode Level::weldVertices(const VertexWeldOptions& options) noexcept {
   });
 }
 
+ArxReturnCode Level::snapGeometryToPortals() noexcept { return snapGeometryToPortals(PortalSnapOptions{}); }
+
+ArxReturnCode Level::snapGeometryToPortals(const PortalSnapOptions& options) noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    ArxReturnCode rc = validateMesh();
+    if (rc != ARX_OK) return rc;
+    rc = validatePortals();
+    if (rc != ARX_OK) return rc;
+
+    GeometryData next = data_->geometry;
+    rooms::PortalSnapStatistics statistics;
+    rc = level_validation::roomsError(
+        rooms::snapGeometryToPortals(next, data_->rooms, {.radius = options.radius}, &statistics));
+    if (rc != ARX_OK) return rc;
+
+    LevelValidationState next_validation;
+    rc = validateMeshCoherence(next,
+                               data_->textures,
+                               data_->rooms.face_rooms,
+                               data_->lighting.corner_colors,
+                               data_->rooms.definitions.size(),
+                               next_validation);
+    if (rc != ARX_OK) return rc;
+
+    LevelValidationState final_validation = data_->validation;
+    level_validation::invalidate(final_validation, LevelValidation::kVertices);
+    final_validation.derived = next_validation.derived;
+    level_validation::markValid(final_validation, next_validation.valid);
+    geometry::replace(data_->geometry, std::move(next));
+    data_->validation = final_validation;
+
+    log(ARX_LOG_INFO,
+        "Level portal snapping: {} candidate vertices, {} snapped, {} already aligned",
+        statistics.candidates,
+        statistics.snapped,
+        statistics.already_aligned);
+    const std::size_t skipped =
+        statistics.skipped_room_conflict + statistics.skipped_ambiguous + statistics.skipped_face_safety;
+    if (skipped != 0) {
+      log(ARX_LOG_WARN,
+          "Level portal snapping skipped {} vertices: {} shared with unrelated rooms, {} ambiguous, {} rejected "
+          "to preserve incident faces",
+          skipped,
+          statistics.skipped_room_conflict,
+          statistics.skipped_ambiguous,
+          statistics.skipped_face_safety);
+    }
+    return ARX_OK;
+  });
+}
+
 ArxReturnCode Level::setTexture(TextureIndex index, const ArxTextureView& value) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (!validIndex(index, data_->textures.textures.size())) return ARX_INDEX_OUT_OF_RANGE;
@@ -1544,6 +1595,34 @@ ArxReturnCode Level::removePortal(PortalIndex index) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     if (!validIndex(index, data_->rooms.portals.size())) return ARX_INDEX_OUT_OF_RANGE;
     rooms::removePortal(data_->rooms, index);
+    return ARX_OK;
+  });
+}
+
+ArxReturnCode Level::flattenPortals() noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    ArxReturnCode rc = validatePortals();
+    if (rc != ARX_OK) return rc;
+
+    const bool had_room_distances = !data_->rooms.distances.empty();
+    RoomsData next = data_->rooms;
+    rooms::PortalFlattenStatistics statistics;
+    rc = level_validation::roomsError(rooms::flattenPortals(next, &statistics));
+    if (rc != ARX_OK) return rc;
+    if (statistics.flattened_quads != 0) {
+      for (const Portal& portal : next.portals)
+        if (!level_validation::validPortalBounds(portal)) return ARX_LEVEL_PORTAL_OUT_OF_BOUNDS;
+      data_->rooms = std::move(next);
+    }
+
+    log(ARX_LOG_INFO,
+        "Level portal flattening: {} quads flattened, {} already planar, {} triangles unchanged",
+        statistics.flattened_quads,
+        statistics.already_planar_quads,
+        statistics.triangles);
+    if (had_room_distances && statistics.flattened_quads != 0) {
+      log(ARX_LOG_INFO, "Level portal flattening discarded room distances because portal geometry changed");
+    }
     return ARX_OK;
   });
 }

@@ -150,6 +150,7 @@ arx_add_internal_object_library(arx_pistoris_glb
   external/glb/level/palette.cpp
   external/glb/level/paths.cpp
   external/glb/level/player_spawn.cpp
+  external/glb/level/room_distance_metadata.cpp
   external/glb/level/topology.cpp
   external/glb/level/zones/export.cpp
   external/glb/level/zones/import.cpp
