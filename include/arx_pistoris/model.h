@@ -207,6 +207,9 @@ ARX_API ArxReturnCode arx_pistoris_model_clear_inventory_icon(ArxModel* model) A
 ARX_API ArxReturnCode arx_pistoris_model_render_icon_png(const ArxModel* model,
                                                          const ArxModelInventoryIconRenderOptions* options,
                                                          uint8_t** out_data, size_t* out_size) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_render_icon_bmp(const ArxModel* model,
+                                                         const ArxModelInventoryIconRenderOptions* options,
+                                                         uint8_t** out_data, size_t* out_size) ARX_NOEXCEPT;
 
 // --- Inspection ---
 

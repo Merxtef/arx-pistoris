@@ -56,6 +56,24 @@ ArxLevel* makeMinimalLevel() {
 }  // namespace
 
 TEST_SUITE("C Level API") {
+  TEST_CASE("C facade flattens Level portals") {
+    CHECK(arx_pistoris_level_flatten_portals(nullptr) == ARX_INVALID_HANDLE);
+    ArxLevel* level = makeMinimalLevel();
+    REQUIRE(arx_pistoris_level_flatten_portals(level) == ARX_OK);
+    arx_pistoris_level_destroy(level);
+  }
+
+  TEST_CASE("C facade snaps Level geometry with default or explicit options") {
+    ArxLevel* level = makeMinimalLevel();
+    CHECK(arx_pistoris_level_snap_geometry_to_portals(nullptr, nullptr) == ARX_INVALID_HANDLE);
+    REQUIRE(arx_pistoris_level_snap_geometry_to_portals(level, nullptr) == ARX_OK);
+
+    ArxLevelPortalSnapOptions options = ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT;
+    options.radius = 0.0f;
+    CHECK(arx_pistoris_level_snap_geometry_to_portals(level, &options) == ARX_INVALID_OPTIONS);
+    arx_pistoris_level_destroy(level);
+  }
+
   TEST_CASE("Level image facade owns, renders, and clears images") {
     ArxLevel* level = makeMinimalLevel();
     const std::vector<std::uint8_t> image = makeTestBmp();

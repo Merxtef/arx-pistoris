@@ -26,6 +26,7 @@ arx_add_internal_object_library(arx_pistoris_module_cinematic
 )
 
 arx_add_internal_object_library(arx_pistoris_module_geometry
+  geometry/adjacency.cpp
   geometry/index.cpp
   geometry/operations.cpp
   geometry/position_index.cpp
@@ -107,7 +108,11 @@ arx_add_internal_object_library(arx_pistoris_module_rooms
   rooms/operations.cpp
   rooms/portal.cpp
   rooms/portal_distance.cpp
+  rooms/portal_flattening.cpp
+  rooms/portal_surface.cpp
+  rooms/portal_snapping.cpp
   rooms/room_geometry_index.cpp
+  rooms/room_portal_index.cpp
   rooms/validation.cpp
   rooms/vertex_weld_segments.cpp
 )

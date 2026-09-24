@@ -761,6 +761,44 @@ pistoris::LevelModules makeSimpleLevel() {
   return level;
 }
 
+pistoris::LevelModules makeRoomDistanceLevel() {
+  pistoris::LevelModules level = makeSimpleLevel();
+  addPortalRooms(level);
+  addSecondRoomTriangle(level);
+  level.rooms.portals.push_back(makeLevelPortal("passage", 1.5f));
+  level.rooms.portals.push_back(makeLevelPortal("passage_end", 1.75f));
+  level.rooms.distances.push_back({125.0f, 0, 1});
+  return level;
+}
+
+pistoris::LevelModules makeMultiRoomDistanceLevel() {
+  pistoris::LevelModules level = makeRoomDistanceLevel();
+  level.rooms.definitions.push_back({"room_3"});
+
+  const std::uint32_t base = static_cast<std::uint32_t>(level.geometry.vertices.size());
+  level.geometry.vertices.push_back({{4.0f, 0.0f, 4.0f}});
+  level.geometry.vertices.push_back({{5.0f, 0.0f, 4.0f}});
+  level.geometry.vertices.push_back({{4.0f, 0.0f, 5.0f}});
+  const pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
+  addLevelFace(level,
+               {{{{base + 0, normal, 0.0f, 0.0f}, {base + 1, normal, 1.0f, 0.0f}, {base + 2, normal, 0.0f, 1.0f}}},
+                pistoris::kNoTexture,
+                0,
+                0.0f},
+               2);
+
+  pistoris::Portal portal = makeLevelPortal("side_passage", 4.5f);
+  portal.room_1 = 1;
+  portal.room_2 = 2;
+  level.rooms.portals.push_back(std::move(portal));
+  level.rooms.distances = {
+      {125.0f, 0, 1},
+      {-1.0f, pistoris::kInvalidPortalIndex, pistoris::kInvalidPortalIndex},
+      {75.0f, 2, 2},
+  };
+  return level;
+}
+
 ArxReturnCode exportRenderSplitsDebugGlb(const pistoris::LevelModules& src, float normal_weld_degrees,
                                          std::vector<std::uint8_t>& out) {
   pistoris::Level level;
@@ -3109,6 +3147,213 @@ TEST_SUITE("FtsGlb") {
     CHECK(dst.navigation.anchors[0].radius == 4.0f);
     CHECK(dst.navigation.anchors[0].height == -5.0f);
     CHECK(dst.navigation.anchors[0].flags == pistoris::kAnchorFlagBlocked);
+  }
+
+  TEST_CASE("LevelGlbRoundtripPreservesRoomDistancesAsOpaqueMetadata") {
+    const pistoris::LevelModules src = makeRoomDistanceLevel();
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t root = testNodeIndex(parsed, "level_space");
+    const std::size_t room_1 = testNodeIndex(parsed, "arx_room__room_1");
+    const std::size_t room_2 = testNodeIndex(parsed, "arx_room__room_2");
+    const std::size_t portal = testNodeIndex(parsed, "arx_portal__room_1__room_2__passage");
+    REQUIRE(root < parsed.gltf["nodes"].size());
+    REQUIRE(room_1 < parsed.gltf["nodes"].size());
+    REQUIRE(room_2 < parsed.gltf["nodes"].size());
+    REQUIRE(portal < parsed.gltf["nodes"].size());
+    const nlohmann::json& metadata = parsed.gltf["nodes"][root]["extras"]["arx_pistoris_room_distances"];
+    CHECK(metadata["version"] == 1);
+    CHECK(metadata["roomCount"] == 2);
+    CHECK(metadata["portalCount"] == 2);
+    CHECK(metadata["pairs"].size() == 1);
+    CHECK(metadata["pairs"][0]["distance"] == 125.0f);
+    CHECK(parsed.gltf["nodes"][room_1]["extras"]["arx_pistoris_room"]["id"] == 0);
+    CHECK(parsed.gltf["nodes"][room_2]["extras"]["arx_pistoris_room"]["id"] == 1);
+    CHECK(parsed.gltf["nodes"][portal]["extras"]["arx_pistoris_portal"]["id"] == 0);
+
+    parsed.gltf["nodes"][root]["translation"] = {5.0f, 0.0f, -7.0f};
+    parsed.gltf["nodes"][root]["rotation"] = {0.0f, 1.0f, 0.0f, 0.0f};
+    LogCapture logs;
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.rooms.distances.size() == 1);
+    CHECK(dst.rooms.distances[0].distance == 125.0f);
+    CHECK(dst.rooms.distances[0].low_room_portal == 0);
+    CHECK(dst.rooms.distances[0].high_room_portal == 1);
+    CHECK(logs.contains("encoded room distances found"));
+    CHECK(logs.contains("encoded room distances applied"));
+    CHECK_FALSE(logs.contains("encoded room distances discarded"));
+  }
+
+  TEST_CASE("LevelGlbRoomDistanceMetadataAcceptsCommonPortalTranslation") {
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(makeRoomDistanceLevel(), glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t portal_parent = testNodeIndex(parsed, "portals_parent");
+    REQUIRE(portal_parent < parsed.gltf["nodes"].size());
+    parsed.gltf["nodes"][portal_parent]["translation"][0] =
+        parsed.gltf["nodes"][portal_parent]["translation"][0].get<float>() + 2.0f;
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.rooms.distances.size() == 1);
+    CHECK(dst.rooms.distances[0].distance == 125.0f);
+    CHECK(dst.rooms.distances[0].low_room_portal == 0);
+    CHECK(dst.rooms.distances[0].high_room_portal == 1);
+  }
+
+  TEST_CASE("LevelGlbRoomDistanceMetadataAcceptsReflectedRoot") {
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(makeRoomDistanceLevel(), glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t root = testNodeIndex(parsed, "level_space");
+    REQUIRE(root < parsed.gltf["nodes"].size());
+    nlohmann::json& scale = parsed.gltf["nodes"][root]["scale"];
+    REQUIRE(scale.is_array());
+    REQUIRE(scale.size() == 3);
+    scale[0] = -scale[0].get<float>();
+    parsed.gltf["nodes"][root]["translation"][0] = 5.0f;
+
+    LogCapture logs;
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.rooms.distances.size() == 1);
+    CHECK(dst.rooms.distances[0].distance == 125.0f);
+    CHECK(dst.rooms.distances[0].low_room_portal == 0);
+    CHECK(dst.rooms.distances[0].high_room_portal == 1);
+    CHECK(logs.contains("encoded room distances applied"));
+    CHECK_FALSE(logs.contains("encoded room distances discarded"));
+  }
+
+  TEST_CASE("LevelGlbRoomDistanceMetadataMapsReorderedPortals") {
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(makeRoomDistanceLevel(), glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t passage = testNodeIndex(parsed, "arx_portal__room_1__room_2__passage");
+    const std::size_t passage_end = testNodeIndex(parsed, "arx_portal__room_1__room_2__passage_end");
+    REQUIRE(passage < parsed.gltf["nodes"].size());
+    REQUIRE(passage_end < parsed.gltf["nodes"].size());
+    std::swap(parsed.gltf["nodes"][passage], parsed.gltf["nodes"][passage_end]);
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.rooms.portals.size() == 2);
+    CHECK(dst.rooms.portals[0].name == "passage_end");
+    CHECK(dst.rooms.portals[1].name == "passage");
+    REQUIRE(dst.rooms.distances.size() == 1);
+    CHECK(dst.rooms.distances[0].distance == 125.0f);
+    CHECK(dst.rooms.distances[0].low_room_portal == 1);
+    CHECK(dst.rooms.distances[0].high_room_portal == 0);
+  }
+
+  TEST_CASE("LevelGlbRoomDistanceMetadataDiscardsInvalidPairsAtomically") {
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(makeMultiRoomDistanceLevel(), glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t root = testNodeIndex(parsed, "level_space");
+    REQUIRE(root < parsed.gltf["nodes"].size());
+    nlohmann::json& pairs = parsed.gltf["nodes"][root]["extras"]["arx_pistoris_room_distances"]["pairs"];
+    REQUIRE(pairs.is_array());
+    REQUIRE(pairs.size() == 3);
+    pairs[2]["portals"][1] = 99;
+
+    LogCapture logs;
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    CHECK(dst.rooms.distances.empty());
+    CHECK(logs.contains("stored pair or endpoint references are invalid"));
+    CHECK(logs.contains("encoded room distances discarded"));
+  }
+
+  TEST_CASE("LevelGlbImportDiscardsStaleRoomDistanceMetadata") {
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(makeRoomDistanceLevel(), glb) == ARX_OK);
+
+    SUBCASE("non-rigid metadata transform") {
+      ParsedTestGlb parsed = parseTestGlb(glb);
+      const std::size_t root = testNodeIndex(parsed, "level_space");
+      REQUIRE(root < parsed.gltf["nodes"].size());
+      parsed.gltf["nodes"][root]["scale"] = {2.0f, 2.0f, 2.0f};
+
+      LogCapture logs;
+      pistoris::LevelModules dst;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+      CHECK(dst.rooms.distances.empty());
+      CHECK(logs.contains("encoded room distances found"));
+      CHECK(logs.contains("metadata transform scales or shears the stored topology"));
+      CHECK(logs.contains("encoded room distances discarded"));
+    }
+
+    SUBCASE("duplicate room identity") {
+      ParsedTestGlb parsed = parseTestGlb(glb);
+      const std::size_t room_2 = testNodeIndex(parsed, "arx_room__room_2");
+      REQUIRE(room_2 < parsed.gltf["nodes"].size());
+      parsed.gltf["nodes"][room_2]["extras"]["arx_pistoris_room"]["id"] = 0;
+
+      LogCapture logs;
+      pistoris::LevelModules dst;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+      CHECK(dst.rooms.distances.empty());
+      CHECK(logs.contains("room or portal identities are missing, duplicated, or out of range"));
+      CHECK(logs.contains("encoded room distances discarded"));
+    }
+
+    SUBCASE("portal topology changed") {
+      ParsedTestGlb parsed = parseTestGlb(glb);
+      const std::size_t portal = testNodeIndex(parsed, "arx_portal__room_1__room_2__passage_end");
+      REQUIRE(portal < parsed.gltf["nodes"].size());
+      parsed.gltf["nodes"][portal]["translation"][0] =
+          parsed.gltf["nodes"][portal]["translation"][0].get<float>() + 2.0f;
+
+      LogCapture logs;
+      pistoris::LevelModules dst;
+      REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+      CHECK(dst.rooms.distances.empty());
+      CHECK(logs.contains("portal topology no longer matches the stored snapshot"));
+      CHECK(logs.contains("encoded room distances discarded"));
+    }
+  }
+
+  TEST_CASE("LevelGlbRoomDistanceMetadataMapsReorderedRooms") {
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(makeRoomDistanceLevel(), glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t room_1 = testNodeIndex(parsed, "arx_room__room_1");
+    const std::size_t room_2 = testNodeIndex(parsed, "arx_room__room_2");
+    REQUIRE(room_1 < parsed.gltf["nodes"].size());
+    REQUIRE(room_2 < parsed.gltf["nodes"].size());
+    std::swap(parsed.gltf["nodes"][room_1], parsed.gltf["nodes"][room_2]);
+
+    pistoris::LevelModules dst;
+    REQUIRE(importLevelGlb(writeTestGlb(std::move(parsed)), dst) == ARX_OK);
+    REQUIRE(dst.rooms.definitions.size() == 2);
+    CHECK(dst.rooms.definitions[0].name == "room_2");
+    CHECK(dst.rooms.definitions[1].name == "room_1");
+    REQUIRE(dst.rooms.distances.size() == 1);
+    CHECK(dst.rooms.distances[0].distance == 125.0f);
+    CHECK(dst.rooms.distances[0].low_room_portal == 1);
+    CHECK(dst.rooms.distances[0].high_room_portal == 0);
+  }
+
+  TEST_CASE("LevelGlbExportOmitsRoomDistanceMetadataWithEmptyRooms") {
+    pistoris::LevelModules src = makeSimpleLevel();
+    addPortalRooms(src);
+    src.rooms.portals.push_back(makeLevelPortal("passage", 1.5f));
+    src.rooms.distances.push_back({125.0f, 0, 0});
+
+    LogCapture logs;
+    std::vector<std::uint8_t> glb;
+    REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
+    ParsedTestGlb parsed = parseTestGlb(glb);
+    const std::size_t root = testNodeIndex(parsed, "level_space");
+    const std::size_t room = testNodeIndex(parsed, "arx_room__room_1");
+    REQUIRE(root < parsed.gltf["nodes"].size());
+    REQUIRE(room < parsed.gltf["nodes"].size());
+    CHECK_FALSE(parsed.gltf["nodes"][root].contains("extras"));
+    CHECK_FALSE(parsed.gltf["nodes"][room].contains("extras"));
+    CHECK(logs.contains("1 empty room(s), 1 referencing portal(s), and 1 positive room-distance pair(s) discarded"));
   }
 
   TEST_CASE("LevelGlbImportNormalizesRoomReferencesAndRejectsNormalizedCollisions") {

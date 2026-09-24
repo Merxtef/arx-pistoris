@@ -91,6 +91,7 @@ class Builder {
   void addChild(int parent, int child);
   void addRoot(int node);
   void setRootTransform(std::string name, Vec3 translation, const ArxQuat& rotation, float uniform_scale);
+  void setRootTransformExtrasJson(std::string json);
   int addDebugMeshNode(std::string name, std::span<const Vec3> positions, std::span<const std::uint32_t> indices,
                        int material);
 
@@ -185,6 +186,7 @@ class Builder {
   ArxQuat content_basis_rotation_ = {1.0f, 0.0f, 0.0f, 0.0f};
   bool root_transform_enabled_ = false;
   std::string root_transform_name_;
+  std::string root_transform_extras_json_;
   Vec3 root_translation_{};
   ArxQuat root_rotation_ = {1.0f, 0.0f, 0.0f, 0.0f};
   float root_scale_ = 1.0f;

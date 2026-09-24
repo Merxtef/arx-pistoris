@@ -184,6 +184,8 @@ class Model {
   void clearInventoryIcon() noexcept;
   [[nodiscard]] ArxReturnCode renderIconPng(const InventoryIconRenderOptions& options,
                                             std::vector<std::uint8_t>& out) const noexcept;
+  [[nodiscard]] ArxReturnCode renderIconBmp(const InventoryIconRenderOptions& options,
+                                            std::vector<std::uint8_t>& out) const noexcept;
 
   // --- Inspection ---
 

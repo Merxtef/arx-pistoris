@@ -99,9 +99,12 @@ add_executable(arx_pistoris_cli
   routes/level/options/debug_exports.cpp
   routes/level/options/minimap_generation.cpp
   routes/level/options/native_bake.cpp
+  routes/level/options/navigation.cpp
   routes/level/options/nav_surface_generation.cpp
   routes/level/options/nav_surface_pruning.cpp
   routes/level/options/output.cpp
+  routes/level/options/portal_flattening.cpp
+  routes/level/options/portal_snapping.cpp
   routes/level/options/previews.cpp
   routes/level/options/room_distances.cpp
   routes/level/options/root.cpp

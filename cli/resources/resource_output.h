@@ -34,6 +34,7 @@ class ResourceOutputPlan {
   ResourceAssetId addAsset(ResourceAssetKind kind, std::string identity);
   void reserveOutput(PathLocation target);
   void add(ResourceFileKind kind, PathLocation target, const void* data, std::size_t size, ResourceAssetId asset);
+  void addOwned(ResourceFileKind kind, PathLocation target, std::vector<std::uint8_t> data, ResourceAssetId asset);
 
   bool resolve(bool dry_run, bool keep_first);
   bool write(IoService& io) const;
@@ -47,11 +48,14 @@ class ResourceOutputPlan {
   };
 
   struct Candidate {
+    [[nodiscard]] const void* payload() const noexcept { return owned_data.empty() ? data : owned_data.data(); }
+
     ResourceFileKind kind = ResourceFileKind::kAudio;
     PathLocation target;
     const void* data = nullptr;
     std::size_t size = 0;
     ResourceAssetId asset = 0;
+    std::vector<std::uint8_t> owned_data;
   };
 
   std::vector<Asset> assets_;

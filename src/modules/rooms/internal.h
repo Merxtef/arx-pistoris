@@ -5,6 +5,7 @@
 
 #include "modules/rooms.h"
 
+#include <optional>
 #include <utility>
 
 namespace pistoris::rooms {
@@ -14,6 +15,14 @@ inline constexpr FaceType kRoomDistanceIgnoreFlags = kFaceBitWater | kFaceBitNoc
 inline constexpr float kVisibilityEndpointEpsilon = 1.0e-4f;
 inline constexpr float kSampleOffsetEndpointEpsilon = 1.0e-3f;
 inline constexpr std::size_t kRoomDistanceWarningExampleLimit = 5U;
+
+struct PortalSurface {
+  std::array<Vec3<double>, 4> vertices = {};
+  std::size_t vertex_count = 0;
+};
+
+std::optional<PortalSurface> projectPortalSurface(const Portal& portal) noexcept;
+Vec3<double> closestPointOnPortalSurface(const PortalSurface& surface, const Vec3<double>& point) noexcept;
 
 struct RoomDistanceRoomPairWarning {
   RoomIndex room_1 = 0;
@@ -107,6 +116,19 @@ class RoomGeometryIndex {
   std::vector<ArxAabb> room_bounds_;
   std::vector<std::uint8_t> room_has_bounds_;
 };
+
+class RoomPortalIndex {
+ public:
+  [[nodiscard]] std::span<const PortalIndex> roomPortals(RoomIndex room) const noexcept;
+
+ private:
+  std::vector<PortalIndex> portals_;
+  std::vector<std::size_t> offsets_;
+
+  friend Error buildRoomPortalIndex(const RoomsData& rooms, RoomPortalIndex& out);
+};
+
+Error buildRoomPortalIndex(const RoomsData& rooms, RoomPortalIndex& out);
 
 struct DijkstraPath {
   bool found = false;

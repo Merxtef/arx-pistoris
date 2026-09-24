@@ -250,6 +250,8 @@ TEST_SUITE("geometry::operations") {
     };
     geometry.faces.push_back(makeFace(0, 1, 2));
     geometry.faces.push_back(makeFace(3, 1, 2));
+    geometry.faces[0].normal = {1.0f, 0.0f, 0.0f};
+    geometry.faces[1].normal = {1.0f, 0.0f, 0.0f};
 
     CHECK(geometry::weldVertices(geometry, {.radius = 0.1f}) == geometry::Error::kNone);
 
@@ -259,6 +261,8 @@ TEST_SUITE("geometry::operations") {
     CHECK(geometry.faces[1].corners[0].vertex == 0);
     CHECK(geometry.faces[1].corners[1].vertex == 1);
     CHECK(geometry.faces[1].corners[2].vertex == 2);
+    CHECK(geometry.faces[0].normal == geometry::faceNormalOr(geometry, geometry.faces[0], {}));
+    CHECK(geometry.faces[1].normal == geometry::faceNormalOr(geometry, geometry.faces[1], {}));
   }
 
   TEST_CASE("Weld rejects degenerate face collapse without mutation") {

@@ -120,6 +120,16 @@ LEVEL_TRIPLETS = CATALOG_LEVEL_TRIPLETS + discover_level_triplets()
 LEVEL_FTS_AVAILABLE = bool(LEVEL_FTS_FILES)
 LEVEL_BUNDLE_AVAILABLE = bool(LEVEL_TRIPLETS)
 LEVEL_FTS = LEVEL_FTS_FILES[0] if LEVEL_FTS_AVAILABLE else LEVEL_GLB
+LEVEL_NAVIGATION_FTS = next(
+    (
+        FIXTURE_ROOT / fixture["fts"]
+        for fixture in FIXTURE_CATALOG["levels"]
+        if "navigation" in fixture.get("regeneration", {})
+    ),
+    None,
+)
+if LEVEL_NAVIGATION_FTS is None:
+    raise ValueError("Fixture catalog must include a Level with navigation regeneration")
 LEVEL_BUNDLE_FTS, LEVEL_LLF, LEVEL_DLF = LEVEL_TRIPLETS[0] if LEVEL_BUNDLE_AVAILABLE else (LEVEL_GLB,) * 3
 if CATALOG_LEVEL_TRIPLETS:
     LEVEL_BUNDLE_NAME = Path(FIXTURE_CATALOG["levels"][0]["dlf"]).stem
@@ -701,9 +711,9 @@ def main() -> int:
         derived_native_directory.mkdir()
         derived_native_output = derived_native_directory / "model.ftl"
         expect_success(cli, "--skip-texture-export", "--icon-slots", "-", "-", icon_input, derived_native_output)
-        derived_native_icon = (derived_native_directory / "model[icon].png").read_bytes()
-        if not derived_native_icon.startswith(b"\x89PNG\r\n\x1a\n"):
-            raise AssertionError("explicit icon operations must route native output through Model rendering")
+        derived_native_icon = (derived_native_directory / "model[icon].bmp").read_bytes()
+        if not derived_native_icon.startswith(b"BM"):
+            raise AssertionError("explicit icon operations must render native Model icons as BMP")
 
         centered_icon_output = intermediate_icon_directory / "centered.glb"
         expect_success(cli, "--icon-slots", "2", "1", "--icon-layout", "c", icon_input, centered_icon_output)
@@ -887,6 +897,7 @@ def main() -> int:
         for expected in (
             "Convert native Level bundles, compatible JSON, and editable Level GLB.",
             "--gen-room-distances",
+            "--gen-navigation",
             "--gen-nav-surface",
             "--gen-anchors",
             "--weld-vertices",
@@ -894,6 +905,10 @@ def main() -> int:
             "--weld-radius <UNITS=0.0001>",
             "--weld-metric <MODE=euclidean>",
             "--weld-degenerate-faces <MODE=preserve>",
+            "--flatten-portals",
+            "--snap-to-portals",
+            "    --portal-snap-radius",
+            "--portal-snap-radius <UNITS=1>",
             "    --nav-from-floor",
             "    --nav-radius",
             "--nav-radius <UNITS=50>",
@@ -926,6 +941,14 @@ def main() -> int:
         ):
             if expected not in level_help:
                 raise AssertionError(f"Level help is missing {expected!r}\n{level_help}")
+        normalized_level_help = " ".join(level_help.split())
+        implication_summary = (
+            "Includes: --gen-nav-surface, --prune-nav-surface-islands, --gen-anchors, "
+            "--connect-anchors, --prune-anchor-islands. Included flags and their options may also be "
+            "specified explicitly."
+        )
+        if implication_summary not in normalized_level_help:
+            raise AssertionError(f"Level help must describe the navigation preset\n{level_help}")
         for absent in ("--minimap-projection-offset", "--skip-sound-export"):
             if absent in level_help:
                 raise AssertionError(f"Level help unexpectedly contains {absent!r}\n{level_help}")
@@ -1396,6 +1419,8 @@ def main() -> int:
         )
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-nav-surface", "--debug-cells", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--gen-nav-surface", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-navigation", "--debug-cells", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--gen-navigation", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--prune-nav-surface-islands", "--debug-cells", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--debug-cells", "--prune-nav-surface-islands", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INCOMPATIBLE_MODULES]", "--gen-room-distances", "--debug-cells", LEVEL_FTS, out_glb)
@@ -1416,6 +1441,7 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--anchor-prune-min-count", "2", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--weld-radius", "0.1", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--weld-metric", "euclidean", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_MISSING_DEPENDENCY]", "--portal-snap-radius", "1", LEVEL_FTS, out_glb)
         expect_code(
             cli,
             1,
@@ -1473,8 +1499,28 @@ def main() -> int:
                 LEVEL_FTS,
                 tmp / "welded-debug-cells.glb",
             )
+            expect_success(
+                cli,
+                "--snap-to-portals",
+                "--portal-snap-radius",
+                "1",
+                LEVEL_FTS,
+                tmp / "portal-snapped.glb",
+            )
+            expect_success(cli, "--flatten-portals", LEVEL_FTS, tmp / "portals-flattened.glb")
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--weld-vertices", "--weld-radius", "0", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--weld-vertices", "--weld-radius", "nan", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--snap-to-portals", "--portal-snap-radius", "0", LEVEL_FTS, out_glb)
+        expect_code(
+            cli,
+            1,
+            "[CLI_INVALID_MODULE_VALUE]",
+            "--snap-to-portals",
+            "--portal-snap-radius",
+            "nan",
+            LEVEL_FTS,
+            out_glb,
+        )
         expect_code(cli, 1, "[CLI_INVALID_MODE]", "--weld-vertices", "--weld-metric", "box", LEVEL_FTS, out_glb)
         expect_code(
             cli,
@@ -1487,6 +1533,7 @@ def main() -> int:
             out_glb,
         )
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-nav-surface", "--nav-radius", "4", LEVEL_FTS, out_glb)
+        expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-navigation", "--nav-radius", "4", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-nav-surface", "--nav-height", "-1", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--gen-nav-surface", "--nav-clearance", "-1", LEVEL_FTS, out_glb)
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--prune-nav-surface-islands", "--nav-prune-ratio", "1.1", LEVEL_FTS, out_glb)
@@ -1605,6 +1652,8 @@ def main() -> int:
         expect_code(cli, 1, "[CLI_INVALID_MODULE_VALUE]", "--offset", "0", "nan", "0", MODEL_FTL, out_json)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--gen-room-distances", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--weld-vertices", ANIMATION_TEA, out_glb)
+        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--flatten-portals", ANIMATION_TEA, out_glb)
+        expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--snap-to-portals", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--gen-anchors", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--connect-anchors", ANIMATION_TEA, out_glb)
         expect_code(cli, 1, "[CLI_ROUTE_INPUT_MISMATCH]", "--prune-nav-surface-islands", ANIMATION_TEA, out_glb)
@@ -1737,6 +1786,13 @@ def main() -> int:
             "--debug-navigation",
             LEVEL_FTS,
             tmp / "debug.fts",
+        )
+        expect_success(
+            cli,
+            "--gen-navigation",
+            "--debug-navigation",
+            LEVEL_NAVIGATION_FTS,
+            tmp / "preset-navigation.glb",
         )
         if LEVEL_FTS_AVAILABLE:
             expect_success(

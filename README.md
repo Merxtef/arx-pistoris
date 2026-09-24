@@ -1,19 +1,19 @@
 # arx-pistoris
 
-Pistoris is a C++20 library and command-line converter for Arx Fatalis 3D
+Pistoris is a C++20 library and command-line converter for Arx Fatalis
 resources. The library reads and writes the native FTL, TEA, FTS, DLF, LLF,
-AMB, and CIN formats. It exchanges editable data through OBJ, GLB, and
-arx-convert-compatible JSON.
+AMB, and CIN formats. It exposes editable resources through GLB, supports OBJ
+for static Models, and provides arx-convert-compatible JSON for native carrier
+interchange.
 
-Level, Model, Animation, Ambiance, and Cinematic are the current coherent editing classes.
-Level owns geometry, rooms, portals, navigation, lighting, and scene objects as
-one asset. Model owns FTL geometry, skeleton, action points, and generic named
-selections. Animation owns one TEA-compatible timeline and its dense per-bone
-transforms. Ambiance owns one logical AMB resource and its semantic audio
-tracks. Cinematic owns one CIN-compatible illustration timeline with effect and
-localized speech references. Level, Model, Ambiance, and Cinematic GLB are
-from-scratch authoring surfaces for ordinary DCC tools; Model GLB can carry
-Animation sidecars.
+The editing API is organized around five resource classes: Level, Model,
+Animation, Ambiance, and Cinematic. Level owns geometry, rooms, portals,
+navigation, lighting, and scene objects as one asset. Model owns FTL geometry,
+skeleton, action points, and generic named selections. Animation owns one
+TEA-compatible timeline and its dense per-bone transforms. Ambiance owns one
+logical AMB resource and its semantic audio tracks. Cinematic owns one
+CIN-compatible illustration timeline with effects and localized speech
+references.
 
 The library has a C++20 API and a C ABI for all five editing classes and
 supported native carriers. The CLI owns filesystem discovery, mounts, sidecars,
@@ -21,38 +21,28 @@ overwrite policy, and game-resource placement. The library itself operates on
 memory buffers and logical resource paths. Third-party source dependencies are
 vendored, and produced binaries have no third-party runtime dependencies.
 
-## License
+## Supported Formats
 
-This project is distributed under the GNU General Public License version 3 or
-later; see [LICENSE](LICENSE). Arx Fatalis-derived portions, including
-modifications inherited through Arx Libertatis, retain their upstream notices
-and are also subject to [ADDITIONAL_TERMS](ADDITIONAL_TERMS).
+| Editing class | Native carriers | GLB | OBJ | arx-convert JSON |
+| --- | --- | :---: | :---: | :---: |
+| Level | FTS + DLF + LLF | bidirectional | - | FTS, DLF, LLF |
+| Model | FTL | bidirectional | static, bidirectional | FTL |
+| Animation | TEA | through Model GLB | - | TEA |
+| Ambiance | AMB | bidirectional | - | AMB |
+| Cinematic | CIN | bidirectional | - | - |
 
-This is not the original Arx Fatalis program. This is an independent,
-derived work that parses Arx Fatalis file formats.
+All listed native carriers are readable and writable. GLB covers the complete
+editing surface: Level, Model, Ambiance, and Cinematic support round trips and
+from-scratch authoring in ordinary DCC tools, while Animation is authored in
+Model GLB alongside the skeleton it targets. OBJ deliberately supports static
+Models only. JSON follows arx-convert native-carrier schemas and is not a
+separate editing model; no compatible CIN schema exists.
 
-Arx Fatalis is a trademark of ZeniMax Media Inc. This project is not
-affiliated with or endorsed by Arkane Studios or ZeniMax Media Inc.
-
-## Current Surface
-
-| Native data | Native binary | OBJ | GLB | Compatible JSON |
-| --- | :---: | :---: | :---: | :---: |
-| FTL model | read/write | bidirectional, static | bidirectional through Model | bidirectional |
-| TEA animation | read/write | - | Model sidecar | bidirectional |
-| FTS geometry and rooms | read/write | - | bidirectional through Level | bidirectional |
-| DLF scene objects | read/write | - | Level companion | bidirectional |
-| LLF lighting | read/write | - | Level companion | bidirectional |
-| AMB ambiance | read/write | - | bidirectional | bidirectional |
-| CIN cinematic | read/write | - | bidirectional through Cinematic | - |
-
-FTS, DLF, and LLF combine into one Level. FTS is mandatory; LLF and DLF are
-optional inputs when using the loose-file workflow. Game-layout DLF input
-discovers its mandatory FTS and optional LLF through mounted resources.
-FTL and GLB convert to and from the Model editing class. TEA converts to the
-Animation editing class, and Animation sidecars accompany Model GLB.
-AMB and GLB convert to and from the Ambiance editing class. CIN and GLB convert
-to and from the Cinematic editing class.
+FTS, DLF, and LLF combine into one Level. FTS is mandatory when constructing a
+Level; LLF and DLF are optional inputs in the loose-file workflow. Game-layout
+DLF input discovers its mandatory FTS and optional LLF through mounted
+resources. Native and compatible JSON carriers can also be converted directly
+without constructing an editing class.
 
 FTL, FTS, DLF, and LLF readers accept raw and PKWARE DCL-compressed data.
 Their writers use game-compatible compression by default and can emit raw data
@@ -63,18 +53,19 @@ promised between minor releases.
 
 ## Quick Start
 
-Build the CLI and convert a loose native Level bundle:
+Build the CLI and export the installed Level 1 through the platform's standard
+game folders:
 
 ```text
 just configure dev
 just build cli
-build/bin/arx-pistor level.fts level.llf level.dlf level.glb
+build/bin/arx-pistor --auto-mount level:1 level1.glb
 ```
 
-Or address a game-layout Level through mounted resource roots:
+Loose native files can instead be supplied directly:
 
 ```text
-arx-pistor --mount "<user Arx directory>" --mount "<unpacked directory>" level:1 level1.glb
+arx-pistor level.fts level.llf level.dlf level.glb
 ```
 
 See `arx-pistor --help` for the installed option set and defaults.
@@ -94,6 +85,19 @@ See `arx-pistor --help` for the installed option set and defaults.
 - **[Building](docs/BUILD.md)** - prerequisites, targets, and installation.
 - **[Testing and Fuzzing](docs/TESTING.md)** -
   local quality workflows and optional game corpora.
+
+## License
+
+This project is distributed under the GNU General Public License version 3 or
+later; see [LICENSE](LICENSE). Arx Fatalis-derived portions, including
+modifications inherited through Arx Libertatis, retain their upstream notices
+and are also subject to [ADDITIONAL_TERMS](ADDITIONAL_TERMS).
+
+This is not the original Arx Fatalis program. This is an independent,
+derived work that parses Arx Fatalis file formats.
+
+Arx Fatalis is a trademark of ZeniMax Media Inc. This project is not
+affiliated with or endorsed by Arkane Studios or ZeniMax Media Inc.
 
 ## Acknowledgments
 
@@ -116,5 +120,5 @@ Additionally, the following project was used as a reference:
   Copyright (C) arx-tools contributors.
   A TypeScript converter for Arx Fatalis formats, licensed under MIT.
 
-Test models used in this project are credited in
+Fixture assets used in this project are credited in
 [Attribution](https://github.com/Merxtef/arx-pistoris/blob/main/data/Attribution.md).

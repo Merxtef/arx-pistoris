@@ -348,17 +348,9 @@ Error preserveNondegenerateFaces(const GeometryData& geometry, std::vector<Verte
   }
   if (pending.empty()) return Error::kNone;
 
-  std::vector<std::size_t> offsets(geometry.vertices.size() + 1U, 0);
-  for (const Face& face : geometry.faces)
-    for (const Corner& corner : face.corners) ++offsets[static_cast<std::size_t>(corner.vertex) + 1U];
-  std::partial_sum(offsets.begin(), offsets.end(), offsets.begin());
-  std::vector<std::size_t> cursors = offsets;
-  std::vector<FaceIndex> incident_faces(offsets.back());
-  for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
-    for (const Corner& corner : geometry.faces[face_index].corners) {
-      incident_faces[cursors[corner.vertex]++] = static_cast<FaceIndex>(face_index);
-    }
-  }
+  VertexFaceIndex vertex_faces;
+  Error error = buildVertexFaceIndex(geometry, vertex_faces);
+  if (error != Error::kNone) return error;
 
   while (!pending.empty()) {
     const FaceIndex face_index = pending.back();
@@ -378,9 +370,7 @@ Error preserveNondegenerateFaces(const GeometryData& geometry, std::vector<Verte
 
     for (std::size_t restored = 0; restored < restored_count; ++restored) {
       const VertexIndex vertex = restored_vertices[restored];
-      for (std::size_t incident = offsets[vertex]; incident < offsets[static_cast<std::size_t>(vertex) + 1U];
-           ++incident) {
-        const FaceIndex affected = incident_faces[incident];
+      for (FaceIndex affected : vertex_faces.incidentFaces(vertex)) {
         if (queued[affected] != 0) continue;
         pending.push_back(affected);
         queued[affected] = 1;
@@ -476,6 +466,7 @@ Error finishWeld(GeometryData& geometry, const VertexWeldOptions& options, std::
 
   applyVertexRemap(geometry, representatives, vertex_remap);
   applyFaceRemap(geometry, face_remap);
+  refreshFaceNormals(geometry);
   const std::size_t discarded_faces = old_face_count - geometry.faces.size();
   log(ARX_LOG_DEBUG,
       "Geometry weld: {} -> {} vertices, {} -> {} faces, radius {}, metric {}, face policy {}, {} segments, {} "

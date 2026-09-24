@@ -57,4 +57,25 @@ TEST_SUITE("math::geometry") {
     CHECK(math::distancePointSegmentSquared({3.0, 4.0, 0.0}, {1.0, 0.0, 0.0}, {1.0, 0.0, 0.0}) ==
           doctest::Approx(20.0));
   }
+
+  TEST_CASE("ClosestPointOnTriangle") {
+    const Vec3<double> a{0.0, 0.0, 0.0};
+    const Vec3<double> b{2.0, 0.0, 0.0};
+    const Vec3<double> c{0.0, 2.0, 0.0};
+
+    CHECK(math::closestPointOnTriangle({0.5, 0.5, 3.0}, a, b, c) == Vec3<double>{0.5, 0.5, 0.0});
+    CHECK(math::closestPointOnTriangle({2.0, 2.0, 0.0}, a, b, c) == Vec3<double>{1.0, 1.0, 0.0});
+    CHECK(math::closestPointOnTriangle({-1.0, -1.0, 0.0}, a, b, c) == a);
+
+    const Vec3<double> degenerate_c{4.0, 0.0, 0.0};
+    CHECK(math::closestPointOnTriangle({3.0, 1.0, 0.0}, a, b, degenerate_c) == Vec3<double>{3.0, 0.0, 0.0});
+
+    const Vec3<double> edge_point{1.0, 1.0, 0.0};
+    const Vec3<double> edge_projection{1.0, 0.0, 0.0};
+    CHECK(math::closestPointOnTriangle(edge_point, a, a, b) == edge_projection);
+    CHECK(math::closestPointOnTriangle(edge_point, a, b, b) == edge_projection);
+    CHECK(math::closestPointOnTriangle(edge_point, a, b, a) == edge_projection);
+    CHECK(math::closestPointOnTriangle(edge_point, a, a, a) == a);
+    CHECK(math::distancePointTriangleSquared(edge_point, a, a, b) == doctest::Approx(1.0));
+  }
 }

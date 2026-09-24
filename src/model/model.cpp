@@ -87,6 +87,39 @@ ArxReturnCode inventoryIconError(inventory_icon::Error error) noexcept {
   return ARX_INTERNAL_ERROR;
 }
 
+bool inventoryIconRenderOptions(const Model::InventoryIconRenderOptions& options,
+                                inventory_icon::RenderOptions& out) noexcept {
+  inventory_icon::Layout layout = inventory_icon::Layout::kCenter;
+  switch (options.layout) {
+    case Model::InventoryIconLayout::kCenter:
+      layout = inventory_icon::Layout::kCenter;
+      break;
+    case Model::InventoryIconLayout::kTopLeft:
+      layout = inventory_icon::Layout::kTopLeft;
+      break;
+    case Model::InventoryIconLayout::kTopRight:
+      layout = inventory_icon::Layout::kTopRight;
+      break;
+    case Model::InventoryIconLayout::kBottomLeft:
+      layout = inventory_icon::Layout::kBottomLeft;
+      break;
+    case Model::InventoryIconLayout::kBottomRight:
+      layout = inventory_icon::Layout::kBottomRight;
+      break;
+    case Model::InventoryIconLayout::kStretch:
+      layout = inventory_icon::Layout::kStretch;
+      break;
+    default:
+      return false;
+  }
+  out = {
+      .width_slots = options.width_slots,
+      .height_slots = options.height_slots,
+      .layout = layout,
+  };
+  return true;
+}
+
 bool copyString(ArxStringView value, std::string& out) {
   if (value.size != 0 && value.data == nullptr) return false;
   out.assign(value.data ? value.data : "", value.size);
@@ -457,36 +490,18 @@ void Model::clearInventoryIcon() noexcept { inventory_icon::clear(data_->invento
 ArxReturnCode Model::renderIconPng(const InventoryIconRenderOptions& options,
                                    std::vector<std::uint8_t>& out) const noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
-    inventory_icon::Layout layout = inventory_icon::Layout::kCenter;
-    switch (options.layout) {
-      case InventoryIconLayout::kCenter:
-        layout = inventory_icon::Layout::kCenter;
-        break;
-      case InventoryIconLayout::kTopLeft:
-        layout = inventory_icon::Layout::kTopLeft;
-        break;
-      case InventoryIconLayout::kTopRight:
-        layout = inventory_icon::Layout::kTopRight;
-        break;
-      case InventoryIconLayout::kBottomLeft:
-        layout = inventory_icon::Layout::kBottomLeft;
-        break;
-      case InventoryIconLayout::kBottomRight:
-        layout = inventory_icon::Layout::kBottomRight;
-        break;
-      case InventoryIconLayout::kStretch:
-        layout = inventory_icon::Layout::kStretch;
-        break;
-      default:
-        return ARX_INVALID_OPTIONS;
-    }
-    return inventoryIconError(inventory_icon::renderPng(data_->inventory_icon,
-                                                        {
-                                                            .width_slots = options.width_slots,
-                                                            .height_slots = options.height_slots,
-                                                            .layout = layout,
-                                                        },
-                                                        out));
+    inventory_icon::RenderOptions internal;
+    if (!inventoryIconRenderOptions(options, internal)) return ARX_INVALID_OPTIONS;
+    return inventoryIconError(inventory_icon::renderPng(data_->inventory_icon, internal, out));
+  });
+}
+
+ArxReturnCode Model::renderIconBmp(const InventoryIconRenderOptions& options,
+                                   std::vector<std::uint8_t>& out) const noexcept {
+  return api_detail::statusBoundary([&]() -> ArxReturnCode {
+    inventory_icon::RenderOptions internal;
+    if (!inventoryIconRenderOptions(options, internal)) return ARX_INVALID_OPTIONS;
+    return inventoryIconError(inventory_icon::renderBmp(data_->inventory_icon, internal, out));
   });
 }
 

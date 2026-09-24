@@ -45,6 +45,7 @@ struct TextureRegistry {
 
 struct RoomProjection {
   std::vector<bool> has_faces;
+  bool preserve_distances = false;
   std::uint64_t empty_rooms = 0;
   std::uint64_t exported_portals = 0;
   std::uint64_t discarded_portals = 0;

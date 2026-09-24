@@ -83,7 +83,25 @@ void ResourceOutputPlan::reserveOutput(PathLocation target) {
 
 void ResourceOutputPlan::add(ResourceFileKind kind, PathLocation target, const void* data, std::size_t size,
                              ResourceAssetId asset) {
-  candidates_.push_back({kind, std::move(target), data, size, asset});
+  Candidate candidate;
+  candidate.kind = kind;
+  candidate.target = std::move(target);
+  candidate.data = data;
+  candidate.size = size;
+  candidate.asset = asset;
+  candidates_.push_back(std::move(candidate));
+  resolved_ = false;
+}
+
+void ResourceOutputPlan::addOwned(ResourceFileKind kind, PathLocation target, std::vector<std::uint8_t> data,
+                                  ResourceAssetId asset) {
+  Candidate candidate;
+  candidate.kind = kind;
+  candidate.target = std::move(target);
+  candidate.size = data.size();
+  candidate.asset = asset;
+  candidate.owned_data = std::move(data);
+  candidates_.push_back(std::move(candidate));
   resolved_ = false;
 }
 
@@ -96,7 +114,7 @@ bool ResourceOutputPlan::resolve(bool dry_run, bool keep_first) {
       diagnostic(DiagnosticCode::kResourceOutputInvalid, "Resource output has an invalid asset reference");
       return false;
     }
-    if (candidate.size != 0 && !candidate.data) {
+    if (candidate.size != 0 && !candidate.payload()) {
       diagnostic(DiagnosticCode::kResourceOutputInvalid,
                  "%s resource output '%s' has no payload data",
                  resourceName(candidate.kind),
@@ -144,8 +162,8 @@ bool ResourceOutputPlan::resolve(bool dry_run, bool keep_first) {
     const Candidate& right = candidates_[right_index];
     if (left.size != right.size) return false;
     if (left.size == 0) return true;
-    const auto* left_data = static_cast<const std::uint8_t*>(left.data);
-    const auto* right_data = static_cast<const std::uint8_t*>(right.data);
+    const auto* left_data = static_cast<const std::uint8_t*>(left.payload());
+    const auto* right_data = static_cast<const std::uint8_t*>(right.payload());
     return std::equal(left_data, left_data + left.size, right_data);
   };
 
@@ -243,7 +261,7 @@ bool ResourceOutputPlan::write(IoService& io) const {
   }
   for (const std::size_t index : selected_) {
     const Candidate& candidate = candidates_[index];
-    if (!writeOutput(io, candidate.target, candidate.data, candidate.size)) return false;
+    if (!writeOutput(io, candidate.target, candidate.payload(), candidate.size)) return false;
   }
   return true;
 }

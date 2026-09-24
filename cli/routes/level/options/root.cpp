@@ -11,10 +11,13 @@ namespace cli::level::options {
 std::span<const ModuleRef> rootModules() {
   static constexpr ModuleRef kModules[] = {
       weldVerticesModule,
+      flattenPortalsModule,
+      snapToPortalsModule,
       dlfOnlyModule,
       noQuadReconstructionModule,
       ftsSceneDirectoryModule,
       signLevelModule,
+      generateNavigationModule,
       generateNavSurfaceModule,
       pruneNavSurfaceIslandsModule,
       generateRoomDistancesModule,

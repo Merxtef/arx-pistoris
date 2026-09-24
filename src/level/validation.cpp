@@ -135,6 +135,10 @@ ArxReturnCode roomsError(rooms::Error error) noexcept {
       return ARX_OK;
     case rooms::Error::kInvalidOptions:
       return ARX_INVALID_OPTIONS;
+    case rooms::Error::kTooManyVertices:
+      return ARX_LEVEL_TOO_MANY_VERTICES;
+    case rooms::Error::kTooManyFaces:
+      return ARX_LEVEL_TOO_MANY_FACES;
     case rooms::Error::kNoRooms:
       return ARX_LEVEL_NO_ROOMS;
     case rooms::Error::kTooManyRooms:

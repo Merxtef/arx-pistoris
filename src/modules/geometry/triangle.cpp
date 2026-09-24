@@ -24,6 +24,10 @@ ArxVector3 faceNormalOr(const GeometryData& geometry, const Face& face, ArxVecto
   return math::normalizeFiniteOr(math::cross(vertices[1] - vertices[0], vertices[2] - vertices[0]), fallback);
 }
 
+void refreshFaceNormals(GeometryData& geometry) noexcept {
+  for (Face& face : geometry.faces) face.normal = faceNormalOr(geometry, face, {});
+}
+
 ArxAabb triangleBounds(const std::array<ArxVector3, 3>& vertices) {
   ArxAabb out;
   out.min = vertices[0];

@@ -12,6 +12,7 @@
 #include "external/glb/level/export/internal.h"
 #include "external/glb/level/objects.h"
 #include "external/glb/level/palette.h"
+#include "external/glb/level/room_distance_metadata.h"
 #include "external/glb/writer.h"
 
 #include <array>
@@ -63,6 +64,9 @@ RoomProjection buildRoomProjection(const LevelModules& level) {
       }
     }
   }
+  projection.preserve_distances =
+      projection.empty_rooms == 0 && !level.rooms.distances.empty() &&
+      rooms::hasCompleteRoomDistances(level.rooms.distances, level.rooms.definitions.size());
   return projection;
 }
 
@@ -78,7 +82,8 @@ void exportPortals(const LevelModules& level, const ArxAabb& referenced_bounds, 
     builder.setNodeTranslation(portal_parent, toVec3(portal_root));
     builder.addRoot(portal_parent);
   }
-  for (const Portal& portal : level.rooms.portals) {
+  for (std::size_t portal_index = 0; portal_index < level.rooms.portals.size(); ++portal_index) {
+    const Portal& portal = level.rooms.portals[portal_index];
     if (!exportedPortal(portal, room_projection)) continue;
     const std::size_t count = rooms::portalVertexCount(portal.shape);
     ArxVector3 centroid = rooms::portalCentroid(portal);
@@ -101,6 +106,8 @@ void exportPortals(const LevelModules& level, const ArxAabb& referenced_bounds, 
     std::string name = portalNodeName(portal, level.rooms);
     int mesh = builder.addMesh(name, {std::move(primitive)});
     int node = builder.addNode(std::move(name), mesh);
+    if (room_projection.preserve_distances)
+      builder.setNodeExtrasJson(node, glb_level::roomDistancePortalMetadataJson(portal_index));
     builder.setNodeTranslation(node,
                                {centroid.x - portal_root.x, centroid.y - portal_root.y, centroid.z - portal_root.z});
     builder.addChild(portal_parent, node);

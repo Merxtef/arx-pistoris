@@ -33,6 +33,9 @@ struct LevelOptions final : RouteOptions {
   bool load_previews = false;
   bool weld_vertices = false;
   pistoris::Level::VertexWeldOptions vertex_welding;
+  bool flatten_portals = false;
+  bool snap_to_portals = false;
+  pistoris::Level::PortalSnapOptions portal_snapping;
   bool dlf_only = false;
   bool reconstruct_quads = true;
   bool fts_scene_directory_specified = false;

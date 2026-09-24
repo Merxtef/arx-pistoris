@@ -44,6 +44,7 @@ inline constexpr std::int16_t kAnchorFlagBlocked = 1 << 3;
 inline constexpr std::int16_t kAnchorFlagsAll = kAnchorFlagBlocked;
 inline constexpr float kDefaultAnchorRadius = 50.0f;
 inline constexpr float kDefaultAnchorHeight = -165.0f;
+inline constexpr float kDefaultPortalSnapRadius = 1.0f;
 
 inline constexpr float kMinAnchorRadius = 5.0f;
 inline constexpr float kMinAnchorSpacing = kMinAnchorRadius * 2.0f;
@@ -92,6 +93,11 @@ class Level {
     float radius = 1.0e-4f;
     PositionWeldMetric metric = PositionWeldMetric::kEuclidean;
     DegenerateFacePolicy degenerate_faces = DegenerateFacePolicy::kPreserve;
+  };
+
+  struct PortalSnapOptions {
+    // Positive finite maximum 3D geometry-to-portal distance in Arx units
+    float radius = kDefaultPortalSnapRadius;
   };
 
   struct NavSurfaceSourceOptions {
@@ -385,6 +391,8 @@ class Level {
   [[nodiscard]] ArxReturnCode rebaseTexturePaths(std::string_view directory) noexcept;
   [[nodiscard]] ArxReturnCode weldVertices() noexcept;
   [[nodiscard]] ArxReturnCode weldVertices(const VertexWeldOptions& options) noexcept;
+  [[nodiscard]] ArxReturnCode snapGeometryToPortals() noexcept;
+  [[nodiscard]] ArxReturnCode snapGeometryToPortals(const PortalSnapOptions& options) noexcept;
   [[nodiscard]] ArxReturnCode setTexture(TextureIndex index, const ArxTextureView& texture) noexcept;
   [[nodiscard]] ArxReturnCode addTexture(const ArxTextureView& texture, TextureIndex& out_index) noexcept;
   [[nodiscard]] ArxReturnCode setTextureImage(TextureIndex index, ArxEncodedImageView encoded_image) noexcept;
@@ -403,6 +411,7 @@ class Level {
   [[nodiscard]] ArxReturnCode setPortal(PortalIndex index, const ArxLevelPortal& portal) noexcept;
   [[nodiscard]] ArxReturnCode addPortal(const ArxLevelPortal& portal, PortalIndex& out_index) noexcept;
   [[nodiscard]] ArxReturnCode removePortal(PortalIndex index) noexcept;
+  [[nodiscard]] ArxReturnCode flattenPortals() noexcept;
   [[nodiscard]] ArxReturnCode setRoomDistance(const ArxLevelRoomDistance& distance) noexcept;
   [[nodiscard]] ArxReturnCode replaceRoomDistances(const ArxLevelRoomDistance* distances, std::size_t count) noexcept;
   void clearRoomDistances() noexcept;

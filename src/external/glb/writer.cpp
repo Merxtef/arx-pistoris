@@ -351,6 +351,8 @@ void Builder::setRootTransform(std::string name, Vec3 translation, const ArxQuat
   root_scale_ = uniform_scale;
 }
 
+void Builder::setRootTransformExtrasJson(std::string json) { root_transform_extras_json_ = std::move(json); }
+
 int Builder::addDebugMeshNode(std::string name, std::span<const Vec3> positions, std::span<const std::uint32_t> indices,
                               int material) {
   Primitive primitive;
@@ -365,6 +367,7 @@ int Builder::addDebugMeshNode(std::string name, std::span<const Vec3> positions,
 
 ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   if (bin_.size() > std::numeric_limits<std::uint32_t>::max()) return ARX_GLB_BAD_FORMAT;
+  if (!root_transform_enabled_ && !root_transform_extras_json_.empty()) return ARX_GLB_BAD_FORMAT;
 
   CgltfWriteProjection projection;
   JsonStringPool& json_strings = projection.strings;
@@ -670,6 +673,8 @@ ArxReturnCode Builder::write(std::vector<std::uint8_t>& out) const {
   if (transformed_roots) {
     cgltf_node& transform = nodes[root_transform_index];
     transform.name = json_strings.pointer(root_transform_name_);
+    transform.extras.data =
+        root_transform_extras_json_.empty() ? nullptr : const_cast<char*>(root_transform_extras_json_.c_str());
     transform.has_translation = 1;
     transform.translation[0] = root_translation_.x;
     transform.translation[1] = root_translation_.y;

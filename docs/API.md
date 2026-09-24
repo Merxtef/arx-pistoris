@@ -51,6 +51,7 @@ arx_pistoris/native/ftl.hpp
 arx_pistoris/native/fts.hpp
 arx_pistoris/native/llf.hpp
 arx_pistoris/native/tea.hpp
+arx_pistoris/native/text.hpp
 arx_pistoris/paths.hpp
 arx_pistoris/runtime.hpp
 arx_pistoris/sound.hpp
@@ -432,6 +433,12 @@ mesh. The Models are borrowed only for the duration of the call.
 `importNative` requires FTS. LLF and DLF pointers are optional. `importGlb` builds
 Level directly from a GLB byte span. GLB import and export own DCC coordinate
 conversion; Level itself remains in native Arx coordinates with -Y up.
+Level GLB can preserve a complete, nonempty room-distance collection when
+every Level room has exported geometry. It can also preserve anchor
+connections. Both use opaque, best-effort round-trip data. Room distances are
+restored or discarded as a complete set when the stored room or portal
+structure no longer matches. Missing or discarded data remains absent; import
+never runs generation implicitly.
 The exact authored hierarchy is documented in the
 [Level authoring reference](authoring/LEVEL_REFERENCE.md).
 
@@ -545,6 +552,8 @@ Explicit compaction removes unreferenced vertices or textures.
 Convenience operations include:
 
 - room-aware vertex welding
+- portal-quad flattening
+- conservative geometry snapping to portal surfaces
 - navigation-surface generation or floor filtering
 - navigation-island pruning
 - anchor generation, connection generation, and island pruning
@@ -553,6 +562,22 @@ Convenience operations include:
 
 These operations are explicit. Import does not silently regenerate authored
 navigation or connectivity.
+
+Portal flattening preserves the plane-defining quad vertices `0`, `1`, and
+`3`, then projects vertex `2` orthogonally onto that plane. Triangles and
+already-planar quads are unchanged. The operation validates every projected
+portal and its Level bounds before publishing any changes. Changing any quad
+discards room distances; performing a no-op flatten preserves them.
+
+Portal snapping moves nearby geometry vertices onto the bounded portal surface.
+A vertex is eligible only when every incident face belongs to one of the
+portal's two rooms. Vertices shared with unrelated rooms, ambiguous matches,
+and moves that would collapse or reverse a face remain unchanged. The radius
+must be a positive finite 3D distance in Arx units and defaults to `1`.
+
+Portal snapping preserves all other Level data, including room distances,
+navigation, anchors, corner lighting, and the minimap. Regenerate any derived
+data made stale by the geometry edit explicitly.
 
 Call `validate()` to validate the complete Level, or use a focused validator
 when only one area needs checking.
@@ -624,15 +649,18 @@ larger images proportionally to three slots on their longest axis. Deriving one
 axis uses the explicit other axis and the source aspect ratio. The resolved
 one-to-three-slot footprint is stored with the unchanged encoded image.
 
-`renderIconPng` returns a detached PNG whose dimensions are exactly 32 pixels
-per resolved slot, or empty output when the Model has no icon. A zero render
-dimension uses the stored value, `-1` derives that axis from the source image,
-and values from one to three are explicit. Two derived axes preserve the native
-footprint when it fits, otherwise the longest axis becomes three slots.
+`renderIconPng` and `renderIconBmp` return a detached image whose dimensions
+are exactly 32 pixels per resolved slot, or empty output when the Model has no
+icon. A zero render dimension uses the stored value, `-1` derives that axis
+from the source image, and values from one to three are explicit. Two derived
+axes preserve the native footprint when it fits, otherwise the longest axis
+becomes three slots.
 `InventoryIconLayout` places aspect-preserving content at the center or one of
 the four corners, or stretches it to fill the footprint. Center is the default.
-Unused pixels are transparent. BMP rendering applies the engine black color
-key and antialiasing. The stored image is unchanged.
+Unused pixels are transparent. RGB BMP input applies exact-black color keying
+and the engine default morphological antialiasing before either output
+encoding. BMP output retains the projected alpha channel. The stored image is
+unchanged.
 
 ### Native, OBJ, and GLB Conversion
 
@@ -874,8 +902,8 @@ helper. `ARX_MODEL_REFERENCE_OPTIONS_INIT` selects no operation; enable at
 least one field before calling `arx_pistoris_model_apply_reference`.
 `ARX_MODEL_INVENTORY_ICON_SET_OPTIONS_INIT` derives both footprint axes.
 `ARX_MODEL_INVENTORY_ICON_RENDER_OPTIONS_INIT` selects the stored footprint,
-preserves aspect ratio, and centers content. The rendered PNG is released with
-`arx_pistoris_free_bytes`.
+preserves aspect ratio, and centers content. PNG and BMP buffers returned by
+the render functions are released with `arx_pistoris_free_bytes`.
 All input strings, images, and arrays are copied during calls. All C entry
 points prevent C++ exceptions from crossing the ABI boundary.
 

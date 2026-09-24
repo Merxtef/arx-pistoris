@@ -50,6 +50,22 @@ bool apply(pistoris::Level& level, const LevelOptions& options, OperationDiagnos
     }
   }
 
+  if (options.flatten_portals) {
+    const ArxReturnCode rc = level.flattenPortals();
+    if (rc != ARX_OK) {
+      operationFailure("Level portal flattening", rc);
+      return false;
+    }
+  }
+
+  if (options.snap_to_portals) {
+    const ArxReturnCode rc = level.snapGeometryToPortals(options.portal_snapping);
+    if (rc != ARX_OK) {
+      operationFailure("Level portal snapping", rc);
+      return false;
+    }
+  }
+
   if (options.generate_nav_surface) {
     ArxReturnCode rc;
     if (options.nav_surface_from_floor) {

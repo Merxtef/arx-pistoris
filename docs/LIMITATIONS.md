@@ -76,13 +76,15 @@ that native limit is split across collision-free `_N` resource aliases. Every
 alias references an identical image. Callers that skip texture sidecar export
 must create those copies themselves.
 
-### Room distances and anchor links
+### Room distances and anchor connections
 
 Room distances and anchor connections are editable Level data without a
-vanilla-DCC-friendly GLB representation. Level GLB omits room distances and
-stores anchor connections as opaque node metadata. DCC tools may discard that
-metadata. Regenerate either collection explicitly after GLB import when its
-authored values did not survive.
+vanilla-DCC-friendly GLB representation. Level GLB stores both as opaque
+best-effort round-trip data. Room distances are recovered only when the stored
+room and portal structure still matches; otherwise the complete stored set is
+discarded while Level import continues. Editing tools may discard the opaque
+data. Regenerate either collection explicitly after GLB import when its
+authored values did not survive or may be stale after geometry edits.
 
 Native baking writes default `-1` room distances where the data is missing or
 incomplete and reports the omission.
@@ -96,6 +98,25 @@ the desired topology is known.
 Room-aware welding protects portal-adjacent boundaries and can preserve,
 reject, or discard faces that would collapse. It remains an inference:
 coincident positions alone cannot prove original topological identity.
+
+### Portal flattening is canonicalization
+
+The engine derives a portal plane from one triangle, but it retains the
+original portal vertices for bounds and visibility calculations. Explicit
+portal flattening therefore changes the represented portal rather than merely
+reproducing a lossless engine load step. It preserves the three vertices that
+define the canonical plane and projects the remaining quad vertex onto it.
+
+Only portals already accepted by Level validation can be flattened. The
+operation is intended to clean up small nonplanar deviations, not recover
+malformed portal geometry. Changed portals discard stored room distances.
+
+### Portal geometry snapping is conservative
+
+Portal snapping moves existing vertices only. It uses the bounded triangle or
+quad surface, checks the rooms of every incident face, and rejects ambiguous
+matches and moves that would collapse or reverse a face. It does not split,
+delete, or reshape faces to repair larger topology errors.
 
 ## Level and GLB
 
@@ -139,12 +160,11 @@ Level GLB does not retain:
 
 - FTS cell slicing and packing
 - FTS quad slots
-- room-distance records
 
-Cell layout and quads are rebuilt during native baking. Room distances are
-generated only when explicitly requested. Anchor links roundtrip through opaque
-node metadata when the editing tool preserves it; connection generation remains
-explicit and replaces the preserved graph.
+Cell layout and quads are rebuilt during native baking. Room distances and
+anchor connections round trip through opaque data when the editing tool
+preserves it and their structural checks pass. Their generation remains
+explicit and replaces recovered data.
 
 ### Materials collapse face data by identity
 

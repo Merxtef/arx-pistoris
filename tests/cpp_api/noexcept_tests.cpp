@@ -27,6 +27,10 @@ static_assert(noexcept(std::declval<pistoris::Ambiance&>().setResourcePath({})))
 static_assert(noexcept(std::declval<pistoris::Ambiance&>().trimTracksToMaster()));
 static_assert(noexcept(std::declval<pistoris::Model&>().setResourcePath({})));
 static_assert(noexcept(std::declval<pistoris::Level&>().setResourcePath({})));
+static_assert(noexcept(std::declval<const pistoris::Model&>().renderIconPng(
+    std::declval<const pistoris::Model::InventoryIconRenderOptions&>(), std::declval<std::vector<std::uint8_t>&>())));
+static_assert(noexcept(std::declval<const pistoris::Model&>().renderIconBmp(
+    std::declval<const pistoris::Model::InventoryIconRenderOptions&>(), std::declval<std::vector<std::uint8_t>&>())));
 
 static_assert(noexcept(std::declval<const pistoris::Animation&>().bakeNative(std::declval<pistoris::Tea&>())));
 static_assert(noexcept(std::declval<const pistoris::Ambiance&>().bakeNative(std::declval<pistoris::Amb&>())));

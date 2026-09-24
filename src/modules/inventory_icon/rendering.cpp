@@ -97,7 +97,7 @@ Error renderPng(const InventoryIconData& icon, const RenderOptions& options, std
   if (image_error != image::Error::kNone) return Error::kBadImage;
   log(ARX_LOG_DEBUG,
       "Inventory-icon render: source {}x{}, stored {}x{} slots, request {}x{}, output {}x{} slots ({}x{} px), "
-      "layout {}, {} bytes",
+      "layout {}",
       info.width,
       info.height,
       icon.width_slots,
@@ -108,10 +108,22 @@ Error renderPng(const InventoryIconData& icon, const RenderOptions& options, std
       height,
       static_cast<std::uint32_t>(width) * kSlotPixels,
       static_cast<std::uint32_t>(height) * kSlotPixels,
-      layoutName(options.layout),
-      rendered.size());
+      layoutName(options.layout));
   out = std::move(rendered);
   return Error::kNone;
+}
+
+Error renderBmp(const InventoryIconData& icon, const RenderOptions& options, std::vector<std::uint8_t>& out) {
+  std::vector<std::uint8_t> rendered;
+  const Error render_error = renderPng(icon, options, rendered);
+  if (render_error != Error::kNone) return render_error;
+  if (rendered.empty()) {
+    out.clear();
+    return Error::kNone;
+  }
+  const image::Error image_error = image::transcodeToBmp(rendered, out);
+  if (image_error == image::Error::kOutOfMemory) return Error::kOutOfMemory;
+  return image_error == image::Error::kNone ? Error::kNone : Error::kBadImage;
 }
 
 }  // namespace pistoris::inventory_icon

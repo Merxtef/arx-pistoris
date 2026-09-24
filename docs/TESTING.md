@@ -68,6 +68,7 @@ data/fixtures/level/glb/<fixture>/
 data/fixtures/model/glb/<fixture>/
 data/fixtures/model/obj/<fixture>/
 data/fixtures/ambiance/glb/<fixture>/
+data/fixtures/cinematic/<fixture>/
 data/fixtures/json/
 ```
 
@@ -85,8 +86,8 @@ data/arx/
 Readers and independent native roundtrips test every matching file that is
 present, including CIN. Level bundle tests use only complete canonical
 FTS/DLF/LLF triplets; an incomplete optional game triplet is ignored. Separate
-readiness tests require at least one cataloged Level, Model, Animation, and
-Ambiance fixture.
+readiness tests require at least one cataloged Level, Model, Animation,
+Ambiance, and Cinematic fixture.
 Loose sidecars are resolved relative to their primary format file. Missing
 sidecars are allowed for fixtures that do not test sidecar loading, while
 aggregate corpus checks require loading coverage for each resource type used

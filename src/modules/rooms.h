@@ -99,9 +99,30 @@ struct VertexWeldSegments {
   std::vector<VertexIndex> protected_vertices;
 };
 
+struct PortalSnapOptions {
+  float radius = 1.0f;
+};
+
+struct PortalSnapStatistics {
+  std::size_t candidates = 0;
+  std::size_t snapped = 0;
+  std::size_t already_aligned = 0;
+  std::size_t skipped_room_conflict = 0;
+  std::size_t skipped_ambiguous = 0;
+  std::size_t skipped_face_safety = 0;
+};
+
+struct PortalFlattenStatistics {
+  std::size_t flattened_quads = 0;
+  std::size_t already_planar_quads = 0;
+  std::size_t triangles = 0;
+};
+
 enum class Error : std::uint8_t {
   kNone,
   kInvalidOptions,
+  kTooManyVertices,
+  kTooManyFaces,
   kNoRooms,
   kTooManyRooms,
   kBadRoomName,
@@ -203,6 +224,9 @@ void clearRoomDistances(RoomsData& rooms) noexcept;
 void repairRoomName(const RoomsData& rooms, Room& room, RoomIndex ignored = kInvalidRoomIndex);
 void repairPortalName(const RoomsData& rooms, Portal& portal, PortalIndex ignored = kInvalidPortalIndex);
 std::size_t repairPortalNames(std::span<Portal> portals);
+Error flattenPortals(RoomsData& rooms, PortalFlattenStatistics* statistics = nullptr);
+Error snapGeometryToPortals(GeometryData& geometry, const RoomsData& rooms, const PortalSnapOptions& options,
+                            PortalSnapStatistics* statistics = nullptr);
 
 // --- Generation ---
 
