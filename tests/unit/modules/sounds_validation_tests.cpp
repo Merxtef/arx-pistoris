@@ -279,14 +279,26 @@ TEST_SUITE("sounds module") {
     CHECK_FALSE(pistoris::sounds::encodedAudio(data, speech, 2).empty());
   }
 
-  TEST_CASE("Language names are portable and unique by path identity") {
+  TEST_CASE("Language names are lowercase, portable, and unique by path identity") {
     pistoris::SoundsData data;
-    data.languages.emplace(1, "English");
-    data.languages.emplace(2, "english");
+    pistoris::sounds::setLanguage(data, 1, "English");
     CHECK(pistoris::sounds::validateStructure(data) == pistoris::sounds::Error::kBadLanguage);
 
-    data.languages.erase(2);
-    data.languages.at(1) = "con";
+    pistoris::sounds::setLanguage(data, 1, "english");
+    pistoris::sounds::setLanguage(data, 2, "ENGLISH");
+    CHECK(pistoris::sounds::validateStructure(data) == pistoris::sounds::Error::kBadLanguage);
+
+    pistoris::sounds::removeLanguage(data, 2);
+    data.language_entries[0].name = "con";
+    CHECK(pistoris::sounds::validateStructure(data) == pistoris::sounds::Error::kBadLanguage);
+  }
+
+  TEST_CASE("Language IDs are ordered and unique") {
+    pistoris::SoundsData data;
+    data.language_entries = {{2, "french"}, {1, "english"}};
+    CHECK(pistoris::sounds::validateStructure(data) == pistoris::sounds::Error::kBadLanguage);
+
+    data.language_entries = {{1, "english"}, {1, "french"}};
     CHECK(pistoris::sounds::validateStructure(data) == pistoris::sounds::Error::kBadLanguage);
   }
 

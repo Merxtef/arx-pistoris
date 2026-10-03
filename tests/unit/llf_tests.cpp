@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -47,7 +48,9 @@ pistoris::llf::Data makeData() {
 
 ArxReturnCode load(const std::vector<std::uint8_t>& bytes, pistoris::llf::Data& out) {
   pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-  return pistoris::loadLlf(&out, cursor);
+  auto result = pistoris::loadLlf(cursor);
+  if (result) out = std::move(*result);
+  return result.code();
 }
 
 std::vector<std::uint8_t> save(const pistoris::llf::Data& data) {

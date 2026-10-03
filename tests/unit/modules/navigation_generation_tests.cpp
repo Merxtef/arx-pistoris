@@ -11,6 +11,7 @@
 #include "modules/navigation.h"
 
 #include <cstdint>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -85,8 +86,8 @@ TEST_SUITE("navigation::generation") {
 
   TEST_CASE("Generates anchor connections") {
     NavigationData navigation;
-    navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
-    navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
+    navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+    navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_1"});
     GeometryData geometry = makeFloorGeometry(200.0f);
     std::vector<AnchorConnection> connections;
 
@@ -109,8 +110,8 @@ TEST_SUITE("navigation::generation") {
     geometry.faces.push_back(makeFace(geometry, 0, 1, 2));
     geometry.faces.push_back(makeFace(geometry, 0, 2, 3));
     std::vector<Anchor> anchors = {
-        {{50.0f, -50.0f, 50.0f}, 10.0f, -80.0f, 0, {}},
-        {{150.0f, -150.0f, 50.0f}, 10.0f, -80.0f, 0, {}},
+        {{50.0f, -50.0f, 50.0f}, 10.0f, -80.0f, 0, "anchor_0"},
+        {{150.0f, -150.0f, 50.0f}, 10.0f, -80.0f, 0, "anchor_1"},
     };
     std::vector<AnchorConnection> connections;
 
@@ -131,7 +132,7 @@ TEST_SUITE("navigation::generation") {
     CHECK(navigation::generateSurface(surface, geometry, bad_surface_options) == navigation::Error::kInvalidOptions);
     CHECK(surface.vertices.size() == 4);
 
-    std::vector<Anchor> anchors = {{{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}}};
+    std::vector<Anchor> anchors = {{{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_0"}};
     GeometryDerived derived;
     REQUIRE(geometry::validate(geometry, 0, &derived) == geometry::Error::kNone);
     navigation::AnchorGenerationOptions bad_anchor_options;
@@ -263,8 +264,9 @@ TEST_SUITE("navigation::generation") {
   TEST_CASE("Anchor component pruning remaps retained graph components") {
     std::vector<Anchor> anchors;
     anchors.reserve(6);
-    for (std::uint32_t i = 0; i < 6; ++i)
-      anchors.push_back({{static_cast<float>(i * 10), 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}});
+    for (std::uint32_t i = 0; i < 6; ++i) {
+      anchors.push_back({{static_cast<float>(i * 10), 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_" + std::to_string(i)});
+    }
     std::vector<AnchorConnection> connections = {{0, 1}, {3, 4}, {4, 5}};
     navigation::AnchorComponentPruneDiagnostics diagnostics;
 
@@ -303,9 +305,9 @@ TEST_SUITE("navigation::generation") {
     CHECK(surface.triangles.size() == 1);
 
     std::vector<Anchor> anchors = {
-        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
-        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
-        {{20.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
+        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_0"},
+        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_1"},
+        {{20.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_2"},
     };
     std::vector<AnchorConnection> connections = {{0, 1}};
     const Anchor* anchor_data = anchors.data();
@@ -323,9 +325,9 @@ TEST_SUITE("navigation::generation") {
 
   TEST_CASE("Anchor component absolute threshold keeps equality and treats isolates as components") {
     std::vector<Anchor> anchors = {
-        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
-        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
-        {{20.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
+        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_0"},
+        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_1"},
+        {{20.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_2"},
     };
     std::vector<AnchorConnection> connections = {{0, 1}};
 
@@ -338,8 +340,8 @@ TEST_SUITE("navigation::generation") {
 
   TEST_CASE("Anchor component pruning preserves no-op storage and may remove every component") {
     std::vector<Anchor> anchors = {
-        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
-        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, {}},
+        {{0.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_0"},
+        {{10.0f, 0.0f, 0.0f}, 5.0f, -20.0f, 0, "anchor_1"},
     };
     std::vector<AnchorConnection> connections;
     const Anchor* anchor_data = anchors.data();

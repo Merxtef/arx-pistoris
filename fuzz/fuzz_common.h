@@ -145,14 +145,16 @@ inline void validateCinematicSoundSourceReferences(const ArxCinematicSoundSource
   if (!references || !cinematic) std::abort();
   std::size_t effect_count = 0;
   std::size_t speech_count = 0;
-  if (arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_EFFECT, &effect_count) != ARX_OK) std::abort();
-  if (arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_SPEECH, &speech_count) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_EFFECT, &effect_count, nullptr) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_SPEECH, &speech_count, nullptr) != ARX_OK) std::abort();
 
   std::size_t reference_count = 0;
-  if (arx_pistoris_cinematic_sound_source_references_count(references, &reference_count) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_sound_source_references_count(references, &reference_count, nullptr) != ARX_OK)
+    std::abort();
   for (std::size_t index = 0; index < reference_count; ++index) {
     ArxCinematicSoundSourceReference reference{};
-    if (arx_pistoris_cinematic_sound_source_references_get(references, index, &reference) != ARX_OK) std::abort();
+    if (arx_pistoris_cinematic_sound_source_references_get(references, index, &reference, nullptr) != ARX_OK)
+      std::abort();
     ArxSoundKind kind = ARX_SOUND_EFFECT;
     ArxSoundIndex sound = ARX_NO_SOUND;
     if (arx_pistoris_sound_handle_kind(reference.sound, &kind) != ARX_OK) std::abort();
@@ -178,17 +180,18 @@ inline void validateAnimationSoundSourceReferences(const ArxAnimationSoundSource
   if (!references || !animations) std::abort();
   std::size_t animation_count = 0;
   std::size_t reference_count = 0;
-  if (arx_pistoris_animation_list_count(animations, &animation_count) != ARX_OK) std::abort();
+  if (arx_pistoris_animation_list_count(animations, &animation_count, nullptr) != ARX_OK) std::abort();
   if (arx_pistoris_animation_sound_source_references_count(references, &reference_count) != ARX_OK) std::abort();
   for (std::size_t index = 0; index < reference_count; ++index) {
     ArxAnimationSoundSourceReference reference{};
     if (arx_pistoris_animation_sound_source_references_get(references, index, &reference) != ARX_OK) std::abort();
     if (reference.animation_index >= animation_count) std::abort();
     ArxAnimation* animation = nullptr;
-    if (arx_pistoris_animation_list_get(animations, reference.animation_index, &animation) != ARX_OK || !animation)
+    if (arx_pistoris_animation_list_get(animations, reference.animation_index, &animation, nullptr) != ARX_OK ||
+        !animation)
       std::abort();
     std::size_t sound_count = 0;
-    if (arx_pistoris_animation_sound_count(animation, &sound_count) != ARX_OK) std::abort();
+    if (arx_pistoris_animation_sound_count(animation, &sound_count, nullptr) != ARX_OK) std::abort();
     if (reference.reference.sound >= sound_count) std::abort();
     if (reference.reference.path.size != 0 && !reference.reference.path.data) std::abort();
   }
@@ -204,7 +207,7 @@ inline FtsHandle parseFtsFile(const char* path) {
   const std::vector<std::uint8_t> bytes = readBytes(path);
   if (bytes.empty()) return {};
   ArxFts* raw_fts = nullptr;
-  const ArxReturnCode rc = arx_pistoris_fts_read(bytes.data(), bytes.size(), &raw_fts);
+  const ArxReturnCode rc = arx_pistoris_fts_read(bytes.data(), bytes.size(), &raw_fts, nullptr);
   FtsHandle fts(raw_fts);
   if (rc != ARX_OK) {
     if (fts.get()) std::abort();
@@ -217,7 +220,7 @@ inline LlfHandle parseLlfFile(const char* path) {
   const std::vector<std::uint8_t> bytes = readBytes(path);
   if (bytes.empty()) return {};
   ArxLlf* raw_llf = nullptr;
-  const ArxReturnCode rc = arx_pistoris_llf_read(bytes.data(), bytes.size(), &raw_llf);
+  const ArxReturnCode rc = arx_pistoris_llf_read(bytes.data(), bytes.size(), &raw_llf, nullptr);
   LlfHandle llf(raw_llf);
   if (rc != ARX_OK) {
     if (llf.get()) std::abort();
@@ -231,7 +234,7 @@ inline DlfBundle parseDlfFile(const char* path) {
   if (bytes.empty()) return {};
   ArxDlf* dlf = nullptr;
   ArxLlf* embedded_lighting = nullptr;
-  const ArxReturnCode read_rc = arx_pistoris_dlf_read(bytes.data(), bytes.size(), &dlf, &embedded_lighting);
+  const ArxReturnCode read_rc = arx_pistoris_dlf_read(bytes.data(), bytes.size(), &dlf, &embedded_lighting, nullptr);
   DlfBundle result(dlf, embedded_lighting);
   if (read_rc != ARX_OK) {
     if (result.dlf.get() || result.embedded_lighting.get()) std::abort();
@@ -263,7 +266,7 @@ inline void exerciseLevelFromNative(const ArxFts* fts, const ArxLlf* llf, const 
   ArxLevel* raw_level = nullptr;
   ArxTextureSourcePaths* raw_sources = nullptr;
   const ArxReturnCode rc =
-      arx_pistoris_level_import_native(fts, llf, dlf, &raw_level, &raw_sources, ARX_NATIVE_TEXT_AUTO);
+      arx_pistoris_level_import_native(fts, llf, dlf, &raw_level, &raw_sources, ARX_NATIVE_TEXT_AUTO, nullptr);
   LevelHandle level(raw_level);
   TextureSourcePathsHandle sources(raw_sources);
   if (rc != ARX_OK) {
@@ -271,9 +274,9 @@ inline void exerciseLevelFromNative(const ArxFts* fts, const ArxLlf* llf, const 
     return;
   }
   if (!level.get() || !sources.get()) std::abort();
-  if (arx_pistoris_level_validate(level.get()) != ARX_OK) std::abort();
+  if (arx_pistoris_level_validate(level.get(), nullptr) != ARX_OK) std::abort();
   std::size_t texture_count = 0;
-  if (arx_pistoris_level_texture_count(level.get(), &texture_count) != ARX_OK) std::abort();
+  if (arx_pistoris_level_texture_count(level.get(), &texture_count, nullptr) != ARX_OK) std::abort();
   validateTextureSourcePaths(sources.get(), texture_count);
 }
 

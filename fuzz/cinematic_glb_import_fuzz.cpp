@@ -16,7 +16,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
   ArxCinematic* raw_cinematic = nullptr;
   ArxCinematicSoundSourceReferences* raw_sources = nullptr;
-  const ArxReturnCode rc = arx_pistoris_cinematic_import_glb(glb.data(), glb.size(), &raw_cinematic, &raw_sources);
+  const ArxReturnCode rc =
+      arx_pistoris_cinematic_import_glb(glb.data(), glb.size(), &raw_cinematic, &raw_sources, nullptr);
   arx_fuzz::CinematicHandle cinematic(raw_cinematic);
   arx_fuzz::CinematicSoundSourceReferencesHandle sources(raw_sources);
   if (rc != ARX_OK) {
@@ -24,7 +25,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     return 0;
   }
   if (!cinematic.get() || !sources.get()) std::abort();
-  if (arx_pistoris_cinematic_validate(cinematic.get()) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_validate(cinematic.get(), nullptr) != ARX_OK) std::abort();
   arx_fuzz::validateCinematicSoundSourceReferences(sources.get(), cinematic.get());
   return 0;
 }

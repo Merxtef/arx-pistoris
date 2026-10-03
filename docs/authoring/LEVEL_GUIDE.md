@@ -12,6 +12,49 @@ Rooms, portals, entities, lights, zones, fogs, paths, and navigation support are
 authored directly. Native cell slicing and other build products are recreated
 or generated when requested.
 
+## Start From An Export
+
+Exporting an installed level is the quickest way to get a working room,
+portal, material, and helper layout:
+
+```text
+arx-pistor --auto-mount level:1 level1.glb
+arx-pistor --auto-mount level1.glb level:40
+```
+
+For loose files, pass the FTS first and optional lighting and scene data after
+it. Use absolute native paths when they must bypass mounts:
+
+```text
+arx-pistor C:/project/level.fts C:/project/level.llf C:/project/level.dlf level.glb
+arx-pistor --kind level level.glb C:/project/level.fts
+```
+
+The second command writes the loose FTS, LLF, and DLF bundle beside the output
+path. Baking always reconstructs required native layout such as FTS cell
+slicing. Optional derived layers such as static lighting, room distances,
+navigation, and minimap data are regenerated only by the operations you
+request; add the relevant generation flags before installing the result in the
+game.
+Level GLB embeds resolved textures and the minimap, while its loading screen is
+written as a sibling `[loading].png`. Loose native output writes texture paths
+below the output directory and uses sibling `[map]` and `[loading]` images; a
+mounted `level:` destination places them in the game layout.
+
+## How Level Data Fits Together
+
+Rooms divide visible geometry and portals connect those rooms for visibility.
+Room distances describe routes through that portal topology, so changing rooms
+or portals makes preserved distances suspect. The navigation surface is the
+walkable support used to generate anchors; anchor connections are derived from
+the resulting anchors. Generate those layers in that order, or use
+`--gen-navigation` for the complete navigation preset.
+
+Geometry and topology edits can also make static lighting, room distances,
+navigation, and the minimap stale. Treat them as derived data: preserve them
+for small compatible edits, but regenerate the affected layer after structural
+changes.
+
 ## Coordinates
 
 GLB uses +Y up. Level uses native Arx coordinates with -Y up. The default scale

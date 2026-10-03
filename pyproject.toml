@@ -1,0 +1,54 @@
+[build-system]
+requires = ["scikit-build-core>=1.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pistoris"
+dynamic = ["version"]
+description = "Python bindings for the Pistoris Arx Fatalis resource library"
+readme = "bindings/python/README.md"
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Merxtef" }]
+
+[tool.scikit-build]
+cmake.source-dir = "."
+cmake.build-type = "Release"
+cmake.define.ARX_BUILD_CLI = "OFF"
+cmake.define.ARX_BUILD_PYTHON_BINDINGS = "ON"
+cmake.define.BUILD_TESTING = "OFF"
+build.targets = ["pistoris_python_package"]
+install.components = ["python", "notices"]
+wheel.packages = []
+wheel.py-api = "cp312"
+sdist.exclude = ["data/fixtures", "tests", "fuzz"]
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.regex"
+field = "version"
+input = "CMakeLists.txt"
+regex = '''(?m)^project\(arx-pistoris VERSION (?P<value>[0-9]+\.[0-9]+\.[0-9]+) LANGUAGES'''
+
+[[tool.scikit-build.overrides]]
+if.platform-system = "win32"
+cmake.args = ["-G", "Ninja"]
+env.CC = "clang"
+env.CXX = "clang++"
+
+[[tool.scikit-build.overrides]]
+if.platform-system = "linux"
+env.CC = "clang"
+env.CXX = "clang++"
+
+[tool.cibuildwheel]
+build = "cp312-*"
+skip = "cp3??t-* *-musllinux_*"
+archs = ["native"]
+
+[tool.cibuildwheel.linux]
+before-all = "dnf install -y clang"
+environment = { CC = "clang", CXX = "clang++" }
+manylinux-x86_64-image = "manylinux_2_28"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "14.0" }

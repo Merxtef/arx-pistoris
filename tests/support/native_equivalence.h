@@ -354,14 +354,12 @@ inline void checkEquivalent(const pistoris::Tea& lhs, const pistoris::Tea& rhs, 
 }
 
 inline void checkEquivalent(const pistoris::Fts& lhs, const pistoris::Fts& rhs) {
-  std::vector<std::uint8_t> lhs_bytes;
-  std::vector<std::uint8_t> rhs_bytes;
-  const ArxReturnCode lhs_status = pistoris::writeFts(lhs, lhs_bytes);
-  const ArxReturnCode rhs_status = pistoris::writeFts(rhs, rhs_bytes);
-  CHECK(lhs_status == ARX_OK);
-  CHECK(rhs_status == ARX_OK);
-  if (lhs_status != ARX_OK || rhs_status != ARX_OK) return;
-  CHECK(lhs_bytes == rhs_bytes);
+  auto lhs_bytes = pistoris::writeFts(lhs);
+  auto rhs_bytes = pistoris::writeFts(rhs);
+  CHECK(lhs_bytes);
+  CHECK(rhs_bytes);
+  if (!lhs_bytes || !rhs_bytes) return;
+  CHECK(*lhs_bytes == *rhs_bytes);
 }
 
 }  // namespace test_support

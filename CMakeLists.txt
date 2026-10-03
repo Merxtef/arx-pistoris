@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Merxtef
 
-cmake_minimum_required(VERSION 3.25)
-project(arx-pistoris VERSION 0.5.1 LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.26)
+project(arx-pistoris VERSION 0.6.0 LANGUAGES C CXX)
+
+if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
+  message(FATAL_ERROR "arx-pistoris requires macOS 14.0 or newer")
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -13,6 +17,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(CTest)
 include(GNUInstallDirs)
 
+set(ARX_PISTORIS_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libs/core")
+set(ARX_PISTORIS_CORE_INCLUDE_DIR "${ARX_PISTORIS_CORE_DIR}/include")
+set(ARX_PISTORIS_CORE_SOURCE_DIR "${ARX_PISTORIS_CORE_DIR}/src")
+set(ARX_PISTORIS_CLI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/apps/cli")
+set(ARX_PISTORIS_CLI_SOURCE_DIR "${ARX_PISTORIS_CLI_DIR}/src")
+
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -20,6 +30,8 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 option(ARX_COVERAGE "Build with Clang source-based coverage instrumentation" OFF)
 option(ARX_SANITIZERS "Build RelWithDebInfo targets with AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
 option(ARX_FUZZING "Build libFuzzer fuzz targets (requires clang -fsanitize=fuzzer)" OFF)
+option(ARX_BUILD_CLI "Build the arx-pistor command-line application" ON)
+option(ARX_BUILD_PYTHON_BINDINGS "Enable the Pistoris Python bindings build" OFF)
 option(ARX_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 # MSVC STL annotations clash with clang_rt.fuzzer
@@ -87,12 +99,12 @@ function(arx_fuzz_target_defaults target)
     $<$<CONFIG:RelWithDebInfo>:-fno-sanitize-recover=undefined>)
 endfunction()
 
-configure_file(src/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
+configure_file(${ARX_PISTORIS_CORE_SOURCE_DIR}/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/version.h)
 
 # Hot-reload ABI tripwire: SHA256 of public headers, baked into the binary
 # Consumer computes the same hash; mismatch at reload = refuse
 function(arx_compute_layout_hash OUT_VAR)
-    file(GLOB_RECURSE _hdrs CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/arx_pistoris/*.h")
+    file(GLOB_RECURSE _hdrs CONFIGURE_DEPENDS "${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.h")
     list(SORT _hdrs)
     set(_concat "")
     foreach(_h IN LISTS _hdrs)
@@ -109,7 +121,8 @@ endfunction()
 
 arx_compute_layout_hash(ARX_PISTORIS_LAYOUT_HASH)
 message(STATUS "arx_pistoris layout hash: ${ARX_PISTORIS_LAYOUT_HASH}")
-configure_file(src/layout_hash_gen.h.in ${CMAKE_CURRENT_BINARY_DIR}/layout_hash_gen.h @ONLY)
+configure_file(${ARX_PISTORIS_CORE_SOURCE_DIR}/layout_hash_gen.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/layout_hash_gen.h @ONLY)
 
 # --- Build time info ---
 # OFF skips the per-build regeneration to avoid relink thrash on non-deliverable presets
@@ -156,6 +169,9 @@ endif()
 add_library(nlohmann_json INTERFACE)
 target_include_directories(nlohmann_json INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
+add_library(fast_float INTERFACE)
+target_include_directories(fast_float SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+
 add_library(mapbox_earcut INTERFACE)
 target_include_directories(mapbox_earcut SYSTEM INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 
@@ -184,7 +200,7 @@ if(WIN32)
   target_compile_definitions(arx_pistoris_pkware PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-add_library(arx_pistoris_cgltf STATIC src/external/glb/cgltf_impl.cpp)
+add_library(arx_pistoris_cgltf STATIC ${ARX_PISTORIS_CORE_SOURCE_DIR}/external/glb/cgltf_impl.cpp)
 set_target_properties(arx_pistoris_cgltf PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   CXX_VISIBILITY_PRESET hidden
@@ -205,7 +221,7 @@ if(WIN32)
   target_compile_definitions(arx_pistoris_cgltf PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-add_library(arx_pistoris_stb STATIC src/utils/stb_impl.cpp)
+add_library(arx_pistoris_stb STATIC ${ARX_PISTORIS_CORE_SOURCE_DIR}/utils/stb_impl.cpp)
 set_target_properties(arx_pistoris_stb PROPERTIES
   POSITION_INDEPENDENT_CODE ON
   CXX_VISIBILITY_PRESET hidden
@@ -224,7 +240,7 @@ elseif(ARX_SANITIZERS)
 endif()
 
 add_library(arx_pistoris_audio_codecs STATIC
-  src/utils/audio_codecs_impl.cpp
+  ${ARX_PISTORIS_CORE_SOURCE_DIR}/utils/audio_codecs_impl.cpp
   third_party/stb/stb_vorbis.c
 )
 set_target_properties(arx_pistoris_audio_codecs PROPERTIES
@@ -256,14 +272,29 @@ add_library(doctest INTERFACE)
 target_include_directories(doctest INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 include(third_party/doctest/doctest.cmake)
 
-add_subdirectory(src)
-add_subdirectory(cli)
+if(ARX_BUILD_PYTHON_BINDINGS)
+  find_package(Python 3.12 REQUIRED COMPONENTS Interpreter Development.Module Development.SABIModule)
+  set(NB_CREATE_INSTALL_RULES OFF)
+  set(NB_TEST OFF)
+  set(NB_USE_SUBMODULE_DEPS ON)
+  add_subdirectory(third_party/nanobind EXCLUDE_FROM_ALL)
+endif()
+
+add_subdirectory(libs/core)
+if(ARX_BUILD_CLI)
+  add_subdirectory(apps/cli)
+endif()
+if(ARX_BUILD_PYTHON_BINDINGS)
+  add_subdirectory(bindings/python)
+endif()
 
 # --- Tests ---
 # Doctest discovery cannot find the ASan runtime in fuzz builds
 if(BUILD_TESTING AND NOT ARX_FUZZING)
 
 file(GLOB ARX_UNIT_TEST_SRCS   CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/*.cpp")
+file(GLOB ARX_CLI_UNIT_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/cli_*.cpp")
+list(REMOVE_ITEM ARX_UNIT_TEST_SRCS ${ARX_CLI_UNIT_TEST_SRCS})
 file(GLOB ARX_UNIT_MODULE_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/unit/modules/*.cpp")
 file(GLOB ARX_C_TEST_SRCS      CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/api/*.cpp")
 file(GLOB ARX_CPP_TEST_SRCS    CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cpp_api/*.cpp")
@@ -272,12 +303,12 @@ file(GLOB ARX_CPP_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR
 file(GLOB ARX_CLI_CORPUS_TEST_SRCS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_corpus/*.cpp")
 
 file(GLOB_RECURSE ARX_PUBLIC_C_HEADERS CONFIGURE_DEPENDS
-  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/arx_pistoris/*.h"
+  RELATIVE "${ARX_PISTORIS_CORE_INCLUDE_DIR}"
+  "${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.h"
 )
 file(GLOB_RECURSE ARX_PUBLIC_CPP_HEADERS CONFIGURE_DEPENDS
-  RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/include"
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/arx_pistoris/*.hpp"
+  RELATIVE "${ARX_PISTORIS_CORE_INCLUDE_DIR}"
+  "${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.hpp"
 )
 set(ARX_HEADER_CHECK_DIR "${CMAKE_CURRENT_BINARY_DIR}/header-self-containment")
 set(ARX_HEADER_CHECK_SOURCES)
@@ -294,7 +325,7 @@ foreach(header IN LISTS ARX_PUBLIC_CPP_HEADERS)
   list(APPEND ARX_HEADER_CHECK_SOURCES "${source}")
 endforeach()
 add_library(arx_pistoris_header_self_containment OBJECT ${ARX_HEADER_CHECK_SOURCES})
-target_include_directories(arx_pistoris_header_self_containment PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(arx_pistoris_header_self_containment PRIVATE ${ARX_PISTORIS_CORE_INCLUDE_DIR})
 target_compile_features(arx_pistoris_header_self_containment PRIVATE c_std_11 cxx_std_20)
 target_compile_definitions(arx_pistoris_header_self_containment PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:ARX_PISTORIS_CPP_API>
@@ -303,18 +334,22 @@ target_compile_definitions(arx_pistoris_header_self_containment PRIVATE
 arx_target_defaults(arx_pistoris_header_self_containment)
 set_target_properties(arx_pistoris_header_self_containment PROPERTIES C_CLANG_TIDY "" CXX_CLANG_TIDY "")
 
-# Unit tests: static wrapper + src/ on include path (internal headers)
+# Unit tests: static wrapper + component sources on include paths (internal headers)
 add_executable(arx_pistoris_unit_tests ${ARX_UNIT_TEST_SRCS} ${ARX_UNIT_MODULE_TEST_SRCS})
-target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cli_support arx_pistoris_cpp doctest nlohmann_json)
+target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cpp doctest nlohmann_json)
 target_compile_definitions(arx_pistoris_unit_tests PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
 target_include_directories(arx_pistoris_unit_tests PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-  ${CMAKE_CURRENT_SOURCE_DIR}/cli
+  ${ARX_PISTORIS_CORE_SOURCE_DIR}
   ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
+if(ARX_BUILD_CLI)
+  target_sources(arx_pistoris_unit_tests PRIVATE ${ARX_CLI_UNIT_TEST_SRCS})
+  target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cli_support)
+  target_include_directories(arx_pistoris_unit_tests PRIVATE ${ARX_PISTORIS_CLI_SOURCE_DIR})
+endif()
 arx_target_defaults(arx_pistoris_unit_tests)
 
-# C API tests: shared lib only, no src/ - enforces public-headers-only
+# C API tests: shared lib only, no core sources - enforces public-headers-only
 add_executable(arx_pistoris_c_tests ${ARX_C_TEST_SRCS})
 target_link_libraries(arx_pistoris_c_tests PRIVATE arx_pistoris_c doctest)
 target_include_directories(arx_pistoris_c_tests PRIVATE
@@ -326,7 +361,7 @@ add_executable(arx_pistoris_c_smoke tests/api/c_smoke.c)
 target_link_libraries(arx_pistoris_c_smoke PRIVATE arx_pistoris_c)
 arx_target_defaults(arx_pistoris_c_smoke)
 
-# C++ API tests: static compile-time API, no src/ - enforces public-headers-only
+# C++ API tests: static compile-time API, no core sources - enforces public-headers-only
 add_executable(arx_pistoris_cpp_tests ${ARX_CPP_TEST_SRCS})
 target_link_libraries(arx_pistoris_cpp_tests PRIVATE arx_pistoris_cpp doctest)
 target_compile_definitions(arx_pistoris_cpp_tests PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
@@ -350,23 +385,27 @@ target_include_directories(arx_pistoris_cpp_corpus_tests PRIVATE
 )
 arx_target_defaults(arx_pistoris_cpp_corpus_tests)
 
-add_executable(arx_pistoris_cli_corpus_tests ${ARX_CLI_CORPUS_TEST_SRCS})
-target_link_libraries(arx_pistoris_cli_corpus_tests PRIVATE
-  arx_pistoris_cli_support
-  arx_pistoris_cpp
-  doctest
-  nlohmann_json
-)
-target_include_directories(arx_pistoris_cli_corpus_tests PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/cli
-  ${CMAKE_CURRENT_SOURCE_DIR}/tests
-)
-arx_target_defaults(arx_pistoris_cli_corpus_tests)
+if(ARX_BUILD_CLI)
+  add_executable(arx_pistoris_cli_corpus_tests ${ARX_CLI_CORPUS_TEST_SRCS})
+  target_link_libraries(arx_pistoris_cli_corpus_tests PRIVATE
+    arx_pistoris_cli_support
+    arx_pistoris_cpp
+    doctest
+    nlohmann_json
+  )
+  target_include_directories(arx_pistoris_cli_corpus_tests PRIVATE
+    ${ARX_PISTORIS_CLI_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+  )
+  arx_target_defaults(arx_pistoris_cli_corpus_tests)
+endif()
 
-doctest_discover_tests(arx_pistoris_unit_tests   ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+doctest_discover_tests(arx_pistoris_unit_tests ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+if(ARX_BUILD_CLI)
+  doctest_discover_tests(arx_pistoris_cli_corpus_tests ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
+endif()
 doctest_discover_tests(arx_pistoris_cpp_tests    ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 doctest_discover_tests(arx_pistoris_cpp_corpus_tests ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
-doctest_discover_tests(arx_pistoris_cli_corpus_tests ADD_LABELS 1 WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
 add_test(NAME arx_pistoris_c_tests
   COMMAND arx_pistoris_c_tests
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
@@ -388,26 +427,35 @@ add_test(NAME HeaderBoundaries
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_header_boundaries.py
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 set_tests_properties(HeaderBoundaries PROPERTIES LABELS "architecture")
-add_test(NAME CliContract
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/cli_contract_tests.py $<TARGET_FILE:arx_pistoris_cli>
+add_test(NAME ResultFailurePolicy
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/check_result_failure_policy.py
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-set_tests_properties(CliContract PROPERTIES LABELS "cli")
-add_custom_target(regenerate-fixtures
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/regenerate_fixture_mount.py
-    --cli $<TARGET_FILE:arx_pistoris_cli>
-  DEPENDS arx_pistoris_cli
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  USES_TERMINAL
-  VERBATIM)
+set_tests_properties(ResultFailurePolicy PROPERTIES LABELS "architecture")
+if(ARX_BUILD_CLI)
+  add_test(NAME CliContract
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/cli_contract_tests.py $<TARGET_FILE:arx_pistoris_cli>
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+  set_tests_properties(CliContract PROPERTIES LABELS "cli")
+  add_custom_target(regenerate-fixtures
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/regenerate_fixture_mount.py
+      --cli $<TARGET_FILE:arx_pistoris_cli>
+    DEPENDS arx_pistoris_cli
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    USES_TERMINAL
+    VERBATIM)
+endif()
 
 endif()  # BUILD_TESTING AND NOT ARX_FUZZING
 
-install(TARGETS arx_pistoris_cli
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+if(ARX_BUILD_CLI)
+  install(TARGETS arx_pistoris_cli
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  )
+endif()
 
 install(FILES LICENSE ADDITIONAL_TERMS AUTHORS ARX_LIBERTATIS_AUTHORS README.md
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
+  COMPONENT notices
 )
 install(DIRECTORY docs/
   DESTINATION ${CMAKE_INSTALL_DOCDIR}/docs
@@ -418,41 +466,66 @@ install(DIRECTORY docs/
 install(FILES third_party/cgltf/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME cgltf-LICENSE
+  COMPONENT notices
 )
 install(FILES third_party/stb/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME stb-LICENSE
+  COMPONENT notices
 )
 install(FILES third_party/dr_libs/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME dr_libs-LICENSE
+  COMPONENT notices
 )
 install(FILES third_party/blast/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME blast-LICENSE
+  COMPONENT notices
 )
 install(FILES third_party/pklib/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME pklib-LICENSE
+  COMPONENT notices
 )
 install(FILES third_party/nlohmann/LICENSE.MIT
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME nlohmann-json-LICENSE
+  COMPONENT notices
+)
+install(FILES third_party/fast_float/LICENSE-MIT
+  DESTINATION ${CMAKE_INSTALL_DOCDIR}
+  RENAME fast-float-LICENSE
+  COMPONENT notices
 )
 install(FILES third_party/mapbox/LICENSE
   DESTINATION ${CMAKE_INSTALL_DOCDIR}
   RENAME mapbox-earcut-LICENSE
+  COMPONENT notices
 )
+if(ARX_BUILD_PYTHON_BINDINGS)
+  install(FILES third_party/nanobind/LICENSE
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    RENAME nanobind-LICENSE
+    COMPONENT notices
+  )
+  install(FILES third_party/nanobind/ext/robin_map/LICENSE
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    RENAME robin-map-LICENSE
+    COMPONENT notices
+  )
+endif()
 
 # --- Format target ---
 find_program(CLANG_FORMAT clang-format)
 if(CLANG_FORMAT)
   file(GLOB_RECURSE ALL_SOURCE_FILES CONFIGURE_DEPENDS
-    ${CMAKE_SOURCE_DIR}/src/*.cpp    ${CMAKE_SOURCE_DIR}/src/*.h
-    ${CMAKE_SOURCE_DIR}/include/arx_pistoris/*.h
-    ${CMAKE_SOURCE_DIR}/include/arx_pistoris/*.hpp
+    ${ARX_PISTORIS_CORE_SOURCE_DIR}/*.cpp    ${ARX_PISTORIS_CORE_SOURCE_DIR}/*.h
+    ${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.h
+    ${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.hpp
     ${CMAKE_SOURCE_DIR}/tests/*.c    ${CMAKE_SOURCE_DIR}/tests/*.cpp  ${CMAKE_SOURCE_DIR}/tests/*.h
-    ${CMAKE_SOURCE_DIR}/cli/*.cpp    ${CMAKE_SOURCE_DIR}/cli/*.h
+    ${ARX_PISTORIS_CLI_SOURCE_DIR}/*.cpp    ${ARX_PISTORIS_CLI_SOURCE_DIR}/*.h
+    ${CMAKE_SOURCE_DIR}/bindings/python/src/*.cpp ${CMAKE_SOURCE_DIR}/bindings/python/src/*.h
     ${CMAKE_SOURCE_DIR}/fuzz/*.cpp     ${CMAKE_SOURCE_DIR}/fuzz/*.h
   )
   string(REPLACE ";" "\n" ARX_FORMAT_FILE_LIST_CONTENT "${ALL_SOURCE_FILES}")
@@ -510,13 +583,13 @@ function(arx_add_fuzz_target name source seed_directory)
 endfunction()
 
 if(ARX_FUZZING)
-  add_library(arx_pistoris_fuzz_api STATIC src/api/binary.cpp src/api/strerror.cpp ${ARX_PISTORIS_C_API_SOURCES})
+  add_library(arx_pistoris_fuzz_api STATIC ${ARX_PISTORIS_C_LIBRARY_SOURCES})
   target_compile_definitions(arx_pistoris_fuzz_api PRIVATE ARX_PISTORIS_EXPORTS)
   target_include_directories(arx_pistoris_fuzz_api
     PUBLIC
-      ${CMAKE_CURRENT_SOURCE_DIR}/include
+      ${ARX_PISTORIS_CORE_INCLUDE_DIR}
     PRIVATE
-      ${CMAKE_CURRENT_SOURCE_DIR}/src
+      ${ARX_PISTORIS_CORE_SOURCE_DIR}
       ${CMAKE_CURRENT_BINARY_DIR}
   )
   target_link_libraries(arx_pistoris_fuzz_api PRIVATE ${ARX_PISTORIS_INTERNAL_TARGETS}
@@ -569,7 +642,7 @@ if(ARX_FUZZING)
   arx_add_fuzz_target(arx_pistoris_obj_with_mtl_fuzz            fuzz/obj_with_mtl_fuzz.cpp            obj-mtl
                       DICTIONARY fuzz/obj.dict)
   arx_add_fuzz_target(arx_pistoris_glb_container_fuzz           fuzz/glb_container_fuzz.cpp           glb-container)
-  target_include_directories(arx_pistoris_glb_container_fuzz PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_include_directories(arx_pistoris_glb_container_fuzz PRIVATE ${ARX_PISTORIS_CORE_SOURCE_DIR})
   target_link_libraries(arx_pistoris_glb_container_fuzz PRIVATE arx_pistoris_cgltf)
   arx_add_fuzz_target(arx_pistoris_model_glb_import_fuzz        fuzz/model_glb_import_fuzz.cpp        model-glb
                       DICTIONARY fuzz/model-glb.dict)

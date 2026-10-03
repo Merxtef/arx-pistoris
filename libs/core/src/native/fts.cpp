@@ -1,0 +1,594 @@
+/*
+ * Copyright 2011-2022 Arx Libertatis Team (see the AUTHORS file)
+ *
+ * This file is part of Arx Libertatis.
+ *
+ * Arx Libertatis is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * Arx Libertatis is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with Arx Libertatis.  If not, see <http://www.gnu.org/licenses/>.
+ */
+/* Based on:
+===========================================================================
+ARX FATALIS GPL Source Code
+Copyright (C) 1999-2010 Arkane Studios SA, a ZeniMax Media company.
+
+This file is part of the Arx Fatalis GPL Source Code ('Arx Fatalis Source Code').
+
+Arx Fatalis Source Code is free software: you can redistribute it and/or modify it under the terms of the GNU General
+Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any
+later version.
+
+Arx Fatalis Source Code is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+details.
+
+You should have received a copy of the GNU General Public License along with Arx Fatalis Source Code.  If not, see
+<http://www.gnu.org/licenses/>.
+
+In addition, the Arx Fatalis Source Code is also subject to certain additional terms. You should have received a copy of
+these additional terms immediately following the terms and conditions of the GNU General Public License which
+accompanied the Arx Fatalis Source Code. If not, please request a copy in writing from Arkane Studios at the address
+below.
+
+If you have questions concerning this license or the applicable additional terms, you may contact in writing Arkane
+Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
+===========================================================================
+*/
+// Source:
+// https://github.com/arx/ArxLibertatis/blob/5b95e4c5ca9d583f1b11c085326979772645e0f3/src/graphics/data/FastSceneFormat.h
+/*
+ * Modified for arx-pistoris:
+ * Copyright (C) 2026 Merxtef
+ */
+
+#include "native/fts.h"
+
+#include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/location.hpp"
+#include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/location.hpp"
+#include "arx_pistoris/runtime/types.h"
+
+#include "api/result_failure.h"
+#include "modules/rooms.h"
+#include "native/binary_location.h"
+#include "native/fixed_string.h"
+#include "native/resource_lookup.h"
+#include "native/resource_path.h"
+#include "utils/container_allocation.h"
+#include "utils/cursor.h"
+#include "utils/log.h"
+#include "utils/math/finite.h"
+#include "utils/native_text.h"
+#include "utils/return_code.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <format>
+#include <limits>
+#include <new>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace pistoris {
+
+namespace {
+
+bool countFits(std::int32_t n, std::size_t max) { return n >= 0 && static_cast<std::size_t>(n) <= max; }
+
+bool mulFits(std::size_t a, std::size_t b, std::size_t max, std::size_t& out) {
+  if (a != 0 && b > max / a) return false;
+  out = a * b;
+  return out <= max;
+}
+
+bool sizeFitsInt32(std::size_t n) { return n <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()); }
+
+std::string runtimeTextureResourceKey(std::string_view source) {
+  std::string normalized;
+  (void)normalizeNativeResourcePath(source, normalized);
+  return normalized;
+}
+
+bool canonicalTexturePath(const fts::Texture& texture) {
+  if (!isNullTerminated(texture.fic)) return false;
+  std::string normalized;
+  std::string encoded;
+  return normalizeNativeResourcePath(texture.fic, normalized) && normalized == texture.fic &&
+         encodeNativeResourceStem(normalized, sizeof(texture.fic), encoded);
+}
+
+bool encodeTexturePath(const fts::Texture& texture, char (&out)[256]) {
+  std::string encoded;
+  if (!encodeNativeResourceStem(texture.fic, sizeof(out), encoded)) return false;
+  std::memset(out, 0, sizeof(out));
+  std::memcpy(out, encoded.data(), encoded.size());
+  return true;
+}
+
+bool roomDistCount(std::int32_t num_rooms, std::size_t& out) {
+  if (num_rooms < 0 || static_cast<std::size_t>(num_rooms) > kFtsMaxRooms) return false;
+  const std::size_t room_count = static_cast<std::size_t>(num_rooms) + 1U;
+  return mulFits(room_count, room_count, (kFtsMaxRooms + 1U) * (kFtsMaxRooms + 1U), out);
+}
+
+struct TextureRecord {
+  std::int32_t tc = 0;
+  std::int32_t temp = 0;
+  char fic[256] = {};
+};
+static_assert(sizeof(TextureRecord) == 264);
+
+bool validPortalGeometry(const fts::SavePoly& poly) {
+  Portal portal;
+  portal.shape = (poly.type & kFaceBitQuad) != 0 ? PortalShape::kQuad : PortalShape::kTriangle;
+  if (portal.shape == PortalShape::kQuad) {
+    portal.vertices = {poly.v[0].pos, poly.v[1].pos, poly.v[3].pos, poly.v[2].pos};
+  } else {
+    for (std::size_t i = 0; i < 3; ++i) portal.vertices[i] = poly.v[i].pos;
+  }
+  return rooms::validatePortalGeometry(portal) == rooms::PortalValidation::kValid;
+}
+
+ArxReturnCode validateRoomTextureVertexCounts(const fts::Data& data) {
+  try {
+    std::unordered_map<std::string, std::size_t> batches_by_resource;
+    std::unordered_map<std::int32_t, std::size_t> batch_by_texture;
+    batches_by_resource.reserve(data.textures.size());
+    batch_by_texture.reserve(data.textures.size());
+    for (const auto& [id, texture] : data.textures) {
+      std::string resource = runtimeTextureResourceKey(texture.fic);
+      if (resource.empty()) continue;
+      const std::size_t next_batch = batches_by_resource.size();
+      const auto [batch, inserted] = batches_by_resource.try_emplace(std::move(resource), next_batch);
+      (void)inserted;
+      batch_by_texture.emplace(id, batch->second);
+    }
+
+    std::vector<std::size_t> vertex_counts(batches_by_resource.size());
+    for (const fts::Room& room : data.rooms) {
+      std::fill(vertex_counts.begin(), vertex_counts.end(), 0U);
+      for (const fts::EpData& reference : room.polygons) {
+        const std::size_t cell_index =
+            static_cast<std::size_t>(reference.py) * static_cast<std::size_t>(data.scene.sizex) +
+            static_cast<std::size_t>(reference.px);
+        const fts::Poly& polygon = data.cells[cell_index].polygons[static_cast<std::size_t>(reference.idx)];
+        if ((polygon.type & (kFaceBitIgnore | kFaceBitHide)) != 0 || polygon.tex == 0) continue;
+
+        const auto batch = batch_by_texture.find(polygon.tex);
+        if (batch == batch_by_texture.end()) continue;
+        const std::size_t vertex_count = (polygon.type & kFaceBitQuad) != 0 ? 4U : 3U;
+        std::size_t& count = vertex_counts[batch->second];
+        if (count > kFtsMaxRoomTextureVertices - vertex_count) return ARX_FTS_BAD_ROOM_TEXTURE_VERTEX_COUNT;
+        count += vertex_count;
+      }
+    }
+  } catch (const std::bad_alloc&) {
+    return ARX_BAD_ALLOC;
+  }
+  return ARX_OK;
+}
+
+ArxReturnCode readPayload(fts::Data* d, ReadCursor& c) {
+  c.locate(FtsElement::kHeader, "scene_header");
+  c.read(d->scene);
+  if (!c) return ARX_UNEXPECTED_EOF;
+  if (d->scene.version != kFtsVersion) return ARX_FTS_BAD_VERSION;
+  if (!countFits(d->scene.sizex, kFtsMaxGridSize)) return ARX_FTS_BAD_GRID_SIZE;
+  if (!countFits(d->scene.sizez, kFtsMaxGridSize)) return ARX_FTS_BAD_GRID_SIZE;
+  if (!countFits(d->scene.num_textures, kFtsMaxTextures)) return ARX_FTS_BAD_TEXTURE_COUNT;
+  if (!countFits(d->scene.num_polys, kFtsMaxPolygons)) return ARX_FTS_BAD_POLYGON_COUNT;
+  if (!countFits(d->scene.num_anchors, kFtsMaxAnchors)) return ARX_FTS_BAD_ANCHOR_COUNT;
+  if (!countFits(d->scene.num_portals, kFtsMaxPortals)) return ARX_FTS_BAD_PORTAL_COUNT;
+  if (!countFits(d->scene.num_rooms, kFtsMaxRooms)) return ARX_FTS_BAD_ROOM_COUNT;
+
+  std::size_t cell_count = 0;
+  if (!mulFits(static_cast<std::size_t>(d->scene.sizex),
+               static_cast<std::size_t>(d->scene.sizez),
+               kFtsMaxGridSize,
+               cell_count))
+    return ARX_FTS_BAD_GRID_SIZE;
+
+  if (!tryReserve(d->textures, static_cast<std::size_t>(d->scene.num_textures))) return ARX_BAD_ALLOC;
+  for (std::int32_t i = 0; i < d->scene.num_textures; ++i) {
+    TextureRecord record;
+    c.locate(FtsElement::kTexture, "texture", static_cast<std::size_t>(i));
+    c.read(record);
+    if (!c) return ARX_UNEXPECTED_EOF;
+    if (record.tc <= 0) return ARX_FTS_BAD_TEXTURE_ID;
+    canonicalizeFixedString(record.fic, "FTS: texture.fic", i);
+    fts::Texture texture;
+    texture.temp = record.temp;
+    std::memcpy(texture.fic, record.fic, sizeof(texture.fic));
+    try {
+      if (!d->textures.emplace(record.tc, texture).second) return ARX_FTS_DUPLICATE_TEXTURE_ID;
+    } catch (const std::bad_alloc&) {
+      return ARX_BAD_ALLOC;
+    }
+  }
+
+  if (!tryResize(d->cells, cell_count)) return ARX_BAD_ALLOC;
+  std::size_t poly_total = 0;
+  for (std::size_t cell_index = 0; cell_index < d->cells.size(); ++cell_index) {
+    auto& cell = d->cells[cell_index];
+    fts::SceneInfo info;
+    c.locate(FtsElement::kCell, "cell_header", cell_index);
+    c.read(info);
+    if (!c) return ARX_UNEXPECTED_EOF;
+    if (!countFits(info.nbpoly, kFtsMaxCellPolygons)) return ARX_FTS_BAD_CELL_POLYGON_COUNT;
+    if (!countFits(info.nbianchors, kFtsMaxAnchors)) return ARX_FTS_BAD_CELL_ANCHOR_COUNT;
+    if (static_cast<std::size_t>(info.nbpoly) > kFtsMaxPolygons - poly_total) return ARX_FTS_BAD_POLYGON_COUNT;
+    poly_total += static_cast<std::size_t>(info.nbpoly);
+
+    if (!tryResize(cell.polygons, info.nbpoly)) return ARX_BAD_ALLOC;
+    c.locate(FtsElement::kFace, "cell_polygons", cell_index);
+    ARX_RETURN_IF_ERR(c.readArray(cell.polygons));
+    if (!tryResize(cell.anchor_ids, info.nbianchors)) return ARX_BAD_ALLOC;
+    c.locate(FtsElement::kAnchorConnection, "cell_anchors", cell_index);
+    ARX_RETURN_IF_ERR(c.readArray(cell.anchor_ids));
+  }
+  if (poly_total != static_cast<std::size_t>(d->scene.num_polys)) return ARX_FTS_BAD_POLYGON_COUNT;
+
+  if (!tryResize(d->anchors, d->scene.num_anchors)) return ARX_BAD_ALLOC;
+  for (std::size_t anchor_index = 0; anchor_index < d->anchors.size(); ++anchor_index) {
+    auto& anchor = d->anchors[anchor_index];
+    c.locate(FtsElement::kAnchor, "anchor", anchor_index);
+    c.read(anchor.data);
+    if (!c) return ARX_UNEXPECTED_EOF;
+    if (!countFits(anchor.data.num_linked, kFtsMaxAnchors)) return ARX_FTS_BAD_ANCHOR_LINK_COUNT;
+    if (!tryResize(anchor.linked, anchor.data.num_linked)) return ARX_BAD_ALLOC;
+    c.locate(FtsElement::kAnchorConnection, "anchor_connections", anchor_index);
+    ARX_RETURN_IF_ERR(c.readArray(anchor.linked));
+  }
+
+  if (!tryResize(d->portals, d->scene.num_portals)) return ARX_BAD_ALLOC;
+  c.locate(FtsElement::kPortal, "portals");
+  ARX_RETURN_IF_ERR(c.readArray(d->portals));
+
+  if (!tryResize(d->rooms, static_cast<std::size_t>(d->scene.num_rooms) + 1)) return ARX_BAD_ALLOC;
+  for (std::size_t room_index = 0; room_index < d->rooms.size(); ++room_index) {
+    auto& room = d->rooms[room_index];
+    c.locate(FtsElement::kRoom, "room", room_index);
+    c.read(room.data);
+    if (!c) return ARX_UNEXPECTED_EOF;
+    if (!countFits(room.data.num_portals, kFtsMaxPortals)) return ARX_FTS_BAD_ROOM_PORTAL_COUNT;
+    if (!countFits(room.data.num_polys, kFtsMaxPolygons)) return ARX_FTS_BAD_ROOM_POLYGON_COUNT;
+    if (!tryResize(room.portal_ids, room.data.num_portals)) return ARX_BAD_ALLOC;
+    c.locate(FtsElement::kPortal, "room_portals", room_index);
+    ARX_RETURN_IF_ERR(c.readArray(room.portal_ids));
+    if (!tryResize(room.polygons, room.data.num_polys)) return ARX_BAD_ALLOC;
+    c.locate(FtsElement::kFace, "room_polygons", room_index);
+    ARX_RETURN_IF_ERR(c.readArray(room.polygons));
+  }
+
+  std::size_t room_dist_count = 0;
+  if (!roomDistCount(d->scene.num_rooms, room_dist_count)) return ARX_FTS_BAD_ROOM_COUNT;
+  if (!tryResize(d->room_distances, room_dist_count)) return ARX_BAD_ALLOC;
+  c.locate(FtsElement::kRoomDistance, "room_distances");
+  ARX_RETURN_IF_ERR(c.readArray(d->room_distances));
+
+  return ARX_OK;
+}
+
+ArxReturnCode readPrefix(ReadCursor& cursor) {
+  fts_detail::StorageHeader header;
+  cursor.locate(FtsElement::kHeader, "storage_header");
+  cursor.read(header);
+  if (!cursor) return ARX_UNEXPECTED_EOF;
+  if (header.version != kFtsVersion) return ARX_FTS_BAD_VERSION;
+  if (!countFits(header.count, fts_detail::kMaxSourceChecks)) return ARX_FTS_BAD_METADATA_COUNT;
+
+  cursor.locate(FtsElement::kHeader, "source_checks");
+  cursor.skip(static_cast<std::size_t>(header.count) * fts_detail::kSourceCheckSize);
+  return cursor ? ARX_OK : ARX_UNEXPECTED_EOF;
+}
+
+ArxReturnCode finishLoad(fts::Data& result, ReadCursor& payload) { return readPayload(&result, payload); }
+
+ArxReturnCode writePayload(const fts::Data* d, WriteCursor& c) {
+  fts::SceneHeader scene = d->scene;
+  scene.num_textures = static_cast<std::int32_t>(d->textures.size());
+  c.write(scene);
+  for (const auto& [id, texture] : d->textures) {
+    TextureRecord record;
+    record.tc = id;
+    record.temp = texture.temp;
+    if (!encodeTexturePath(texture, record.fic)) return ARX_FTS_BAD_TEXTURE_PATH;
+    c.write(record);
+  }
+  for (const auto& cell : d->cells) {
+    fts::SceneInfo info;
+    info.nbpoly = static_cast<std::int32_t>(cell.polygons.size());
+    info.nbianchors = static_cast<std::int32_t>(cell.anchor_ids.size());
+    c.write(info);
+    c.writeArray(cell.polygons);
+    c.writeArray(cell.anchor_ids);
+  }
+  for (const auto& anchor : d->anchors) {
+    fts::AnchorData data = anchor.data;
+    data.num_linked = static_cast<std::int16_t>(anchor.linked.size());
+    c.write(data);
+    c.writeArray(anchor.linked);
+  }
+  c.writeArray(d->portals);
+  for (const auto& room : d->rooms) {
+    fts::RoomData data = room.data;
+    data.num_portals = static_cast<std::int32_t>(room.portal_ids.size());
+    data.num_polys = static_cast<std::int32_t>(room.polygons.size());
+    c.write(data);
+    c.writeArray(room.portal_ids);
+    c.writeArray(room.polygons);
+  }
+  c.writeArray(d->room_distances);
+  return c ? ARX_OK : ARX_BAD_ALLOC;
+}
+
+}  // namespace
+
+FtsBinaryResult<fts::Data> loadFts(ReadCursor& cursor, NativeBinaryRegion region) {
+  return loadFts(cursor, cursor, region, region);
+}
+
+FtsBinaryResult<fts::Data> loadFts(ReadCursor& prefix, ReadCursor& payload, NativeBinaryRegion prefix_region,
+                                   NativeBinaryRegion payload_region) {
+  fts::Data result;
+  if (const ArxReturnCode code = readPrefix(prefix); code != ARX_OK)
+    return api_detail::ftsBinaryFailure<fts::Data>(code, native_binary::location<FtsElement>(prefix, prefix_region));
+  if (const ArxReturnCode code = finishLoad(result, payload); code != ARX_OK)
+    return api_detail::ftsBinaryFailure<fts::Data>(code, native_binary::location<FtsElement>(payload, payload_region));
+  FtsLocation semantic_location;
+  if (const ArxReturnCode code = canonicalizeFts(&result, &semantic_location); code != ARX_OK)
+    return api_detail::ftsBinaryFailure<fts::Data>(code,
+                                                   native_binary::semanticLocation(semantic_location, payload_region));
+  if (const ArxReturnCode code = validateFts(&result, &semantic_location); code != ARX_OK)
+    return api_detail::ftsBinaryFailure<fts::Data>(code,
+                                                   native_binary::semanticLocation(semantic_location, payload_region));
+  log(ARX_LOG_INFO,
+      "FTS loaded: {}x{} cells, {} polygons, {} textures, {} anchors, {} portals, {} rooms",
+      result.scene.sizex,
+      result.scene.sizez,
+      result.scene.num_polys,
+      result.textures.size(),
+      result.anchors.size(),
+      result.portals.size(),
+      result.scene.num_rooms);
+  return FtsBinaryResult<fts::Data>::success(std::move(result));
+}
+
+ArxReturnCode saveFts(const fts::Data* d, WriteCursor& c) {
+  ARX_RETURN_IF_ERR(validateFts(d));
+
+  for (const auto& [id, texture] : d->textures) {
+    const std::string_view path = texture.fic;
+    if (!path.empty() && !resolvesThroughDefaultLooseRoot({}, path)) {
+      log(ARX_LOG_WARN,
+          "FTS saving: texture {} path '{}' resolves outside Libertatis default loose roots; it may not be discovered",
+          id,
+          native_text::diagnostic(path));
+    }
+  }
+
+  fts_detail::StorageHeader header;
+  header.version = kFtsVersion;
+
+  log(ARX_LOG_INFO,
+      "FTS saving: {}x{} cells, {} polygons, {} textures, {} anchors, {} portals, {} rooms",
+      d->scene.sizex,
+      d->scene.sizez,
+      d->scene.num_polys,
+      d->textures.size(),
+      d->anchors.size(),
+      d->portals.size(),
+      d->scene.num_rooms);
+
+  c.write(header);
+  return writePayload(d, c);
+}
+
+ArxReturnCode canonicalizeFts(fts::Data* d, FtsLocation* failure_location) {
+  auto fail = [failure_location](ArxReturnCode code,
+                                 FtsElement element = FtsElement::kHeader,
+                                 std::size_t index = kNoElementIndex,
+                                 std::string field = {}) {
+    if (failure_location) *failure_location = {.element = element, .index = index, .field = std::move(field)};
+    return code;
+  };
+  if (!d) return fail(ARX_INVALID_DATA_POINTER);
+  std::size_t index = 0;
+  for (auto& [id, texture] : d->textures) {
+    (void)id;
+    if (!isNullTerminated(texture.fic)) return fail(ARX_FTS_BAD_TEXTURE_PATH, FtsElement::kTexture, index, "fic");
+    std::string normalized;
+    if (!normalizeNativeResourceStem(texture.fic, normalized) || normalized.size() >= sizeof(texture.fic))
+      return fail(ARX_FTS_BAD_TEXTURE_PATH, FtsElement::kTexture, index, "fic");
+    std::memset(texture.fic, 0, sizeof(texture.fic));
+    std::memcpy(texture.fic, normalized.data(), normalized.size());
+    ++index;
+  }
+  return ARX_OK;
+}
+
+ArxReturnCode validateFts(const fts::Data* d, FtsLocation* failure_location) {
+  auto fail = [failure_location](ArxReturnCode code,
+                                 FtsElement element = FtsElement::kHeader,
+                                 std::size_t index = kNoElementIndex,
+                                 std::size_t subindex = kNoElementIndex,
+                                 std::string field = {}) {
+    if (failure_location)
+      *failure_location = {.element = element, .index = index, .subindex = subindex, .field = std::move(field)};
+    return code;
+  };
+  if (d == nullptr) return fail(ARX_INVALID_DATA_POINTER);
+  if (d->scene.version != kFtsVersion)
+    return fail(ARX_FTS_BAD_VERSION, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.version");
+  if (!math::finite(d->scene.Mscenepos))
+    return fail(ARX_FTS_BAD_SCENE_OFFSET, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.Mscenepos");
+  if (!countFits(d->scene.sizex, kFtsMaxGridSize))
+    return fail(ARX_FTS_BAD_GRID_SIZE, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.sizex");
+  if (!countFits(d->scene.sizez, kFtsMaxGridSize))
+    return fail(ARX_FTS_BAD_GRID_SIZE, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.sizez");
+
+  std::size_t cell_count = 0;
+  if (!mulFits(static_cast<std::size_t>(d->scene.sizex),
+               static_cast<std::size_t>(d->scene.sizez),
+               kFtsMaxGridSize,
+               cell_count))
+    return fail(ARX_FTS_BAD_GRID_SIZE, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene");
+  if (d->cells.size() != cell_count)
+    return fail(ARX_FTS_BAD_GRID_SIZE, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "cells");
+
+  if (d->textures.size() > kFtsMaxTextures || !sizeFitsInt32(d->textures.size()))
+    return fail(ARX_FTS_BAD_TEXTURE_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "textures");
+  std::size_t texture_index = 0;
+  for (const auto& [id, texture] : d->textures) {
+    if (id <= 0) return fail(ARX_FTS_BAD_TEXTURE_ID, FtsElement::kTexture, texture_index, kNoElementIndex, "id");
+    if (!canonicalTexturePath(texture))
+      return fail(ARX_FTS_BAD_TEXTURE_PATH, FtsElement::kTexture, texture_index, kNoElementIndex, "fic");
+    ++texture_index;
+  }
+  if (d->anchors.size() > kFtsMaxAnchors || !sizeFitsInt32(d->anchors.size()))
+    return fail(ARX_FTS_BAD_ANCHOR_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "anchors");
+  if (d->portals.size() > kFtsMaxPortals || !sizeFitsInt32(d->portals.size()))
+    return fail(ARX_FTS_BAD_PORTAL_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "portals");
+  if (static_cast<std::size_t>(d->scene.num_rooms) > kFtsMaxRooms || d->scene.num_rooms < 0)
+    return fail(ARX_FTS_BAD_ROOM_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.num_rooms");
+  if (d->rooms.size() != static_cast<std::size_t>(d->scene.num_rooms) + 1)
+    return fail(ARX_FTS_BAD_ROOM_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "rooms");
+
+  std::size_t poly_total = 0;
+  for (std::size_t cell_index = 0; cell_index < d->cells.size(); ++cell_index) {
+    const auto& cell = d->cells[cell_index];
+    if (cell.polygons.size() > kFtsMaxCellPolygons || cell.polygons.size() > kFtsMaxPolygons - poly_total ||
+        !sizeFitsInt32(cell.polygons.size()))
+      return fail(ARX_FTS_BAD_CELL_POLYGON_COUNT, FtsElement::kCell, cell_index, kNoElementIndex, "polygons");
+    if (cell.anchor_ids.size() > kFtsMaxAnchors || !sizeFitsInt32(cell.anchor_ids.size()))
+      return fail(ARX_FTS_BAD_CELL_ANCHOR_COUNT, FtsElement::kCell, cell_index, kNoElementIndex, "anchor_ids");
+    for (std::size_t anchor = 0; anchor < cell.anchor_ids.size(); ++anchor) {
+      const std::int32_t idx = cell.anchor_ids[anchor];
+      if (idx < 0 || static_cast<std::size_t>(idx) >= d->anchors.size())
+        return fail(ARX_FTS_BAD_ANCHOR_INDEX, FtsElement::kCell, cell_index, anchor, "anchor_ids");
+    }
+    for (std::size_t polygon = 0; polygon < cell.polygons.size(); ++polygon) {
+      const auto& poly = cell.polygons[polygon];
+      const std::size_t face_index = poly_total + polygon;
+      if ((poly.type & kFaceBitsAll) != poly.type)
+        return fail(ARX_FTS_BAD_POLYGON_TYPE, FtsElement::kFace, face_index, kNoElementIndex, "type");
+      if (poly.tex < 0)
+        return fail(ARX_FTS_BAD_POLYGON_TEXTURE_ID, FtsElement::kFace, face_index, kNoElementIndex, "tex");
+      if (poly.tex > 0 && !d->textures.contains(poly.tex))
+        return fail(ARX_FTS_BAD_POLYGON_TEXTURE_ID, FtsElement::kFace, face_index, kNoElementIndex, "tex");
+      if (!std::isfinite(poly.transval))
+        return fail(ARX_FTS_BAD_POLYGON_TRANSVAL, FtsElement::kFace, face_index, kNoElementIndex, "transval");
+      std::size_t vertex_count = (poly.type & kFaceBitQuad) != 0 ? 4U : 3U;
+      for (std::size_t i = 0; i < vertex_count; ++i) {
+        ArxVector3 position = {poly.v[i].ssx, poly.v[i].sy, poly.v[i].ssz};
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) ||
+            position.x < 0.0f || position.x > 16000.0f || position.z < 0.0f || position.z > 16000.0f)
+          return fail(ARX_FTS_BAD_POLYGON_POSITION, FtsElement::kFace, face_index, i, "v");
+        if (!std::isfinite(poly.v[i].stu) || !std::isfinite(poly.v[i].stv))
+          return fail(ARX_FTS_BAD_POLYGON_UV, FtsElement::kFace, face_index, i, "v");
+      }
+    }
+    poly_total += cell.polygons.size();
+  }
+  if (poly_total != static_cast<std::size_t>(d->scene.num_polys))
+    return fail(ARX_FTS_BAD_POLYGON_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.num_polys");
+
+  if (d->scene.num_textures != static_cast<std::int32_t>(d->textures.size()))
+    return fail(ARX_FTS_BAD_TEXTURE_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.num_textures");
+  if (d->scene.num_anchors != static_cast<std::int32_t>(d->anchors.size()))
+    return fail(ARX_FTS_BAD_ANCHOR_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.num_anchors");
+  if (d->scene.num_portals != static_cast<std::int32_t>(d->portals.size()))
+    return fail(ARX_FTS_BAD_PORTAL_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.num_portals");
+
+  for (std::size_t anchor_index = 0; anchor_index < d->anchors.size(); ++anchor_index) {
+    const auto& anchor = d->anchors[anchor_index];
+    const auto& data = anchor.data;
+    if (!std::isfinite(data.pos.x) || !std::isfinite(data.pos.y) || !std::isfinite(data.pos.z)) {
+      return fail(ARX_FTS_BAD_ANCHOR_POSITION, FtsElement::kAnchor, anchor_index, kNoElementIndex, "data.pos");
+    }
+    if (anchor.linked.size() > static_cast<std::size_t>(std::numeric_limits<std::int16_t>::max()))
+      return fail(ARX_FTS_BAD_ANCHOR_LINK_COUNT, FtsElement::kAnchor, anchor_index, kNoElementIndex, "linked");
+    for (std::size_t link = 0; link < anchor.linked.size(); ++link) {
+      const std::int32_t idx = anchor.linked[link];
+      if (idx < 0 || static_cast<std::size_t>(idx) >= d->anchors.size())
+        return fail(ARX_FTS_BAD_ANCHOR_INDEX, FtsElement::kAnchorConnection, anchor_index, link, "linked");
+    }
+  }
+
+  for (std::size_t portal_index = 0; portal_index < d->portals.size(); ++portal_index) {
+    const auto& portal = d->portals[portal_index];
+    if (portal.room_1 < 0 || portal.room_1 > d->scene.num_rooms)
+      return fail(ARX_FTS_BAD_PORTAL_ROOM_INDEX, FtsElement::kPortal, portal_index, kNoElementIndex, "room_1");
+    if (portal.room_2 < 0 || portal.room_2 > d->scene.num_rooms)
+      return fail(ARX_FTS_BAD_PORTAL_ROOM_INDEX, FtsElement::kPortal, portal_index, kNoElementIndex, "room_2");
+    if ((portal.poly.type & ~kFaceBitQuad) != 0)
+      return fail(ARX_FTS_BAD_PORTAL_TYPE, FtsElement::kPortal, portal_index, kNoElementIndex, "poly.type");
+    std::size_t vertex_count = (portal.poly.type & kFaceBitQuad) != 0 ? 4U : 3U;
+    for (std::size_t i = 0; i < vertex_count; ++i) {
+      const ArxVector3& position = portal.poly.v[i].pos;
+      if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) || position.x < 0.0f ||
+          position.x > 16000.0f || position.z < 0.0f || position.z > 16000.0f)
+        return fail(ARX_FTS_BAD_PORTAL_POSITION, FtsElement::kPortal, portal_index, i, "poly.v");
+    }
+    if (!validPortalGeometry(portal.poly))
+      return fail(ARX_FTS_BAD_PORTAL_GEOMETRY, FtsElement::kPortal, portal_index, kNoElementIndex, "poly");
+  }
+
+  for (std::size_t room_index = 0; room_index < d->rooms.size(); ++room_index) {
+    const auto& room = d->rooms[room_index];
+    if (room.portal_ids.size() > kFtsMaxPortals || !sizeFitsInt32(room.portal_ids.size()))
+      return fail(ARX_FTS_BAD_ROOM_PORTAL_COUNT, FtsElement::kRoom, room_index, kNoElementIndex, "portal_ids");
+    if (room.polygons.size() > kFtsMaxPolygons || !sizeFitsInt32(room.polygons.size()))
+      return fail(ARX_FTS_BAD_ROOM_POLYGON_COUNT, FtsElement::kRoom, room_index, kNoElementIndex, "polygons");
+    for (std::size_t portal = 0; portal < room.portal_ids.size(); ++portal) {
+      const std::int32_t idx = room.portal_ids[portal];
+      if (idx < 0 || static_cast<std::size_t>(idx) >= d->portals.size())
+        return fail(ARX_FTS_BAD_ROOM_PORTAL_INDEX, FtsElement::kRoom, room_index, portal, "portal_ids");
+    }
+    for (std::size_t polygon = 0; polygon < room.polygons.size(); ++polygon) {
+      const auto& ep = room.polygons[polygon];
+      if (ep.px < 0 || ep.py < 0 || ep.idx < 0)
+        return fail(ARX_FTS_BAD_ROOM_POLYGON_INDEX, FtsElement::kRoom, room_index, polygon, "polygons");
+      if (ep.px >= d->scene.sizex || ep.py >= d->scene.sizez)
+        return fail(ARX_FTS_BAD_ROOM_POLYGON_INDEX, FtsElement::kRoom, room_index, polygon, "polygons");
+      const auto cell_idx =
+          static_cast<std::size_t>(ep.py) * static_cast<std::size_t>(d->scene.sizex) + static_cast<std::size_t>(ep.px);
+      if (static_cast<std::size_t>(ep.idx) >= d->cells[cell_idx].polygons.size())
+        return fail(ARX_FTS_BAD_ROOM_POLYGON_INDEX, FtsElement::kRoom, room_index, polygon, "polygons");
+    }
+  }
+  ArxReturnCode rc = validateRoomTextureVertexCounts(*d);
+  if (rc != ARX_OK) return fail(rc, FtsElement::kRoom);
+
+  std::size_t room_dist_count = 0;
+  if (!roomDistCount(d->scene.num_rooms, room_dist_count))
+    return fail(ARX_FTS_BAD_ROOM_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "scene.num_rooms");
+  if (d->room_distances.size() != room_dist_count)
+    return fail(
+        ARX_FTS_BAD_ROOM_DISTANCE_COUNT, FtsElement::kHeader, kNoElementIndex, kNoElementIndex, "room_distances");
+  for (std::size_t index = 0; index < d->room_distances.size(); ++index)
+    if (!std::isfinite(d->room_distances[index].distance))
+      return fail(ARX_FTS_BAD_ROOM_DISTANCE, FtsElement::kRoomDistance, index, kNoElementIndex, "distance");
+
+  return ARX_OK;
+}
+
+}  // namespace pistoris

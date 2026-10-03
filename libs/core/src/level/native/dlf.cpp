@@ -1,0 +1,331 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// SPDX-FileCopyrightText: 2026 Merxtef
+
+#include "native/dlf.h"
+
+#include "arx_pistoris/base/location.hpp"
+#include "arx_pistoris/base/math.hpp"
+#include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/dlf.hpp"
+#include "arx_pistoris/native/location.hpp"
+#include "arx_pistoris/native/text.hpp"
+#include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/runtime/types.h"
+
+#include "level/native/internal.h"
+#include "level/validation.h"
+#include "modules/scene.h"
+#include "native/fixed_string.h"
+#include "paths/entity_class.h"
+#include "utils/log.h"
+#include "utils/math/quat.h"
+#include "utils/math/rotation.h"
+#include "utils/native_text.h"
+#include "utils/resource_path.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <format>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+namespace pistoris::level_native {
+namespace {
+
+constexpr float kZoneZeroEdgeEpsilon = 1.0e-4f;
+constexpr float kEulerGimbalTolerance = 1.0e-4f;
+
+bool usesNpcRotation(std::string_view class_path) {
+  return classifyEntityClassPath(class_path) == InteractiveKind::kNpc;
+}
+
+ArxQuat legacyNpcAngleToQuat(const ArxAngle& angle) {
+  const ArxQuat pitch = math::axisAngle(0.0f, 0.0f, 1.0f, angle.pitch * math::kRadiansPerDegree);
+  const ArxQuat yaw = math::axisAngle(0.0f, 1.0f, 0.0f, angle.yaw * math::kRadiansPerDegree);
+  const ArxQuat roll = math::axisAngle(1.0f, 0.0f, 0.0f, angle.roll * math::kRadiansPerDegree);
+  return math::normalize(pitch * yaw * roll);
+}
+
+ArxAngle quatToLegacyNpcAngle(const ArxQuat& rotation) {
+  const ArxMat3 matrix = math::quatToRotation(rotation);
+  const float sin_yaw = std::clamp(-matrix(2, 0), -1.0f, 1.0f);
+  const float yaw = std::asin(sin_yaw);
+  const float cos_yaw = std::cos(yaw);
+  float pitch = 0.0f;
+  float roll = 0.0f;
+  if (std::abs(cos_yaw) > kEulerGimbalTolerance) {
+    pitch = std::atan2(matrix(1, 0), matrix(0, 0));
+    roll = std::atan2(matrix(2, 1), matrix(2, 2));
+  } else if (sin_yaw > 0.0f) {
+    pitch = std::atan2(matrix(1, 2), matrix(1, 1));
+  } else {
+    pitch = std::atan2(-matrix(1, 2), matrix(1, 1));
+  }
+  return {pitch * math::kDegreesPerRadian, yaw * math::kDegreesPerRadian, roll * math::kDegreesPerRadian};
+}
+
+ArxQuat entityAngleToRotation(std::string_view class_path, ArxAngle angle) {
+  if (usesNpcRotation(class_path)) {
+    angle.yaw = 180.0f - angle.yaw;
+    return legacyNpcAngleToQuat(angle);
+  }
+  angle.yaw = 270.0f - angle.yaw;
+  return math::angleToQuat(angle);
+}
+
+ArxAngle entityRotationToAngle(std::string_view class_path, const ArxQuat& rotation) {
+  if (usesNpcRotation(class_path)) {
+    ArxAngle angle = quatToLegacyNpcAngle(rotation);
+    angle.yaw = 180.0f - angle.yaw;
+    return angle;
+  }
+  ArxAngle angle = math::quatToAngle(rotation);
+  angle.yaw = 270.0f - angle.yaw;
+  return angle;
+}
+
+bool sameZonePoint(const ArxVector2& a, const ArxVector2& b) {
+  return std::abs(a.x - b.x) <= kZoneZeroEdgeEpsilon && std::abs(a.y - b.y) <= kZoneZeroEdgeEpsilon;
+}
+
+void collapseZonePoints(std::vector<ArxVector2>& points, NativeBuildWarnings& warnings) {
+  if (points.empty()) return;
+  std::vector<ArxVector2> collapsed;
+  collapsed.reserve(points.size());
+  for (const ArxVector2& point : points) {
+    if (!collapsed.empty() && sameZonePoint(collapsed.back(), point)) {
+      ++warnings.collapsed_zone_points;
+      continue;
+    }
+    collapsed.push_back(point);
+  }
+  while (collapsed.size() > 1 && sameZonePoint(collapsed.front(), collapsed.back())) {
+    collapsed.pop_back();
+    ++warnings.collapsed_zone_points;
+  }
+  points = std::move(collapsed);
+}
+
+PathNodeType pathNodeType(dlf::PathNodeType type) {
+  switch (type) {
+    case dlf::PathNodeType::kBezier:
+      return PathNodeType::kBezier;
+    case dlf::PathNodeType::kControlPoint:
+    case dlf::PathNodeType::kStandard:
+      return PathNodeType::kStandard;
+  }
+  return PathNodeType::kStandard;
+}
+
+dlf::PathNodeType nativePathNodeType(PathNodeType type) {
+  switch (type) {
+    case PathNodeType::kBezier:
+      return dlf::PathNodeType::kBezier;
+    case PathNodeType::kStandard:
+      return dlf::PathNodeType::kStandard;
+  }
+  return dlf::PathNodeType::kStandard;
+}
+
+ArxReturnCode addZone(const dlf::Zone& source, const ArxVector3& offset, SceneData& out, NativeBuildWarnings& warnings,
+                      NativeTextMode text_mode) {
+  ArxVector3 root = source.position + offset;
+  Zone zone;
+  if (!native_text::decode(fixedStringView(source.name), text_mode, zone.name)) return ARX_LEVEL_BAD_ZONE_NAME;
+  zone.reference_y = root.y;
+  zone.height_mode = source.height < 0 ? ZoneHeightMode::kInfinite : ZoneHeightMode::kFinite;
+  zone.height = source.height > 0 ? static_cast<float>(source.height) : 0.0f;
+  zone.color = source.color;
+  zone.farclip = source.farclip;
+  const auto& source_ambiance = source.ambiance;
+  if (source_ambiance) {
+    const std::string_view raw_ambiance = fixedStringView(source_ambiance->name);
+    if (raw_ambiance.empty()) {
+      ++warnings.empty_zone_ambiances;
+    } else {
+      std::string ambiance;
+      std::string decoded;
+      if (!native_text::decode(raw_ambiance, text_mode, decoded)) return ARX_LEVEL_BAD_ZONE_AMBIANCE;
+      if (!paths::normalizeZoneAmbiance(decoded, ambiance)) {
+        log(ARX_LOG_DEBUG, "Invalid native zone ambiance: zone '{}', name '{}'", zone.name, decoded);
+        return ARX_LEVEL_BAD_ZONE_AMBIANCE;
+      }
+      zone.ambiance = ZoneAmbiance{std::move(ambiance), source_ambiance->volume};
+    }
+  }
+  zone.perimeter_xz.reserve(source.points.size());
+  for (const ArxVector3& point : source.points) zone.perimeter_xz.push_back({root.x + point.x, root.z + point.z});
+  collapseZonePoints(zone.perimeter_xz, warnings);
+  out.zones.push_back(std::move(zone));
+  return ARX_OK;
+}
+
+}  // namespace
+
+ArxReturnCode buildDlfModules(const dlf::Data& dlf, const ArxVector3& offset, SceneData& out,
+                              NativeBuildWarnings& warnings, NativeTextMode text_mode, DlfLocation* failure_location) {
+  auto locate = [failure_location](
+                    DlfElement element, std::size_t index = kNoElementIndex, std::size_t subindex = kNoElementIndex) {
+    if (failure_location) *failure_location = {.element = element, .index = index, .subindex = subindex, .field = {}};
+  };
+  locate(DlfElement::kHeader);
+  PlayerSpawn player_spawn{dlf.player_spawn.position + offset, math::angleToQuat(dlf.player_spawn.angle)};
+  ArxReturnCode rc = level_validation::sceneError(scene::validatePlayerSpawn(player_spawn));
+  if (rc != ARX_OK) return rc;
+  scene::setPlayerSpawn(out, player_spawn);
+  out.entities.reserve(dlf.entities.size());
+  std::unordered_map<std::string, std::string, ResourcePathIdentityHash, ResourcePathIdentityEqual> decoded_classes;
+  for (std::size_t index = 0; index < dlf.entities.size(); ++index) {
+    locate(DlfElement::kEntity, index);
+    const dlf::Entity& source = dlf.entities[index];
+    const std::string_view raw_class_path = fixedStringView(source.class_path);
+    std::string class_path;
+    if (!native_text::decode(raw_class_path, text_mode, class_path)) return ARX_LEVEL_BAD_ENTITY_CLASS_PATH;
+    const auto [entry, inserted] = decoded_classes.try_emplace(class_path, raw_class_path);
+    if (!inserted && !ResourcePathIdentityEqual{}(entry->second, raw_class_path)) {
+      log(ARX_LOG_DEBUG, "DLF -> Level: distinct native entity paths decode to '{}'", class_path);
+      return ARX_LEVEL_BAD_ENTITY_CLASS_PATH;
+    }
+    Entity entity{
+        class_path, source.ident, source.position + offset, entityAngleToRotation(class_path, source.angle), {}};
+    if (!math::normalizeRotation(entity.rotation)) return ARX_LEVEL_BAD_ENTITY_ROTATION;
+    out.entities.push_back(std::move(entity));
+  }
+  scene::repairEntityNames(out.entities);
+  out.fogs.reserve(dlf.fogs.size());
+  for (std::size_t index = 0; index < dlf.fogs.size(); ++index) {
+    locate(DlfElement::kFog, index);
+    const dlf::Fog& source = dlf.fogs[index];
+    Fog fog{source.position + offset,
+            source.color,
+            source.size,
+            source.directional,
+            source.scale,
+            math::angleToQuat(source.angle),
+            source.speed,
+            source.rotate_speed,
+            source.lifetime_ms,
+            source.frequency,
+            {}};
+    if (!math::normalizeRotation(fog.rotation)) return ARX_LEVEL_BAD_FOG_ROTATION;
+    out.fogs.push_back(fog);
+  }
+  out.zones.reserve(dlf.zones.size() + 1);
+  for (std::size_t index = 0; index < dlf.zones.size(); ++index) {
+    locate(DlfElement::kZone, index);
+    const dlf::Zone& source = dlf.zones[index];
+    rc = addZone(source, offset, out, warnings, text_mode);
+    if (rc != ARX_OK) return rc;
+  }
+
+  out.paths.reserve(dlf.paths.size());
+  for (std::size_t index = 0; index < dlf.paths.size(); ++index) {
+    locate(DlfElement::kPath, index);
+    const dlf::Path& source = dlf.paths[index];
+    const std::string_view source_name = fixedStringView(source.name);
+    if (source_name == "level11_sewer1") {
+      dlf::Zone patched;
+      std::memcpy(patched.name, source.name, sizeof(patched.name));
+      patched.position = source.position;
+      patched.height = -1;
+      patched.points.reserve(source.nodes.size());
+      for (const dlf::PathNode& node : source.nodes) patched.points.push_back(node.relative_position);
+      rc = addZone(patched, offset, out, warnings, text_mode);
+      if (rc != ARX_OK) return rc;
+      continue;
+    }
+    Path path;
+    if (!native_text::decode(source_name, text_mode, path.name)) return ARX_LEVEL_BAD_PATH_NAME;
+    path.position = source.position + offset;
+    path.nodes.reserve(source.nodes.size());
+    for (const dlf::PathNode& node : source.nodes)
+      path.nodes.push_back({node.relative_position, pathNodeType(node.type), node.time_ms});
+    out.paths.push_back(std::move(path));
+  }
+  warnings.repaired_path_names += scene::repairPathNames(out.paths);
+  return ARX_OK;
+}
+
+ArxReturnCode bakeDlf(const SceneData& scene, std::string_view scene_path, const ArxVector3& target_fts_offset,
+                      NativeTextMode text_mode, dlf::Data& out) {
+  if (!native_text::validMode(text_mode)) return ARX_INVALID_OPTIONS;
+  dlf::Data dlf;
+  dlf.version = kDlfVersion;
+  const PlayerSpawn player_spawn = scene.player_spawn.value_or(PlayerSpawn{});
+  dlf.player_spawn = {player_spawn.position - target_fts_offset, math::quatToAngle(player_spawn.rotation)};
+  if (!native_text::encodeFixed(scene_path, text_mode, dlf.scene_path)) return ARX_DLF_BAD_SCENE_PATH;
+  dlf.entities.reserve(scene.entities.size());
+  for (const Entity& source : scene.entities) {
+    dlf::Entity entity;
+    if (!native_text::encodeFixed(source.class_path, text_mode, entity.class_path))
+      return ARX_LEVEL_BAD_ENTITY_CLASS_PATH;
+    entity.ident = source.ident;
+    entity.position = source.position - target_fts_offset;
+    entity.angle = entityRotationToAngle(source.class_path, source.rotation);
+    dlf.entities.push_back(entity);
+  }
+  dlf.fogs.reserve(scene.fogs.size());
+  for (const Fog& source : scene.fogs)
+    dlf.fogs.push_back({source.position - target_fts_offset,
+                        source.color,
+                        source.size,
+                        source.directional,
+                        source.scale,
+                        math::quatToAngle(source.rotation),
+                        source.speed,
+                        source.rotate_speed,
+                        source.lifetime_ms,
+                        source.frequency});
+  dlf.zones.reserve(scene.zones.size());
+  for (const Zone& source : scene.zones) {
+    dlf::Zone zone;
+    if (!native_text::encodeFixed(source.name, text_mode, zone.name)) return ARX_LEVEL_BAD_ZONE_NAME;
+    zone.position = {-target_fts_offset.x, source.reference_y - target_fts_offset.y, -target_fts_offset.z};
+    zone.points.reserve(source.perimeter_xz.size());
+    for (const ArxVector2& point : source.perimeter_xz) zone.points.push_back({point.x, 0.0f, point.y});
+    if (source.height_mode == ZoneHeightMode::kInfinite) {
+      zone.height = -1;
+    } else {
+      if (static_cast<double>(source.height) > static_cast<double>(std::numeric_limits<std::int32_t>::max()))
+        return ARX_DLF_BAD_ZONE_HEIGHT;
+      const long rounded_height = std::lround(static_cast<double>(source.height));
+      if (rounded_height < std::numeric_limits<std::int32_t>::min() ||
+          rounded_height > std::numeric_limits<std::int32_t>::max())
+        return ARX_DLF_BAD_ZONE_HEIGHT;
+      zone.height = static_cast<std::int32_t>(rounded_height);
+    }
+    zone.color = source.color;
+    zone.farclip = source.farclip;
+    if (const auto& ambiance = source.ambiance; ambiance.has_value()) {
+      const ZoneAmbiance& value = *ambiance;
+      std::string stored;
+      if (!paths::normalizeZoneAmbiance(value.name, stored) || stored != value.name) return ARX_LEVEL_BAD_ZONE_AMBIANCE;
+      zone.ambiance.emplace();
+      if (!native_text::encodeFixed(stored, text_mode, zone.ambiance->name)) return ARX_LEVEL_BAD_ZONE_AMBIANCE;
+      zone.ambiance->volume = value.volume;
+    }
+    dlf.zones.push_back(std::move(zone));
+  }
+  dlf.paths.reserve(scene.paths.size());
+  for (const Path& source : scene.paths) {
+    dlf::Path path;
+    if (!native_text::encodeFixed(source.name, text_mode, path.name)) return ARX_LEVEL_BAD_PATH_NAME;
+    path.position = source.position - target_fts_offset;
+    path.nodes.reserve(source.nodes.size());
+    for (const PathNode& node : source.nodes)
+      path.nodes.push_back({node.relative_position, nativePathNodeType(node.type), node.time_ms});
+    dlf.paths.push_back(std::move(path));
+  }
+  ArxReturnCode rc = validateDlf(&dlf);
+  if (rc != ARX_OK) return rc;
+  out = std::move(dlf);
+  return ARX_OK;
+}
+
+}  // namespace pistoris::level_native

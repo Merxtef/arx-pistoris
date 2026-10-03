@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/animation.hpp"
 #include "arx_pistoris/base/image.h"
+#include "arx_pistoris/base/image.hpp"
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/binary.hpp"
@@ -16,26 +17,26 @@
 #include "arx_pistoris/sound.hpp"
 #include "arx_pistoris/texture.hpp"
 
-#include "../../cli/io/default_mounts.h"
-#include "../../cli/io/service.h"
-#include "../../cli/resources/inventory_icon_io.h"
-#include "../../cli/resources/level_image_io.h"
-#include "../../cli/resources/sound_io.h"
-#include "../../cli/resources/texture_io.h"
 #include "audio_helpers.h"
 #include "base/resource_path.h"
 #include "formats/classification.h"
 #include "formats/format.h"
 #include "image_helpers.h"
+#include "io/default_mounts.h"
 #include "io/path_location.h"
 #include "io/policy.h"
+#include "io/service.h"
 #include "level_add_helpers.h"
 #include "media/encoded.h"
 #include "modules/geometry.h"
 #include "resources/input.h"
+#include "resources/inventory_icon_io.h"
 #include "resources/layout.h"
+#include "resources/level_image_io.h"
 #include "resources/resource_output.h"
 #include "resources/selector.h"
+#include "resources/sound_io.h"
+#include "resources/texture_io.h"
 
 #include <algorithm>
 #include <atomic>
@@ -439,8 +440,8 @@ TEST_SUITE("CLI mounts") {
     TemporaryDirectory temp;
     const std::vector<std::uint8_t> image = makeTestBmp();
     pistoris::Level level = textureLevel("graph/obj3d/textures/stone");
-    REQUIRE(level.setMinimap({image.data(), image.size()}, {{0.0f, 0.0f}, {25.0f, 25.0f}}) == ARX_OK);
-    REQUIRE(level.setLoadingScreen({image.data(), image.size()}) == ARX_OK);
+    REQUIRE(level.setMinimap({image.data(), image.size()}, {{0.0f, 0.0f}, {25.0f, 25.0f}}));
+    REQUIRE(level.setLoadingScreen({image.data(), image.size()}));
 
     cli::level::LevelImageOutput output{
         .minimap_enabled = true,
@@ -647,9 +648,10 @@ TEST_SUITE("CLI mounts") {
 
     pistoris::Model stale_icon;
     const std::vector<std::uint8_t> stale_source = makeTestBmp(0, 0, 255);
-    REQUIRE(stale_icon.setInventoryIcon({stale_source.data(), stale_source.size()}) == ARX_OK);
-    std::vector<std::uint8_t> stale_png;
-    REQUIRE(stale_icon.renderIconPng({}, stale_png) == ARX_OK);
+    REQUIRE(stale_icon.setInventoryIcon({stale_source.data(), stale_source.size()}));
+    auto stale_png_result = stale_icon.renderIcon({});
+    REQUIRE(stale_png_result);
+    const std::vector<std::uint8_t>& stale_png = *stale_png_result;
     const std::filesystem::path shield_stem =
         temp.path() / "graph" / "obj3d" / "interactive" / "items" / "weapons" / "shield" / "shield[icon]";
     writeBytes(shield_stem.string() + ".png", stale_png);
@@ -757,10 +759,10 @@ TEST_SUITE("CLI mounts") {
   TEST_CASE("Intermediate Model icons render supported output formats") {
     const std::vector<std::uint8_t> icon = makeTestBmp();
     pistoris::Model model;
-    REQUIRE(model.setInventoryIcon({icon.data(), icon.size()}) == ARX_OK);
+    REQUIRE(model.setInventoryIcon({icon.data(), icon.size()}));
 
     std::vector<std::uint8_t> rendered;
-    REQUIRE(cli::projectInventoryIcon(model, {}, rendered));
+    REQUIRE(cli::projectInventoryIcon(model, {}, pistoris::ImageFormat::kPng, rendered));
     CHECK_FALSE(rendered.empty());
     ArxImageInfo info{};
     REQUIRE(pistoris::binary::inspectEncodedImage(rendered, info) == ARX_OK);
@@ -768,7 +770,7 @@ TEST_SUITE("CLI mounts") {
     CHECK(info.width == 32);
     CHECK(info.height == 32);
 
-    REQUIRE(cli::projectInventoryIconBmp(model, {}, rendered));
+    REQUIRE(cli::projectInventoryIcon(model, {}, pistoris::ImageFormat::kBmp, rendered));
     REQUIRE(pistoris::binary::inspectEncodedImage(rendered, info) == ARX_OK);
     CHECK(info.format == ARX_IMAGE_FORMAT_BMP);
     CHECK(info.width == 32);
@@ -777,8 +779,8 @@ TEST_SUITE("CLI mounts") {
     pistoris::Model::InventoryIconSetOptions set_options;
     set_options.width_slots = 2;
     set_options.height_slots = 1;
-    REQUIRE(model.setInventoryIcon({icon.data(), icon.size()}, set_options) == ARX_OK);
-    REQUIRE(cli::projectInventoryIcon(model, {}, rendered));
+    REQUIRE(model.setInventoryIcon({icon.data(), icon.size()}, set_options));
+    REQUIRE(cli::projectInventoryIcon(model, {}, pistoris::ImageFormat::kPng, rendered));
     REQUIRE(pistoris::binary::inspectEncodedImage(rendered, info) == ARX_OK);
     CHECK(info.width == 64);
     CHECK(info.height == 32);
@@ -790,10 +792,11 @@ TEST_SUITE("CLI mounts") {
     writeBytes(temp.path() / "graph" / "obj3d" / "textures" / "stone.bmp", bmp);
 
     pistoris::Level authored = textureLevel("graph/obj3d/textures/stone");
-    std::vector<std::uint8_t> glb;
-    REQUIRE(authored.exportGlb(glb) == ARX_OK);
-    pistoris::Level imported;
-    REQUIRE(pistoris::Level::importGlb(imported, glb) == ARX_OK);
+    auto glb = authored.exportGlb();
+    REQUIRE(glb);
+    auto imported_result = pistoris::Level::importGlb(*glb);
+    REQUIRE(imported_result);
+    pistoris::Level imported = std::move(*imported_result);
     REQUIRE(test::texture(imported, 0).encoded_image.empty());
 
     cli::IoService io(cli::OverwriteMode::kAsk, false, mountPaths(temp.path()));

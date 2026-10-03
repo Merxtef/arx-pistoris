@@ -11,7 +11,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <vector>
 
 namespace test_support {
 namespace ambiance_equivalence_detail {
@@ -45,29 +44,24 @@ inline void checkAmbiancesEquivalent(const pistoris::Ambiance& lhs, const pistor
   CHECK(lhs.trackCount() == rhs.trackCount());
   CHECK(lhs.masterTrack() == rhs.masterTrack());
 
-  std::vector<ArxAmbianceTrack> lhs_tracks(lhs.trackCount());
-  std::vector<ArxAmbianceTrack> rhs_tracks(rhs.trackCount());
-  const ArxReturnCode lhs_status = lhs.copyTracks(0, lhs_tracks.size(), lhs_tracks.data());
-  const ArxReturnCode rhs_status = rhs.copyTracks(0, rhs_tracks.size(), rhs_tracks.data());
-  CHECK(lhs_status == ARX_OK);
-  CHECK(rhs_status == ARX_OK);
-  if (lhs_status != ARX_OK || rhs_status != ARX_OK) return;
+  const auto lhs_tracks = lhs.tracks();
+  const auto rhs_tracks = rhs.tracks();
   for (std::size_t track = 0; track < std::min(lhs_tracks.size(), rhs_tracks.size()); ++track) {
-    const ArxAmbianceTrack& lhs_track = lhs_tracks[track];
-    const ArxAmbianceTrack& rhs_track = rhs_tracks[track];
+    const ArxAmbianceTrack lhs_track = lhs_tracks[track];
+    const ArxAmbianceTrack rhs_track = rhs_tracks[track];
     CHECK(lhs_track.sound == rhs_track.sound);
     CHECK(lhs_track.kind == rhs_track.kind);
     CHECK(lhs_track.key_count == rhs_track.key_count);
     if (lhs_track.kind != rhs_track.kind) continue;
 
     if (lhs_track.kind == ARX_AMBIANCE_TRACK_PANNED) {
-      std::vector<ArxAmbiancePannedKey> lhs_keys(lhs_track.key_count);
-      std::vector<ArxAmbiancePannedKey> rhs_keys(rhs_track.key_count);
-      const ArxReturnCode lhs_keys_status = lhs.copyPannedKeys(track, 0, lhs_keys.size(), lhs_keys.data());
-      const ArxReturnCode rhs_keys_status = rhs.copyPannedKeys(track, 0, rhs_keys.size(), rhs_keys.data());
-      CHECK(lhs_keys_status == ARX_OK);
-      CHECK(rhs_keys_status == ARX_OK);
-      if (lhs_keys_status != ARX_OK || rhs_keys_status != ARX_OK) continue;
+      const auto lhs_keys_result = lhs.pannedKeys(track);
+      const auto rhs_keys_result = rhs.pannedKeys(track);
+      CHECK(lhs_keys_result);
+      CHECK(rhs_keys_result);
+      if (!lhs_keys_result || !rhs_keys_result) continue;
+      const auto lhs_keys = *lhs_keys_result;
+      const auto rhs_keys = *rhs_keys_result;
       for (std::size_t key = 0; key < std::min(lhs_keys.size(), rhs_keys.size()); ++key) {
         ambiance_equivalence_detail::checkCommonKeyEqual(lhs_keys[key], rhs_keys[key]);
         ambiance_equivalence_detail::checkAutomationEqual(lhs_keys[key].pan, rhs_keys[key].pan);
@@ -75,13 +69,13 @@ inline void checkAmbiancesEquivalent(const pistoris::Ambiance& lhs, const pistor
       continue;
     }
 
-    std::vector<ArxAmbiancePositionedKey> lhs_keys(lhs_track.key_count);
-    std::vector<ArxAmbiancePositionedKey> rhs_keys(rhs_track.key_count);
-    const ArxReturnCode lhs_keys_status = lhs.copyPositionedKeys(track, 0, lhs_keys.size(), lhs_keys.data());
-    const ArxReturnCode rhs_keys_status = rhs.copyPositionedKeys(track, 0, rhs_keys.size(), rhs_keys.data());
-    CHECK(lhs_keys_status == ARX_OK);
-    CHECK(rhs_keys_status == ARX_OK);
-    if (lhs_keys_status != ARX_OK || rhs_keys_status != ARX_OK) continue;
+    const auto lhs_keys_result = lhs.positionedKeys(track);
+    const auto rhs_keys_result = rhs.positionedKeys(track);
+    CHECK(lhs_keys_result);
+    CHECK(rhs_keys_result);
+    if (!lhs_keys_result || !rhs_keys_result) continue;
+    const auto lhs_keys = *lhs_keys_result;
+    const auto rhs_keys = *rhs_keys_result;
     for (std::size_t key = 0; key < std::min(lhs_keys.size(), rhs_keys.size()); ++key) {
       ambiance_equivalence_detail::checkCommonKeyEqual(lhs_keys[key], rhs_keys[key]);
       ambiance_equivalence_detail::checkAutomationEqual(lhs_keys[key].x, rhs_keys[key].x);

@@ -113,7 +113,7 @@ TEST_SUITE("rooms::operations") {
     CHECK(rooms.portals[0].name == "portal");
   }
 
-  TEST_CASE("Room distance edits validate their canonical pair before allocation") {
+  TEST_CASE("Unavailable room distance edits avoid allocating default storage") {
     RoomsData rooms;
     rooms.definitions = {{"room_1"}, {"room_2"}};
     const RoomDistance unavailable = {
@@ -124,11 +124,11 @@ TEST_SUITE("rooms::operations") {
 
     REQUIRE(rooms::validateRoomDistance(unavailable, rooms, 0, 1) == rooms::Error::kNone);
     rooms::setRoomDistance(rooms, 0, 1, unavailable);
-    REQUIRE(rooms.distances.size() == 1);
+    CHECK(rooms.distances.empty());
     CHECK(rooms::validateRoomDistance(unavailable, rooms, 1, 1) == rooms::Error::kBadRoomDistance);
     CHECK(rooms::validateRoomDistance(unavailable, rooms, 0, 2) == rooms::Error::kBadRoomDistance);
     CHECK(rooms::validateRoomDistance({.distance = 1.0f}, rooms, 0, 1) == rooms::Error::kBadRoomDistance);
-    CHECK(rooms.distances[0].distance == doctest::Approx(-1.0f));
+    CHECK(rooms::roomDistance(rooms, 0, 1).distance == doctest::Approx(-1.0f));
   }
 
   TEST_CASE("Vertex weld segment collection is transactional") {

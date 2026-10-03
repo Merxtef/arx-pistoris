@@ -17,7 +17,7 @@ TEST_SUITE("ftl") {
   TEST_CASE("WriteNullHandle") {
     uint8_t* out = nullptr;
     size_t sz = 0;
-    ArxReturnCode rc = arx_pistoris_ftl_write(nullptr, 1, &out, &sz);
+    ArxReturnCode rc = arx_pistoris_ftl_write(nullptr, 1, &out, &sz, nullptr);
     CHECK(rc == ARX_INVALID_HANDLE);
     CHECK(out == nullptr);
     CHECK(sz == 0);
@@ -26,10 +26,10 @@ TEST_SUITE("ftl") {
   TEST_CASE("WriteNullOut") {
     std::vector<uint8_t> buf = makeMinimalFtl();
     ArxFtl* h = nullptr;
-    arx_pistoris_ftl_read(buf.data(), buf.size(), &h);
+    arx_pistoris_ftl_read(buf.data(), buf.size(), &h, nullptr);
 
     size_t sz = 0;
-    ArxReturnCode rc = arx_pistoris_ftl_write(h, 1, nullptr, &sz);
+    ArxReturnCode rc = arx_pistoris_ftl_write(h, 1, nullptr, &sz, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
     arx_pistoris_ftl_destroy(h);
@@ -38,10 +38,10 @@ TEST_SUITE("ftl") {
   TEST_CASE("WriteNullSize") {
     std::vector<uint8_t> buf = makeMinimalFtl();
     ArxFtl* h = nullptr;
-    arx_pistoris_ftl_read(buf.data(), buf.size(), &h);
+    arx_pistoris_ftl_read(buf.data(), buf.size(), &h, nullptr);
 
     uint8_t* out = nullptr;
-    ArxReturnCode rc = arx_pistoris_ftl_write(h, 1, &out, nullptr);
+    ArxReturnCode rc = arx_pistoris_ftl_write(h, 1, &out, nullptr, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
     arx_pistoris_ftl_destroy(h);
@@ -50,11 +50,11 @@ TEST_SUITE("ftl") {
   TEST_CASE("WriteSmoke") {
     std::vector<uint8_t> fixture = makeMinimalFtl();
     ArxFtl* h = nullptr;
-    REQUIRE(arx_pistoris_ftl_read(fixture.data(), fixture.size(), &h) == ARX_OK);
+    REQUIRE(arx_pistoris_ftl_read(fixture.data(), fixture.size(), &h, nullptr) == ARX_OK);
 
     uint8_t* out = nullptr;
     size_t sz = 0;
-    ArxReturnCode rc = arx_pistoris_ftl_write(h, 1, &out, &sz);
+    ArxReturnCode rc = arx_pistoris_ftl_write(h, 1, &out, &sz, nullptr);
     CHECK(rc == ARX_OK);
     CHECK(out != nullptr);
     CHECK(sz > 0);
@@ -66,18 +66,18 @@ TEST_SUITE("ftl") {
   TEST_CASE("WriteUsesCompressedStorageAndParseAcceptsIt") {
     std::vector<uint8_t> fixture = makeMinimalFtl();
     ArxFtl* source = nullptr;
-    REQUIRE(arx_pistoris_ftl_read(fixture.data(), fixture.size(), &source) == ARX_OK);
+    REQUIRE(arx_pistoris_ftl_read(fixture.data(), fixture.size(), &source, nullptr) == ARX_OK);
 
     uint8_t* out = nullptr;
     size_t size = 0;
-    REQUIRE(arx_pistoris_ftl_write(source, 1, &out, &size) == ARX_OK);
+    REQUIRE(arx_pistoris_ftl_write(source, 1, &out, &size, nullptr) == ARX_OK);
     REQUIRE(out != nullptr);
     REQUIRE(size >= 2);
     CHECK(out[0] == 0);
     CHECK(out[1] == 6);
 
     ArxFtl* loaded = nullptr;
-    CHECK(arx_pistoris_ftl_read(out, size, &loaded) == ARX_OK);
+    CHECK(arx_pistoris_ftl_read(out, size, &loaded, nullptr) == ARX_OK);
     CHECK(loaded != nullptr);
 
     arx_pistoris_ftl_destroy(loaded);
@@ -88,17 +88,17 @@ TEST_SUITE("ftl") {
   TEST_CASE("WriteCanEmitRawStorage") {
     std::vector<uint8_t> fixture = makeMinimalFtl();
     ArxFtl* source = nullptr;
-    REQUIRE(arx_pistoris_ftl_read(fixture.data(), fixture.size(), &source) == ARX_OK);
+    REQUIRE(arx_pistoris_ftl_read(fixture.data(), fixture.size(), &source, nullptr) == ARX_OK);
 
     uint8_t* out = nullptr;
     size_t size = 0;
-    REQUIRE(arx_pistoris_ftl_write(source, 0, &out, &size) == ARX_OK);
+    REQUIRE(arx_pistoris_ftl_write(source, 0, &out, &size, nullptr) == ARX_OK);
     REQUIRE(out != nullptr);
     REQUIRE(size >= sizeof(pistoris::kFtlMagic));
     CHECK(std::memcmp(out, pistoris::kFtlMagic, sizeof(pistoris::kFtlMagic)) == 0);
 
     ArxFtl* loaded = nullptr;
-    CHECK(arx_pistoris_ftl_read(out, size, &loaded) == ARX_OK);
+    CHECK(arx_pistoris_ftl_read(out, size, &loaded, nullptr) == ARX_OK);
     CHECK(loaded != nullptr);
 
     arx_pistoris_ftl_destroy(loaded);

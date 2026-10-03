@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <utility>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -22,16 +23,17 @@ TEST_SUITE("amb_corpus") {
 
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Amb source;
-      if (!test_support::checkCorpusStatus(path, "read AMB", pistoris::readAmb(source_bytes, source))) continue;
+      auto source_result = pistoris::readAmb(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read AMB", source_result)) continue;
+      pistoris::Amb source = std::move(*source_result);
       if (!test_support::checkCorpusStatus(path, "validate AMB", pistoris::validate(source))) continue;
 
-      std::vector<std::uint8_t> written;
-      if (!test_support::checkCorpusStatus(path, "write AMB", pistoris::writeAmb(source, written))) continue;
+      auto written = pistoris::writeAmb(source);
+      if (!test_support::checkCorpusStatus(path, "write AMB", written)) continue;
 
-      pistoris::Amb roundtrip;
-      if (!test_support::checkCorpusStatus(path, "read written AMB", pistoris::readAmb(written, roundtrip))) continue;
-      test_support::checkEquivalent(source, roundtrip);
+      auto roundtrip = pistoris::readAmb(*written);
+      if (!test_support::checkCorpusStatus(path, "read written AMB", roundtrip)) continue;
+      test_support::checkEquivalent(source, *roundtrip);
     }
   }
 }

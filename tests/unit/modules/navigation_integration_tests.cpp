@@ -114,8 +114,8 @@ void addObstacle(pistoris::LevelModules& level, float x, float y_bottom, float y
 }
 
 void addDefaultAnchors(pistoris::LevelModules& level) {
-  level.navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_1"});
 }
 
 pistoris::navigation::NavSurfaceGenerationOptions toModuleOptions(
@@ -381,11 +381,11 @@ TEST_CASE("PublicLevelNavSurfaceGenerationModesPreserveAnchorGraph") {
   REQUIRE(test::addAnchor(level, {{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}}) == 0);
   REQUIRE(test::addAnchor(level, {{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}}) == 1);
   REQUIRE(test::addAnchorConnection(level, {0, 1}) == 0);
-  REQUIRE(level.generateNavSurface({.radius = 50.0f, .height = -165.0f}) == ARX_OK);
+  REQUIRE(level.generateNavSurface({.radius = 50.0f, .height = -165.0f}).code() == ARX_OK);
   CHECK(level.anchorCount() == 2);
   CHECK(level.anchorConnectionCount() == 1);
 
-  REQUIRE(level.setNavSurfaceFromFloor() == ARX_OK);
+  REQUIRE(level.setNavSurfaceFromFloor().code() == ARX_OK);
   const std::optional<pistoris::NavSurface> surface = test::navSurface(level);
   REQUIRE(surface.has_value());
   CHECK(surface->vertices.size() == 4);
@@ -412,7 +412,7 @@ TEST_CASE("PublicLevelNavSurfacePruningPreservesNoOpData") {
   };
   REQUIRE(test::setNavSurface(level, surface) == ARX_OK);
 
-  REQUIRE(level.pruneNavSurfaceIslands({.min_component_area_ratio = 0.0f, .min_component_area = 5.0}) == ARX_OK);
+  REQUIRE(level.pruneNavSurfaceIslands({.min_component_area_ratio = 0.0f, .min_component_area = 5.0}).code() == ARX_OK);
   REQUIRE(test::navSurface(level).has_value());
   CHECK(test::navSurface(level)->vertices.size() == 6);
   CHECK(test::navSurface(level)->triangles.size() == 2);
@@ -442,7 +442,8 @@ TEST_CASE("PublicLevelAnchorComponentPruningPreservesNoOpDataAndRemapsLinks") {
   REQUIRE(test::addAnchorConnection(level, {0, 1}) == 0);
   REQUIRE(test::addAnchorConnection(level, {3, 4}) == 1);
   REQUIRE(test::addAnchorConnection(level, {4, 5}) == 2);
-  REQUIRE(level.pruneAnchorIslands({.min_component_anchor_ratio = 0.0f, .min_component_anchor_count = 1}) == ARX_OK);
+  REQUIRE(level.pruneAnchorIslands({.min_component_anchor_ratio = 0.0f, .min_component_anchor_count = 1}).code() ==
+          ARX_OK);
   CHECK(level.anchorCount() == 6);
   CHECK(level.anchorConnectionCount() == 3);
 
@@ -786,8 +787,8 @@ TEST_CASE("LevelAnchorConnectionsBlockWallAwayFromVertices") {
   pistoris::LevelModules level = baseLevel();
   addFloor(level, 0.0f, 200.0f, 0.0f, 0.0f, 900.0f);
   addObstacle(level, 100.0f, 0.0f, -100.0f, 0.0f, 900.0f);
-  level.navigation.anchors.push_back({{50.0f, 0.0f, 450.0f}, 50.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{150.0f, 0.0f, 450.0f}, 50.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, 0.0f, 450.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{150.0f, 0.0f, 450.0f}, 50.0f, -80.0f, 0, "anchor_1"});
 
   REQUIRE(generateAnchorConnections(level) == ARX_OK);
   CHECK(level.navigation.connections.empty());
@@ -797,8 +798,8 @@ TEST_CASE("LevelAnchorConnectionsScaleEndpointRadiusForConnectionPrefilter") {
   pistoris::LevelModules level = baseLevel();
   addFloor(level, 0.0f, 200.0f, 0.0f, 0.0f, 200.0f);
   addObstacle(level, 95.0f, 0.0f, -100.0f, 0.0f, 200.0f);
-  level.navigation.anchors.push_back({{50.0f, 0.0f, 150.0f}, 50.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{150.0f, 0.0f, 150.0f}, 50.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, 0.0f, 150.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{150.0f, 0.0f, 150.0f}, 50.0f, -80.0f, 0, "anchor_1"});
 
   pistoris::LevelModules full_radius = level;
   pistoris::navigation::NavigationDiagnostics full_diagnostics;
@@ -852,8 +853,8 @@ TEST_CASE("LevelAnchorConnectionsAllowAnchorsSlightlyAboveGround") {
           {0.0f, -30.0f, 100.0f},
           {0.0f, -1.0f, 0.0f},
           pistoris::kFaceBitNocol);
-  level.navigation.anchors.push_back({{50.0f, -20.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{150.0f, -20.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, -20.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{150.0f, -20.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_1"});
 
   REQUIRE(generateAnchorConnections(level) == ARX_OK);
   REQUIRE(level.navigation.connections.size() == 1);
@@ -869,8 +870,8 @@ TEST_CASE("LevelAnchorConnectionsAllowAnchorsSlightlyBelowGround") {
           {0.0f, 0.0f, 100.0f},
           {0.0f, -1.0f, 0.0f},
           pistoris::kFaceBitNocol);
-  level.navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_1"});
 
   REQUIRE(generateAnchorConnections(level) == ARX_OK);
   REQUIRE(level.navigation.connections.size() == 1);
@@ -881,8 +882,8 @@ TEST_CASE("LevelAnchorConnectionsDetectSupportInsideLargeTriangle") {
   level.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1000.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1000.0f}}};
   level.geometry.faces.push_back(makeFace(level.geometry, 0, 1, 2, {0.0f, -1.0f, 0.0f}));
   level.rooms.face_rooms.push_back(0);
-  level.navigation.anchors.push_back({{100.0f, 0.0f, 700.0f}, 10.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{200.0f, 0.0f, 650.0f}, 10.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{100.0f, 0.0f, 700.0f}, 10.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{200.0f, 0.0f, 650.0f}, 10.0f, -80.0f, 0, "anchor_1"});
 
   REQUIRE(generateAnchorConnections(level, {.max_distance = 150.0f}) == ARX_OK);
   REQUIRE(level.navigation.connections.size() == 1);
@@ -898,8 +899,8 @@ TEST_CASE("LevelAnchorConnectionsSkipAnchorsTooFarAboveGround") {
           {0.0f, -40.0f, 100.0f},
           {0.0f, -1.0f, 0.0f},
           pistoris::kFaceBitNocol);
-  level.navigation.anchors.push_back({{50.0f, -35.0f, 50.0f}, 50.0f, -50.0f, 0, {}});
-  level.navigation.anchors.push_back({{150.0f, -35.0f, 50.0f}, 50.0f, -50.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, -35.0f, 50.0f}, 50.0f, -50.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{150.0f, -35.0f, 50.0f}, 50.0f, -50.0f, 0, "anchor_1"});
 
   LogCapture capture;
   pistoris::setLogCallback(captureLog, &capture);
@@ -915,8 +916,8 @@ TEST_CASE("LevelAnchorConnectionsSkipUnsupportedAnchorsAndWarnOnce") {
   pistoris::LevelModules level = baseLevel();
   addFloor(level, 0.0f, 100.0f, 0.0f, 0.0f, 100.0f);
   addObstacle(level, 300.0f, 0.0f, -100.0f, 0.0f, 100.0f);
-  level.navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
-  level.navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, {}});
+  level.navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_0"});
+  level.navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 50.0f, -80.0f, 0, "anchor_1"});
 
   LogCapture capture;
   pistoris::setLogCallback(captureLog, &capture);

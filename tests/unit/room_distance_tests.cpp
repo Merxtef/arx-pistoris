@@ -132,7 +132,7 @@ ArxReturnCode generateRoomDistances(pistoris::LevelModules& modules,
                                     pistoris::level_debug::RoomDistanceGenDiagnostics* diagnostics = nullptr) {
   pistoris::Level level = makePublicLevel(modules);
   ArxReturnCode rc = diagnostics ? pistoris::level_debug::generateRoomDistances(level, options, *diagnostics)
-                                 : level.generateRoomDistances(options);
+                                 : level.generateRoomDistances(options).code();
   if (rc == ARX_OK) {
     modules.rooms.distances = test::roomDistances(level);
   }

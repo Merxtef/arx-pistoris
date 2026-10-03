@@ -73,6 +73,16 @@ constexpr int32_t kFtlHeaderOff = 568;
 constexpr int32_t kFtlDataOff = 828;
 
 constexpr std::size_t kFtlVertexSize = 56;
+
+struct FtsStorageHeader {
+  char path[256] = {};
+  std::int32_t count = 0;
+  float version = pistoris::kFtsVersion;
+  std::int32_t uncompressed_size = 0;
+  std::int32_t padding[3] = {};
+};
+static_assert(sizeof(FtsStorageHeader) == 280);
+constexpr std::size_t kFtsSourceCheckSize = 768;
 constexpr std::size_t kFtlFaceSize = 116;
 constexpr std::size_t kFtlTextureSize = 256;
 constexpr std::size_t kFtlGroupHeaderSize = 272;
@@ -146,7 +156,6 @@ inline std::vector<uint8_t> makeTriangleFtlWithFlags(uint32_t face_type) {
 
 inline pistoris::fts::Data makeMinimalFtsData() {
   pistoris::fts::Data d;
-  d.header.version = pistoris::kFtsVersion;
   d.scene.version = pistoris::kFtsVersion;
   d.scene.sizex = 1;
   d.scene.sizez = 1;
@@ -204,7 +213,7 @@ inline void appendArrayBytes(std::vector<uint8_t>& buf, const std::vector<T>& va
 inline std::vector<uint8_t> makeMinimalFts() {
   pistoris::fts::Data d = makeMinimalFtsData();
   std::vector<uint8_t> buf;
-  appendBytes(buf, d.header);
+  appendBytes(buf, FtsStorageHeader{});
   appendBytes(buf, d.scene);
   pistoris::fts::SceneInfo info;
   appendBytes(buf, info);
@@ -222,12 +231,10 @@ inline std::vector<uint8_t> makeFtsBytes(const pistoris::fts::Data& d) {
   static_assert(sizeof(TextureRecord) == 264);
 
   std::vector<uint8_t> buf;
-  pistoris::fts::Header header = d.header;
-  header.count = static_cast<int32_t>(d.unique_headers.size());
+  FtsStorageHeader header;
   pistoris::fts::SceneHeader scene = d.scene;
   scene.num_textures = static_cast<int32_t>(d.textures.size());
   appendBytes(buf, header);
-  appendArrayBytes(buf, d.unique_headers);
   appendBytes(buf, scene);
   for (const auto& [id, texture] : d.textures) {
     TextureRecord record;

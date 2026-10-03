@@ -17,13 +17,14 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 static pistoris::ftl::Data parseFixture(const std::vector<uint8_t>& fixture) {
-  pistoris::ftl::Data d;
   pistoris::ReadCursor c(fixture.data(), fixture.size());
-  REQUIRE(pistoris::loadFtl(&d, c) == ARX_OK);
-  return d;
+  auto result = pistoris::loadFtl(c);
+  REQUIRE(result);
+  return std::move(*result);
 }
 
 TEST_SUITE("ftl") {
@@ -85,9 +86,10 @@ TEST_SUITE("ftl") {
     REQUIRE(pistoris::saveFtl(&d1, wc) == ARX_OK);
     auto bytes = wc.take();
 
-    pistoris::ftl::Data d2;
     pistoris::ReadCursor rc(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadFtl(&d2, rc) == ARX_OK);
+    auto loaded = pistoris::loadFtl(rc);
+    REQUIRE(loaded);
+    pistoris::ftl::Data d2 = std::move(*loaded);
 
     test_support::checkEquivalent(d1, d2);
   }
@@ -104,9 +106,10 @@ TEST_SUITE("ftl") {
     REQUIRE(pistoris::saveFtl(&source, writer) == ARX_OK);
     const std::vector<std::uint8_t> bytes = writer.take();
 
-    pistoris::ftl::Data roundtrip;
     pistoris::ReadCursor reader(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadFtl(&roundtrip, reader) == ARX_OK);
+    auto loaded = pistoris::loadFtl(reader);
+    REQUIRE(loaded);
+    pistoris::ftl::Data roundtrip = std::move(*loaded);
     test_support::checkEquivalent(source, roundtrip);
   }
 
@@ -121,7 +124,9 @@ TEST_SUITE("ftl") {
     pistoris::ftl::Data d2;
     {
       pistoris::ReadCursor c(bytes.data(), bytes.size());
-      REQUIRE(pistoris::loadFtl(&d2, c) == ARX_OK);
+      auto loaded = pistoris::loadFtl(c);
+      REQUIRE(loaded);
+      d2 = std::move(*loaded);
     }
 
     CHECK(d1.vertices.size() == d2.vertices.size());

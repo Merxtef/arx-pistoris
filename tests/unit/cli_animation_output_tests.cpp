@@ -3,6 +3,7 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
 
 #include "formats/format.h"
@@ -142,7 +143,7 @@ TEST_SUITE("CLI animation output") {
     };
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildGameAnimationTargets(animations, "npc", {}, targets, error));
+    REQUIRE(cli::buildGameAnimationTargets(animations, pistoris::paths::AnimationPathType::kNpc, {}, targets, error));
     REQUIRE(targets.size() == 2);
     CHECK(targets[0].path == "graph/obj3d/anims/npc/generated.tea");
     CHECK(targets[1].path == "graph/obj3d/anims/npc/Walk.tea");
@@ -159,7 +160,7 @@ TEST_SUITE("CLI animation output") {
     };
     std::vector<cli::OutputTarget> targets;
     std::string error;
-    REQUIRE(cli::buildGameAnimationTargets(animations, "npc", {}, targets, error));
+    REQUIRE(cli::buildGameAnimationTargets(animations, pistoris::paths::AnimationPathType::kNpc, {}, targets, error));
     REQUIRE(targets.size() == 2);
     CHECK(targets[0].path == "graph/obj3d/anims/npc/walk2.tea");
     CHECK(targets[1].path == "graph/obj3d/anims/npc/walk.tea");

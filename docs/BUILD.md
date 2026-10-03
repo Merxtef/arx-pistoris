@@ -1,16 +1,34 @@
 # Building
 
-This guide is for contributors and source users building Pistoris on Windows
-or Linux.
+The full Pistoris project, including the CLI, builds on Windows and Linux. The
+core library and Python package also build on macOS 14 or newer on ARM64.
 
 ## Requirements
 
-- CMake 3.25 or newer
+- CMake 3.26 or newer
 - Clang with C++20 support
 - Ninja
 - [just](https://github.com/casey/just) for the documented shortcuts
+- Python 3.12 or newer, with matching CPython development headers, when
+  building the Python package
 
 The same presets are used on Windows and Linux.
+
+Python source builds select Clang automatically on Windows and Linux. For a
+direct Linux CMake build outside the presets, select it before configuration.
+Disable the CLI for a Python-only build; this is also required on macOS:
+
+```text
+CC=clang CXX=clang++ cmake -S . -B build-python -G Ninja \
+  -DARX_BUILD_CLI=OFF \
+  -DARX_BUILD_PYTHON_BINDINGS=ON \
+  -DBUILD_TESTING=OFF
+```
+
+A virtual environment supplies Python packages, not the CPython headers and
+link metadata needed to compile an extension. Install the development package
+matching the interpreter selected for the build (for example, the appropriate
+`python3-devel` or versioned equivalent on Linux).
 
 ## Development Build
 
@@ -69,6 +87,8 @@ just sanitize    # configure, build, and test build-sanitize/
 just tidy        # apply available clang-tidy fixes through build-tidy/
 just tidy-check  # enforced clang-tidy build in build-tidy-check/
 just fuzz-build  # libFuzzer build in build-fuzz/
+just python        # rebuild the Python bindings and open a development shell
+just python-check  # build, install, and test the Python wheel in isolation
 just package-smoke  # install and verify the release CLI package
 just pre-release    # complete local release gate
 ```
@@ -98,6 +118,40 @@ shared library is named `arx_pistoris`.
 The current install target is CLI-oriented and does not install development
 headers or CMake library targets. Library consumers should use the source tree
 or add it as a CMake subdirectory for this pre-1.0 release.
+
+## Building the Python Package
+
+Build the current bindings and open an isolated interpreter:
+
+```text
+just python
+```
+
+The first run creates `.venv/`. Every run incrementally rebuilds the bindings
+below `build-python/` before starting that environment's interpreter. This is
+the development path; `just python-check` verifies the installed wheel in a
+fresh environment.
+
+Build a wheel from the repository root:
+
+```text
+python -m pip wheel .
+```
+
+The wheel uses CPython's 3.12 stable ABI. Release wheels are built separately
+for Windows x64, Windows ARM64, macOS ARM64, and manylinux x64, then tested
+with CPython 3.12, 3.13, and 3.14 on the same platform.
+
+For a non-interactive in-tree development build:
+
+```text
+cmake --preset python -DPython_EXECUTABLE=<python>
+cmake --build --preset python --target pistoris_python_package
+```
+
+Set `PYTHONPATH` to `build-python/python` when importing that development
+build. The wheel contains the private extension, generated type stubs, and the
+public `pistoris` package.
 
 ## Installing the CLI
 

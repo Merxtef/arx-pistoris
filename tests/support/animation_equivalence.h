@@ -21,12 +21,11 @@ namespace animation_equivalence_detail {
 inline bool trailingGroupsVoid(const pistoris::Animation& animation, std::size_t first) {
   bool all_void = true;
   for (std::size_t group = first; group < animation.groupCount(); ++group) {
-    bool is_void = false;
-    const ArxReturnCode rc = animation.isGroupVoid(group, is_void);
-    CHECK(rc == ARX_OK);
-    if (rc != ARX_OK) return false;
-    CHECK(is_void);
-    all_void = all_void && is_void;
+    const pistoris::AnimationResult<bool> result = animation.isGroupVoid(group);
+    CHECK(result);
+    if (!result) return false;
+    CHECK(*result);
+    all_void = all_void && *result;
   }
   return all_void;
 }
@@ -53,25 +52,16 @@ inline void checkAnimationsEquivalent(const pistoris::Animation& lhs, const pist
   }
 
   for (std::size_t group = 0; group < shared_groups; ++group) {
-    bool lhs_claimed = false;
-    bool rhs_claimed = false;
-    const ArxReturnCode lhs_rc = lhs.isGroupClaimed(group, lhs_claimed);
-    const ArxReturnCode rhs_rc = rhs.isGroupClaimed(group, rhs_claimed);
-    CHECK(lhs_rc == ARX_OK);
-    CHECK(rhs_rc == ARX_OK);
-    if (lhs_rc != ARX_OK || rhs_rc != ARX_OK) return;
-    CHECK(lhs_claimed == rhs_claimed);
+    const pistoris::AnimationResult<bool> lhs_claimed = lhs.isGroupClaimed(group);
+    const pistoris::AnimationResult<bool> rhs_claimed = rhs.isGroupClaimed(group);
+    CHECK(lhs_claimed);
+    CHECK(rhs_claimed);
+    if (!lhs_claimed || !rhs_claimed) return;
+    CHECK(*lhs_claimed == *rhs_claimed);
   }
 
-  std::vector<ArxAnimationKeyframe> lhs_keyframes(lhs.keyframeCount());
-  std::vector<ArxAnimationKeyframe> rhs_keyframes(rhs.keyframeCount());
-  const ArxReturnCode lhs_keyframes_rc = lhs.copyKeyframes(0, lhs_keyframes.size(), lhs_keyframes.data());
-  const ArxReturnCode rhs_keyframes_rc = rhs.copyKeyframes(0, rhs_keyframes.size(), rhs_keyframes.data());
-  CHECK(lhs_keyframes_rc == ARX_OK);
-  CHECK(rhs_keyframes_rc == ARX_OK);
-  if (lhs_keyframes_rc != ARX_OK || rhs_keyframes_rc != ARX_OK) return;
-  std::vector<ArxAnimationGroupTransform> lhs_groups(shared_groups);
-  std::vector<ArxAnimationGroupTransform> rhs_groups(shared_groups);
+  const pistoris::Animation::KeyframesView lhs_keyframes = lhs.keyframes();
+  const pistoris::Animation::KeyframesView rhs_keyframes = rhs.keyframes();
 
   for (std::size_t keyframe = 0; keyframe < lhs_keyframes.size(); ++keyframe) {
     const ArxAnimationKeyframe& lhs_keyframe = lhs_keyframes[keyframe];
@@ -83,16 +73,19 @@ inline void checkAnimationsEquivalent(const pistoris::Animation& lhs, const pist
     CHECK(lhs_keyframe.footstep == rhs_keyframe.footstep);
     CHECK(lhs_keyframe.sound == rhs_keyframe.sound);
 
-    const ArxReturnCode lhs_groups_rc = lhs.copyGroupTransforms(keyframe, 0, lhs_groups.size(), lhs_groups.data());
-    const ArxReturnCode rhs_groups_rc = rhs.copyGroupTransforms(keyframe, 0, rhs_groups.size(), rhs_groups.data());
-    CHECK(lhs_groups_rc == ARX_OK);
-    CHECK(rhs_groups_rc == ARX_OK);
-    if (lhs_groups_rc != ARX_OK || rhs_groups_rc != ARX_OK) return;
-    for (std::size_t group = 0; group < lhs_groups.size(); ++group) {
-      equivalence::checkQuatEqual(lhs_groups[group].rotation, rhs_groups[group].rotation, options.comparison_epsilon);
+    const pistoris::AnimationResult<pistoris::Animation::GroupTransformsView> lhs_groups =
+        lhs.groupTransforms(keyframe);
+    const pistoris::AnimationResult<pistoris::Animation::GroupTransformsView> rhs_groups =
+        rhs.groupTransforms(keyframe);
+    CHECK(lhs_groups);
+    CHECK(rhs_groups);
+    if (!lhs_groups || !rhs_groups) return;
+    for (std::size_t group = 0; group < shared_groups; ++group) {
+      equivalence::checkQuatEqual(
+          (*lhs_groups)[group].rotation, (*rhs_groups)[group].rotation, options.comparison_epsilon);
       equivalence::checkVectorEqual(
-          lhs_groups[group].translation, rhs_groups[group].translation, options.comparison_epsilon);
-      equivalence::checkVectorEqual(lhs_groups[group].scale, rhs_groups[group].scale, options.comparison_epsilon);
+          (*lhs_groups)[group].translation, (*rhs_groups)[group].translation, options.comparison_epsilon);
+      equivalence::checkVectorEqual((*lhs_groups)[group].scale, (*rhs_groups)[group].scale, options.comparison_epsilon);
     }
   }
 

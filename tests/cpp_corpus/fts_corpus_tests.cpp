@@ -35,15 +35,6 @@ bool equivalentArray(const T (&lhs)[N], const T (&rhs)[N], Predicate equivalent)
   return true;
 }
 
-bool equivalent(const pistoris::fts::Header& lhs, const pistoris::fts::Header& rhs) {
-  return equivalentArray(lhs.path, rhs.path) && lhs.count == rhs.count &&
-         test_support::equivalent(lhs.version, rhs.version) && equivalentArray(lhs.pad, rhs.pad);
-}
-
-bool equivalent(const pistoris::fts::UniqueHeader3& lhs, const pistoris::fts::UniqueHeader3& rhs) {
-  return equivalentArray(lhs.path, rhs.path) && equivalentArray(lhs.check, rhs.check);
-}
-
 bool equivalent(const pistoris::fts::SceneHeader& lhs, const pistoris::fts::SceneHeader& rhs) {
   return test_support::equivalent(lhs.version, rhs.version) && lhs.sizex == rhs.sizex && lhs.sizez == rhs.sizez &&
          lhs.num_textures == rhs.num_textures && lhs.num_polys == rhs.num_polys && lhs.num_anchors == rhs.num_anchors &&
@@ -122,8 +113,6 @@ void checkEquivalentRange(const std::vector<T>& lhs, const std::vector<T>& rhs) 
 }
 
 void checkEquivalent(const pistoris::Fts& lhs, const pistoris::Fts& rhs) {
-  CHECK(equivalent(lhs.header, rhs.header));
-  checkEquivalentRange(lhs.unique_headers, rhs.unique_headers);
   CHECK(equivalent(lhs.scene, rhs.scene));
 
   CHECK(lhs.textures.size() == rhs.textures.size());
@@ -171,9 +160,9 @@ TEST_SUITE("fts_corpus") {
 
       std::vector<std::uint8_t> bytes;
       if (!test_support::readCorpusBytes(path, bytes)) continue;
-      pistoris::Fts fts;
-      if (!test_support::checkCorpusStatus(path, "read FTS", pistoris::readFts(bytes, fts))) continue;
-      test_support::checkCorpusStatus(path, "validate FTS", pistoris::validate(fts));
+      auto fts = pistoris::readFts(bytes);
+      if (!test_support::checkCorpusStatus(path, "read FTS", fts)) continue;
+      test_support::checkCorpusStatus(path, "validate FTS", pistoris::validate(*fts));
     }
   }
 
@@ -183,16 +172,16 @@ TEST_SUITE("fts_corpus") {
 
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Fts source;
-      if (!test_support::checkCorpusStatus(path, "read source FTS", pistoris::readFts(source_bytes, source))) continue;
+      auto source = pistoris::readFts(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read source FTS", source)) continue;
 
-      std::vector<std::uint8_t> written;
-      if (!test_support::checkCorpusStatus(path, "write FTS", pistoris::writeFts(source, written))) continue;
+      auto written = pistoris::writeFts(*source);
+      if (!test_support::checkCorpusStatus(path, "write FTS", written)) continue;
 
-      pistoris::Fts roundtrip;
-      if (!test_support::checkCorpusStatus(path, "read written FTS", pistoris::readFts(written, roundtrip))) continue;
-      if (!test_support::checkCorpusStatus(path, "validate written FTS", pistoris::validate(roundtrip))) continue;
-      checkEquivalent(source, roundtrip);
+      auto roundtrip = pistoris::readFts(*written);
+      if (!test_support::checkCorpusStatus(path, "read written FTS", roundtrip)) continue;
+      if (!test_support::checkCorpusStatus(path, "validate written FTS", pistoris::validate(*roundtrip))) continue;
+      checkEquivalent(*source, *roundtrip);
     }
   }
 }

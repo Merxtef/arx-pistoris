@@ -57,7 +57,8 @@ TEST_SUITE("basic") {
 
     const char* obj = "# arx_unknown\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
     ArxModel* model = nullptr;
-    arx_pistoris_model_import_obj(reinterpret_cast<const uint8_t*>(obj), std::strlen(obj), nullptr, 0, &model, nullptr);
+    arx_pistoris_model_import_obj(
+        reinterpret_cast<const uint8_t*>(obj), std::strlen(obj), nullptr, 0, &model, nullptr, nullptr);
     arx_pistoris_model_destroy(model);
     arx_pistoris_set_log_callback(nullptr, nullptr);
 
@@ -72,8 +73,8 @@ TEST_SUITE("basic") {
   }
 
   TEST_CASE("Native validation rejects null handles") {
-    CHECK(arx_pistoris_ftl_validate(nullptr) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_tea_validate(nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_ftl_validate(nullptr, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_tea_validate(nullptr, nullptr) == ARX_INVALID_HANDLE);
   }
 
 }  // TEST_SUITE("basic")

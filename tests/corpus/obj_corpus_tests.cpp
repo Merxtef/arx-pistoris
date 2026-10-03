@@ -34,16 +34,17 @@ TEST_SUITE("obj") {
 
       ArxObjMaterialLibraryPaths* library_paths = nullptr;
       REQUIRE(arx_pistoris_obj_material_library_paths(
-                  reinterpret_cast<const std::uint8_t*>(obj_text.data()), obj_text.size(), &library_paths) == ARX_OK);
+                  reinterpret_cast<const std::uint8_t*>(obj_text.data()), obj_text.size(), &library_paths, nullptr) ==
+              ARX_OK);
       std::size_t library_count = 0;
-      REQUIRE(arx_pistoris_obj_material_library_paths_count(library_paths, &library_count) == ARX_OK);
+      REQUIRE(arx_pistoris_obj_material_library_paths_count(library_paths, &library_count, nullptr) == ARX_OK);
       std::vector<std::string> library_texts;
       library_texts.reserve(library_count);
       std::vector<ArxStringView> path_views;
       path_views.reserve(library_count);
       for (std::size_t index = 0; index < library_count; ++index) {
         ArxStringView path_view{};
-        REQUIRE(arx_pistoris_obj_material_library_paths_get(library_paths, index, &path_view) == ARX_OK);
+        REQUIRE(arx_pistoris_obj_material_library_paths_get(library_paths, index, &path_view, nullptr) == ARX_OK);
         path_views.push_back(path_view);
         library_texts.push_back(readText(obj_path.parent_path() / std::string(path_view.data, path_view.size)));
       }
@@ -60,6 +61,7 @@ TEST_SUITE("obj") {
                                             libraries.data(),
                                             libraries.size(),
                                             &initial_model,
+                                            nullptr,
                                             nullptr) == ARX_OK);
       arx_pistoris_obj_material_library_paths_destroy(library_paths);
 
@@ -78,13 +80,14 @@ TEST_SUITE("obj") {
                                               mtl_in.empty() ? nullptr : &library,
                                               mtl_in.empty() ? 0 : 1,
                                               &model,
+                                              nullptr,
                                               nullptr);
             if (import_rc != ARX_OK) return import_rc;
 
             char* obj_raw = nullptr;
             char* mtl_raw = nullptr;
-            const ArxReturnCode export_rc =
-                arx_pistoris_model_export_obj(model, {stem.data(), stem.size()}, nullptr, &obj_raw, &mtl_raw, nullptr);
+            const ArxReturnCode export_rc = arx_pistoris_model_export_obj(
+                model, {stem.data(), stem.size()}, nullptr, &obj_raw, &mtl_raw, nullptr, nullptr);
             arx_pistoris_model_destroy(model);
             if (obj_raw) {
               obj_out = obj_raw;
@@ -101,9 +104,10 @@ TEST_SUITE("obj") {
       std::string first_mtl;
       char* first_obj_raw = nullptr;
       char* first_mtl_raw = nullptr;
-      REQUIRE(arx_pistoris_model_export_obj(
-                  initial_model, {stem.data(), stem.size()}, nullptr, &first_obj_raw, &first_mtl_raw, nullptr) ==
-              ARX_OK);
+      REQUIRE(
+          arx_pistoris_model_export_obj(
+              initial_model, {stem.data(), stem.size()}, nullptr, &first_obj_raw, &first_mtl_raw, nullptr, nullptr) ==
+          ARX_OK);
       arx_pistoris_model_destroy(initial_model);
       REQUIRE(first_obj_raw != nullptr);
       first_obj = first_obj_raw;

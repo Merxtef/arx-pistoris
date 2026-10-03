@@ -3,6 +3,7 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
 
 #include "base/resource_path.h"
@@ -26,12 +27,12 @@ TEST_SUITE("CLI resource selectors") {
     cli::ResourceSelector selector;
     std::string error;
     REQUIRE(cli::parseResourceSelector("anim:NPC:walk", selector, error) == cli::SelectorParseStatus::kValid);
-    CHECK(selector.type == "npc");
+    CHECK(selector.animation_type == pistoris::paths::AnimationPathType::kNpc);
     CHECK(selector.name == "walk");
     CHECK(selector.logical_path == "graph/obj3d/anims/npc/walk.tea");
 
     REQUIRE(cli::parseResourceSelector("model:Armor:key.ftl", selector, error) == cli::SelectorParseStatus::kValid);
-    CHECK(selector.type == "armor");
+    CHECK(selector.model_type == pistoris::paths::ModelPathType::kArmor);
     CHECK(selector.name == "key");
     CHECK(selector.logical_path == "game/graph/obj3d/interactive/items/armor/key/key.ftl");
 

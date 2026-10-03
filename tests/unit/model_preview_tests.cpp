@@ -6,18 +6,24 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/glb.hpp"
 #include "arx_pistoris/level.hpp"
 #include "arx_pistoris/level/types.h"
 #include "arx_pistoris/model.hpp"
+#include "arx_pistoris/model/location.hpp"
 
 #include "external/glb/container.h"
 #include "model_helpers.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string_view>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -32,17 +38,19 @@ const cgltf_node* findNode(const cgltf_data& data, std::string_view name) {
 }
 
 pistoris::Model makePreviewModel(bool with_resource_path = true) {
-  pistoris::Model model;
-  REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
-  if (with_resource_path) REQUIRE(model.setResourcePath("model:npc:human_base") == ARX_OK);
-  return pistoris::Model(model);
+  auto result = pistoris::Model::importNative(makeSemanticModelFtl());
+  REQUIRE(result);
+  pistoris::Model model = std::move(*result);
+  if (with_resource_path) REQUIRE(model.setResourcePath("model:npc:human_base"));
+  return model;
 }
 
 pistoris::Level makePreviewLevel() {
   pistoris::Level level;
-  pistoris::RoomIndex room = pistoris::kInvalidRoomIndex;
   const ArxLevelRoom submitted_room{view("room")};
-  REQUIRE(level.addRoom(submitted_room, room) == ARX_OK);
+  auto room_result = level.addRoom(submitted_room);
+  REQUIRE(room_result);
+  const pistoris::RoomIndex room = *room_result;
 
   const std::array<ArxLevelVertex, 3> vertices = {
       ArxLevelVertex{{0.0f, 0.0f, 0.0f}},
@@ -57,7 +65,7 @@ pistoris::Level makePreviewLevel() {
     face.corners[index].normal = {0.0f, -1.0f, 0.0f};
   }
   const ArxLevelMeshInput mesh{vertices.data(), vertices.size(), &face, 1, nullptr, 0};
-  REQUIRE(level.replaceMesh(mesh) == ARX_OK);
+  REQUIRE(level.replaceMesh(mesh));
 
   for (std::string_view name : {"human", "human_1"}) {
     const ArxLevelEntity entity{
@@ -66,24 +74,32 @@ pistoris::Level makePreviewLevel() {
         .rotation = {},
         .name = view(name),
     };
-    pistoris::EntityIndex index = pistoris::kInvalidEntityIndex;
-    REQUIRE(level.addEntity(entity, index) == ARX_OK);
+    REQUIRE(level.addEntity(entity));
   }
-  REQUIRE(level.validate() == ARX_OK);
-  return pistoris::Level(level);
+  REQUIRE(level.validate());
+  return level;
 }
 
 }  // namespace
 
 TEST_SUITE("Model Level previews") {
+  TEST_CASE("Rejects invalid coordinate units") {
+    const pistoris::Model model = makePreviewModel();
+    pistoris::Model::LevelPreviewGlbOptions options;
+    options.arx_units_per_glb_unit =
+        std::nextafter(pistoris::glb::kMinArxUnitsPerUnit, -std::numeric_limits<float>::infinity());
+    CHECK(model.exportLevelPreviewGlb(options).code() == ARX_INVALID_OPTIONS);
+  }
+
   TEST_CASE("Standalone preview is a static Level entity") {
     pistoris::Model model = makePreviewModel();
     pistoris::Model::LevelPreviewGlbOptions options;
     options.class_path = "model:npc:human_base:human_kultar";
     options.asset_name = "human";
 
-    std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportLevelPreviewGlb(encoded, options) == ARX_OK);
+    auto export_result = model.exportLevelPreviewGlb(options);
+    REQUIRE(export_result);
+    const std::vector<std::uint8_t>& encoded = *export_result;
 
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
@@ -110,8 +126,9 @@ TEST_SUITE("Model Level previews") {
   TEST_CASE("Standalone preview preserves an unspecified class as a visible placeholder") {
     pistoris::Model model = makePreviewModel();
 
-    std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportLevelPreviewGlb(encoded) == ARX_OK);
+    auto export_result = model.exportLevelPreviewGlb();
+    REQUIRE(export_result);
+    const std::vector<std::uint8_t>& encoded = *export_result;
 
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
@@ -121,13 +138,14 @@ TEST_SUITE("Model Level previews") {
   TEST_CASE("Level entities reuse previews by Model resource identity") {
     pistoris::Level level = makePreviewLevel();
     pistoris::Model preview = makePreviewModel();
-    REQUIRE(preview.setResourcePath("model:npc:human_base:human_kultar") == ARX_OK);
+    REQUIRE(preview.setResourcePath("model:npc:human_base:human_kultar"));
     pistoris::Model anonymous = makePreviewModel(false);
     const std::array<const pistoris::Model*, 2> previews = {&preview, &anonymous};
 
     ArxLevelModelPreviewReport report{};
-    std::vector<std::uint8_t> encoded;
-    REQUIRE(level.exportGlb(encoded, previews, &report) == ARX_OK);
+    auto export_result = level.exportGlb(previews, &report);
+    REQUIRE(export_result);
+    const std::vector<std::uint8_t>& encoded = *export_result;
     CHECK(report.mapped_models == 1);
     CHECK(report.previewed_entities == 2);
     CHECK(report.skipped_anonymous_models == 1);
@@ -143,6 +161,21 @@ TEST_SUITE("Model Level previews") {
     CHECK(first->mesh == second->mesh);
   }
 
+  TEST_CASE("Level preview failures identify the composite input") {
+    pistoris::Level level = makePreviewLevel();
+    const std::array<const pistoris::Model*, 1> previews = {nullptr};
+
+    const auto result = level.exportGlb(previews);
+
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error() != nullptr);
+    REQUIRE(result.error()->location());
+    const auto* location = std::get_if<pistoris::ModelLocation>(&*result.error()->location());
+    REQUIRE(location != nullptr);
+    CHECK(location->element == pistoris::ModelElement::kResource);
+    CHECK(location->input_index == 0);
+  }
+
   TEST_CASE("Level entity rotation applies to its preview mesh") {
     constexpr float kHalfSqrtTwo = 0.70710678f;
     pistoris::Level level = makePreviewLevel();
@@ -152,12 +185,13 @@ TEST_SUITE("Model Level previews") {
         .rotation = {kHalfSqrtTwo, 0.0f, kHalfSqrtTwo, 0.0f},
         .name = view("human"),
     };
-    REQUIRE(level.setEntity(0, entity) == ARX_OK);
+    REQUIRE(level.setEntity(0, entity));
     pistoris::Model preview = makePreviewModel();
     const std::array<const pistoris::Model*, 1> previews = {&preview};
 
-    std::vector<std::uint8_t> encoded;
-    REQUIRE(level.exportGlb(encoded, previews) == ARX_OK);
+    auto export_result = level.exportGlb(previews);
+    REQUIRE(export_result);
+    const std::vector<std::uint8_t>& encoded = *export_result;
 
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);

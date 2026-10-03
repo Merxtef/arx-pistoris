@@ -5,6 +5,7 @@
 
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/cin.hpp"
+#include "arx_pistoris/native/location.hpp"
 
 #include "cin_helpers.h"
 #include "native/cin.h"
@@ -13,14 +14,44 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <utility>
 #include <vector>
 
+namespace {
+
+ArxReturnCode loadCin(pistoris::Cin& data, pistoris::ReadCursor& cursor) {
+  auto result = pistoris::loadCin(cursor);
+  if (result) data = std::move(*result);
+  return result.code();
+}
+
+}  // namespace
+
 TEST_SUITE("cin") {
+  TEST_CASE("Version failures retain the version field offset") {
+    std::vector<std::uint8_t> bytes = makeCinBytes();
+    const std::int32_t version = 0;
+    std::memcpy(bytes.data() + 4U, &version, sizeof(version));
+    pistoris::ReadCursor cursor(bytes.data(), bytes.size());
+
+    const auto result = pistoris::loadCin(cursor);
+
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_CIN_BAD_VERSION);
+    REQUIRE(result.error());
+    REQUIRE(result.error()->location());
+    const pistoris::CinBinaryLocation& location = *result.error()->location();
+    CHECK(location.element == pistoris::CinElement::kHeader);
+    CHECK(location.field == "version");
+    CHECK(location.byte_offset == 4);
+    CHECK(location.requested_bytes == 0);
+  }
+
   TEST_CASE("Version 1.75 discards its inactive sound field") {
     const std::vector<std::uint8_t> bytes = makeCinBytes(makeCinData(), pistoris::kCinVersion175);
     pistoris::Cin result;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadCin(&result, cursor) == ARX_OK);
+    REQUIRE(loadCin(result, cursor) == ARX_OK);
     REQUIRE(result.keyframes.size() == 2);
     CHECK(result.keyframes.front().sound == -1);
     CHECK(result.keyframes.back().sound == -1);
@@ -36,7 +67,7 @@ TEST_SUITE("cin") {
 
     pistoris::Cin result;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadCin(&result, cursor) == ARX_OK);
+    REQUIRE(loadCin(result, cursor) == ARX_OK);
     CHECK(result.keyframes.front().sound == -1);
   }
 
@@ -55,7 +86,7 @@ TEST_SUITE("cin") {
     const std::vector<std::uint8_t> bytes = makeCinBytes(source);
     pistoris::Cin result;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadCin(&result, cursor) == ARX_OK);
+    REQUIRE(loadCin(result, cursor) == ARX_OK);
     REQUIRE(result.keyframes.size() == 2);
     CHECK(result.keyframes[0].frame == 0);
     CHECK(result.keyframes[0].camera_position.x == 2.0f);
@@ -88,7 +119,7 @@ TEST_SUITE("cin") {
     const std::vector<std::uint8_t> raw = makeCinBytes(source);
     pistoris::ReadCursor raw_cursor(raw.data(), raw.size());
     pistoris::Cin loaded;
-    REQUIRE(pistoris::loadCin(&loaded, raw_cursor) == ARX_OK);
+    REQUIRE(loadCin(loaded, raw_cursor) == ARX_OK);
     CHECK(loaded.keyframes[0].flash_decay == 0.0f);
     CHECK(loaded.keyframes[0].light.position.x == 0.0f);
     CHECK(loaded.keyframes[0].light.intensity == -1.0f);
@@ -98,7 +129,7 @@ TEST_SUITE("cin") {
     const std::vector<std::uint8_t> encoded = written.take();
     pistoris::ReadCursor encoded_cursor(encoded.data(), encoded.size());
     pistoris::Cin saved;
-    REQUIRE(pistoris::loadCin(&saved, encoded_cursor) == ARX_OK);
+    REQUIRE(loadCin(saved, encoded_cursor) == ARX_OK);
     CHECK(saved.keyframes[0].flash_decay == 0.0f);
     CHECK(saved.keyframes[0].light.position.x == 0.0f);
     CHECK(saved.keyframes[0].light.intensity == -1.0f);
@@ -115,7 +146,7 @@ TEST_SUITE("cin") {
     const std::vector<std::uint8_t> raw = makeCinBytes(source);
     pistoris::ReadCursor cursor(raw.data(), raw.size());
     pistoris::Cin loaded;
-    REQUIRE(pistoris::loadCin(&loaded, cursor) == ARX_OK);
+    REQUIRE(loadCin(loaded, cursor) == ARX_OK);
     CHECK(loaded.keyframes[0].effects == source.keyframes[0].effects);
     CHECK(loaded.keyframes[0].light.intensity == -1.0f);
     CHECK(loaded.keyframes[0].light.position.x == 0.0f);
@@ -172,5 +203,50 @@ TEST_SUITE("cin") {
 
     source.keyframes[0].crossfade = 0;
     CHECK(pistoris::validateCin(&source) == ARX_OK);
+  }
+
+  TEST_CASE("Carrier validation reports each structural CIN error") {
+    pistoris::Cin source = makeCinData();
+
+    SUBCASE("illustration count") {
+      source.bitmaps.clear();
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_BITMAP_COUNT);
+    }
+    SUBCASE("illustration path") {
+      source.bitmaps[0].path.clear();
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_BITMAP_PATH);
+    }
+    SUBCASE("sound count") {
+      source.sounds.resize(pistoris::kCinMaxSounds + 1U);
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_SOUND_COUNT);
+    }
+    SUBCASE("sound path") {
+      source.sounds[0].path.clear();
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_SOUND_PATH);
+    }
+    SUBCASE("track") {
+      source.end_frame = 0;
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_TRACK);
+    }
+    SUBCASE("key count") {
+      source.keyframes.pop_back();
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_KEY_COUNT);
+    }
+    SUBCASE("key frame") {
+      source.keyframes[0].frame = 1;
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_KEY_FRAME);
+    }
+    SUBCASE("key sound") {
+      source.keyframes[0].sound = 1;
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_KEY_SOUND);
+    }
+    SUBCASE("key interpolation") {
+      source.keyframes[0].interpolation = 2;
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_KEY_INTERPOLATION);
+    }
+    SUBCASE("key crossfade") {
+      source.keyframes[0].crossfade = 2;
+      CHECK(pistoris::validateCin(&source) == ARX_CIN_BAD_KEY_CROSSFADE);
+    }
   }
 }

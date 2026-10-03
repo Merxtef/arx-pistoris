@@ -4,8 +4,11 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/status.h"
 
+#include "ambiance/internal.h"
 #include "modules/ambiance.h"
+#include "modules/sounds.h"
 
 #include <cstdint>
 #include <limits>
@@ -32,6 +35,37 @@ pistoris::AmbianceData validAmbiance() {
 }  // namespace
 
 TEST_SUITE("ambiance module validation") {
+  TEST_CASE("Module errors map to focused return codes") {
+    using pistoris::ambiance_detail::errorCode;
+    using pistoris::ambiance_detail::soundErrorCode;
+
+    CHECK(errorCode(pistoris::ambiance::Error::kNone) == ARX_OK);
+    CHECK(errorCode(pistoris::ambiance::Error::kNoTracks) == ARX_AMBIANCE_NO_TRACKS);
+    CHECK(errorCode(pistoris::ambiance::Error::kTooManyTracks) == ARX_AMBIANCE_TOO_MANY_TRACKS);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadMasterTrack) == ARX_AMBIANCE_BAD_MASTER_TRACK);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadSound) == ARX_AMBIANCE_BAD_TRACK_SOUND);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadKeyCount) == ARX_AMBIANCE_BAD_KEY_COUNT);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadPlayCount) == ARX_AMBIANCE_BAD_PLAY_COUNT);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadKeyTiming) == ARX_AMBIANCE_BAD_KEY_TIMING);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadAutomation) == ARX_AMBIANCE_BAD_AUTOMATION);
+    CHECK(errorCode(pistoris::ambiance::Error::kCannotFitDuration) == ARX_AMBIANCE_TRACK_CANNOT_FIT_MASTER);
+    CHECK(errorCode(pistoris::ambiance::Error::kBadIndex) == ARX_INDEX_OUT_OF_RANGE);
+
+    CHECK(soundErrorCode(pistoris::sounds::Error::kNone) == ARX_OK);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kInvalidOptions) == ARX_INVALID_OPTIONS);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kTooManySounds) == ARX_AMBIANCE_TOO_MANY_SOUNDS);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kBadPath) == ARX_AMBIANCE_BAD_SOUND_PATH);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kBadAudio) == ARX_AMBIANCE_BAD_SOUND_DATA);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kUnsupportedChannels) == ARX_AMBIANCE_UNSUPPORTED_SOUND_CHANNELS);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kAudioTooLarge) == ARX_AMBIANCE_SOUND_TOO_LARGE);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kDuplicatePath) == ARX_AMBIANCE_DUPLICATE_SOUND_PATH);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kBadKind) == ARX_INTERNAL_ERROR);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kBadLanguage) == ARX_INTERNAL_ERROR);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kDuplicateEncoding) == ARX_INTERNAL_ERROR);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kBadIndex) == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(soundErrorCode(pistoris::sounds::Error::kOutOfMemory) == ARX_BAD_ALLOC);
+  }
+
   TEST_CASE("Requires playable track and master structure") {
     pistoris::AmbianceData data;
     CHECK(pistoris::ambiance::validate(data, 1) == pistoris::ambiance::Error::kNoTracks);

@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <utility>
 #include <vector>
 
 TEST_SUITE("cin_corpus") {
@@ -22,15 +23,16 @@ TEST_SUITE("cin_corpus") {
       CAPTURE(path.string());
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Cin source;
-      if (!test_support::checkCorpusStatus(path, "read CIN", pistoris::readCin(source_bytes, source))) continue;
+      auto source_result = pistoris::readCin(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read CIN", source_result)) continue;
+      pistoris::Cin source = std::move(*source_result);
       if (!test_support::checkCorpusStatus(path, "validate CIN", pistoris::validate(source))) continue;
 
-      std::vector<std::uint8_t> written;
-      if (!test_support::checkCorpusStatus(path, "write CIN", pistoris::writeCin(source, written))) continue;
-      pistoris::Cin roundtrip;
-      if (!test_support::checkCorpusStatus(path, "read written CIN", pistoris::readCin(written, roundtrip))) continue;
-      test_support::checkEquivalent(source, roundtrip);
+      auto written = pistoris::writeCin(source);
+      if (!test_support::checkCorpusStatus(path, "write CIN", written)) continue;
+      auto roundtrip = pistoris::readCin(*written);
+      if (!test_support::checkCorpusStatus(path, "read written CIN", roundtrip)) continue;
+      test_support::checkEquivalent(source, *roundtrip);
     }
   }
 }

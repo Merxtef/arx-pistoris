@@ -4,17 +4,22 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/base/flags.h"
+#include "arx_pistoris/base/image.h"
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/level.h"
 #include "arx_pistoris/level.hpp"
-#include "arx_pistoris/level/bake.hpp"
+#include "arx_pistoris/level/images.h"
+#include "arx_pistoris/level/images.hpp"
 #include "arx_pistoris/level/types.h"
 #include "arx_pistoris/native/text.h"
+#include "arx_pistoris/runtime.hpp"
+#include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/texture.h"
 
 #include "image_helpers.h"
+#include "level/debug/access.h"
 #include "level_add_helpers.h"
 #include "modules/geometry.h"
 #include "modules/lights.h"
@@ -23,6 +28,7 @@
 #include "modules/scene.h"
 #include "native/fixed_string.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -35,12 +41,35 @@
 
 using namespace pistoris;
 
-static_assert(!std::is_move_constructible_v<Level>);
-static_assert(!std::is_move_assignable_v<Level>);
+static_assert(std::is_nothrow_move_constructible_v<Level>);
+static_assert(std::is_nothrow_move_assignable_v<Level>);
 static_assert(kLevelFaceBitsAll == ARX_LEVEL_FACE_BITS_ALL);
 static_assert((kLevelFaceBitsAll & kFaceBitQuad) == 0);
 
 namespace {
+
+struct ErrorLogCapture {
+  std::size_t errors = 0;
+  std::vector<std::string> debug;
+
+  ErrorLogCapture() {
+    pistoris::setLogCallback(
+        [](ArxLogLevel level, const char* message, void* userdata) {
+          auto& capture = *static_cast<ErrorLogCapture*>(userdata);
+          if (level == ARX_LOG_ERROR) ++capture.errors;
+          if (level == ARX_LOG_DEBUG && message != nullptr) capture.debug.emplace_back(message);
+        },
+        this);
+  }
+
+  ~ErrorLogCapture() { pistoris::setLogCallback(nullptr, nullptr); }
+
+  [[nodiscard]] std::size_t sourceFailures() const {
+    return static_cast<std::size_t>(std::count_if(debug.begin(), debug.end(), [](const std::string& message) {
+      return message.find("source failure") != std::string::npos;
+    }));
+  }
+};
 
 template <std::size_t N>
 void setNativeText(char (&out)[N], std::string_view value) {
@@ -131,22 +160,18 @@ constexpr bool cOptionDefaultsMatchCpp() {
 
   constexpr ArxLevelMinimapRenderOptions kCMinimap = ARX_LEVEL_MINIMAP_RENDER_OPTIONS_INIT;
   constexpr Level::MinimapRenderOptions kCppMinimap{};
-  if (kCMinimap.projection_offset.x != kCppMinimap.projection_offset.x ||
-      kCMinimap.projection_offset.y != kCppMinimap.projection_offset.y ||
+  if (kCMinimap.mode != static_cast<ArxLevelMinimapRenderMode>(kCppMinimap.mode) ||
+      (kCMinimap.has_projection_offset != 0) != kCppMinimap.projection_offset.has_value() ||
       kCMinimap.fill_color.r != kCppMinimap.fill_color.r || kCMinimap.fill_color.g != kCppMinimap.fill_color.g ||
-      kCMinimap.fill_color.b != kCppMinimap.fill_color.b)
+      kCMinimap.fill_color.b != kCppMinimap.fill_color.b ||
+      (kCMinimap.has_border_color != 0) != kCppMinimap.border_color.has_value() ||
+      kCMinimap.format != static_cast<ArxImageFormat>(kCppMinimap.format))
     return false;
 
-  constexpr ArxLevelGameMinimapRenderOptions kCGameMinimap = ARX_LEVEL_GAME_MINIMAP_RENDER_OPTIONS_INIT;
-  constexpr Level::GameMinimapRenderOptions kCppGameMinimap{};
-  if (kCGameMinimap.projection_offset.x != kCppGameMinimap.projection_offset.x ||
-      kCGameMinimap.projection_offset.y != kCppGameMinimap.projection_offset.y ||
-      kCGameMinimap.fill_color.r != kCppGameMinimap.fill_color.r ||
-      kCGameMinimap.fill_color.g != kCppGameMinimap.fill_color.g ||
-      kCGameMinimap.fill_color.b != kCppGameMinimap.fill_color.b ||
-      kCGameMinimap.border_color.r != kCppGameMinimap.border_color.r ||
-      kCGameMinimap.border_color.g != kCppGameMinimap.border_color.g ||
-      kCGameMinimap.border_color.b != kCppGameMinimap.border_color.b)
+  constexpr ArxLevelLoadingScreenRenderOptions kCLoading = ARX_LEVEL_LOADING_SCREEN_RENDER_OPTIONS_INIT;
+  constexpr Level::LoadingScreenRenderOptions kCppLoading{};
+  if (kCLoading.layout != static_cast<ArxLevelLoadingScreenLayout>(kCppLoading.layout) ||
+      kCLoading.format != static_cast<ArxImageFormat>(kCppLoading.format))
     return false;
 
   constexpr ArxLevelMinimapGenerationOptions kCMinimapGeneration = ARX_LEVEL_MINIMAP_GENERATION_OPTIONS_INIT;
@@ -275,23 +300,24 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Add operations repair identifiers and invalidate output indices on failure") {
     Level level;
 
-    RoomIndex room_index = 42;
-    REQUIRE(level.addRoom({{"", 0}}, room_index) == ARX_OK);
+    auto room_result = level.addRoom({{"", 0}});
+    REQUIRE(room_result);
+    RoomIndex room_index = *room_result;
     CHECK(room_index == 0);
     CHECK(test::room(level, room_index).name == "unnamed");
-    REQUIRE(level.addRoom({{"room", 4}}, room_index) == ARX_OK);
+    room_result = level.addRoom({{"room", 4}});
+    REQUIRE(room_result);
+    room_index = *room_result;
     CHECK(room_index == 1);
 
-    room_index = 42;
-    REQUIRE(level.addRoom({{"room", 4}}, room_index) == ARX_OK);
+    room_result = level.addRoom({{"room", 4}});
+    REQUIRE(room_result);
+    room_index = *room_result;
     CHECK(room_index == 2);
     CHECK(test::room(level, room_index).name == "room_1");
 
-    VertexIndex vertex_index = 42;
-    CHECK(level.addVertices(nullptr, 0, vertex_index) == ARX_INVALID_OPTIONS);
-    CHECK(vertex_index == kInvalidVertexIndex);
-    CHECK(level.addVertex({{-1.0f, 0.0f, 0.0f}}, vertex_index) == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
-    CHECK(vertex_index == kInvalidVertexIndex);
+    CHECK(level.addVertices({}).code() == ARX_INVALID_OPTIONS);
+    CHECK(level.addVertex({{-1.0f, 0.0f, 0.0f}}).code() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
   }
 
   TEST_CASE("Sets and clears validated texture image data") {
@@ -303,28 +329,33 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
 
     std::vector<std::uint8_t> encoded = makeTestBmp();
-    REQUIRE(level.setTextureImage(0, {encoded.data(), encoded.size()}) == ARX_OK);
+    REQUIRE(level.setTextureImage(0, {encoded.data(), encoded.size()}));
+    REQUIRE(level.setTexturePath(0, "custom/stone"));
+    CHECK(level.setTextureExternalImageExtension(0, ".png").code() == ARX_LEVEL_BAD_TEXTURE_IMAGE);
     REQUIRE(test::texture(level, 0).encoded_image == encoded);
+    CHECK(test::texture(level, 0).path == "custom/stone");
     encoded[0] = 0;
     CHECK(test::texture(level, 0).encoded_image != encoded);
 
-    CHECK(level.setTextureImage(0, {}) == ARX_LEVEL_BAD_TEXTURE_IMAGE);
+    CHECK(level.setTextureImage(0, {}).code() == ARX_LEVEL_BAD_TEXTURE_IMAGE);
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
-    CHECK(level.setTextureImage(0, {nullptr, 1}) == ARX_INVALID_DATA_POINTER);
+    CHECK(level.setTextureImage(0, {nullptr, 1}).code() == ARX_INVALID_DATA_POINTER);
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
     const std::array<std::uint8_t, 3> malformed = {1, 2, 3};
-    CHECK(level.setTextureImage(0, {malformed.data(), malformed.size()}) == ARX_LEVEL_BAD_TEXTURE_IMAGE);
+    CHECK(level.setTextureImage(0, {malformed.data(), malformed.size()}).code() == ARX_LEVEL_BAD_TEXTURE_IMAGE);
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
     const std::vector<std::uint8_t> another_image = makeTestBmp();
-    CHECK(level.setTextureImage(1, {another_image.data(), another_image.size()}) == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(level.setTextureImage(1, {another_image.data(), another_image.size()}).code() == ARX_INDEX_OUT_OF_RANGE);
 
-    CHECK(level.clearTextureImage(0) == ARX_OK);
+    CHECK(level.clearTextureImage(0).code() == ARX_OK);
     const pistoris::Texture external = test::texture(level, 0);
     CHECK(external.encoded_image.empty());
     CHECK(external.external_image_extension == ".bmp");
-    CHECK(level.clearTextureImage(0) == ARX_OK);
-    CHECK(test::texture(level, 0).external_image_extension == ".bmp");
-    CHECK(level.clearTextureImage(1) == ARX_INDEX_OUT_OF_RANGE);
+    REQUIRE(level.setTextureExternalImageExtension(0, ".png"));
+    CHECK(test::texture(level, 0).external_image_extension == ".png");
+    CHECK(level.clearTextureImage(0).code() == ARX_OK);
+    CHECK(test::texture(level, 0).external_image_extension == ".png");
+    CHECK(level.clearTextureImage(1).code() == ARX_INDEX_OUT_OF_RANGE);
   }
 
   TEST_CASE("Adds owned textures without discarding dependent authored data") {
@@ -335,8 +366,9 @@ TEST_SUITE("Level edit API") {
     std::string path = "graph/obj3d/textures/stone.bmp";
     std::vector<std::uint8_t> image = makeTestBmp();
     const ArxTextureView submitted = {{path.data(), path.size()}, {image.data(), image.size()}};
-    TextureIndex index = 42;
-    REQUIRE(level.addTexture(submitted, index) == ARX_OK);
+    auto index_result = level.addTexture(submitted);
+    REQUIRE(index_result);
+    TextureIndex index = *index_result;
     CHECK(index == 0);
 
     path[0] = 'x';
@@ -344,15 +376,16 @@ TEST_SUITE("Level edit API") {
     REQUIRE(level.textureCount() == 1);
     CHECK(test::texture(level, 0).path == "graph/obj3d/textures/stone.bmp");
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
-    REQUIRE(level.rebaseTexturePaths("custom/textures") == ARX_OK);
+    REQUIRE(level.rebaseTexturePaths("custom/textures"));
     CHECK(test::texture(level, 0).path == "custom/textures/stone.bmp");
     CHECK(test::navSurface(level).has_value());
     CHECK(level.anchorCount() == 1);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
 
-    index = 42;
     const std::string bad_path = "graph/obj3d/textures/bad__name.bmp";
-    REQUIRE(level.addTexture({{bad_path.data(), bad_path.size()}, {}}, index) == ARX_OK);
+    index_result = level.addTexture({{bad_path.data(), bad_path.size()}, {}});
+    REQUIRE(index_result);
+    index = *index_result;
     CHECK(index == 1);
     CHECK(test::texture(level, index).path == "graph/obj3d/textures/bad__name.bmp");
     CHECK(level.textureCount() == 2);
@@ -360,16 +393,8 @@ TEST_SUITE("Level edit API") {
 
   TEST_CASE("Native bundle bake rejects an empty level name") {
     Level level = makeLevelWithRoomAndTriangle();
-    NativeLevelBundle bundle;
-    setNativeText(bundle.dlf.scene_path, "unchanged");
-
-    CHECK(level.bakeNativeBundle({.level_name = ""}, bundle) == ARX_DLF_BAD_SCENE_PATH);
-    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
-
-    dlf::Data dlf;
-    setNativeText(dlf.scene_path, "unchanged");
-    CHECK(level.bakeDlf({.level_name = ""}, dlf) == ARX_DLF_BAD_SCENE_PATH);
-    CHECK(pistoris::fixedStringView(dlf.scene_path).compare("unchanged") == 0);
+    CHECK(level.bakeNativeBundle({.level_name = ""}).code() == ARX_DLF_BAD_SCENE_PATH);
+    CHECK(level.bakeDlf({.level_name = ""}).code() == ARX_DLF_BAD_SCENE_PATH);
   }
 
   TEST_CASE("Native DLF bake validates only scene data and preserves the target FTS offset") {
@@ -395,10 +420,11 @@ TEST_SUITE("Level edit API") {
     Vertex outside = test::vertex(level, 0);
     outside.position = {-0.01f, 0.0f, 0.0f};
     REQUIRE(test::setVertex(level, 0, outside) == ARX_OK);
-    REQUIRE(level.validateVertices() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
+    REQUIRE(level.validateVertices().code() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
 
-    dlf::Data dlf;
-    REQUIRE(level.bakeDlf({.level_name = "level7", .target_fts_offset = {10.0f, 20.0f, 30.0f}}, dlf) == ARX_OK);
+    auto dlf_result = level.bakeDlf({.level_name = "level7", .target_fts_offset = {10.0f, 20.0f, 30.0f}});
+    REQUIRE(dlf_result);
+    const dlf::Data& dlf = *dlf_result;
 
     CHECK(pistoris::fixedStringView(dlf.scene_path).compare("graph/levels/level7") == 0);
     CHECK(dlf.player_spawn.position.x == doctest::Approx(1.0f));
@@ -427,8 +453,9 @@ TEST_SUITE("Level edit API") {
 
     Level::DlfBakeOptions explicit_scene_options;
     explicit_scene_options.dlf_scene_path = "graph/levels/custom";
-    REQUIRE(level.bakeDlf(explicit_scene_options, dlf) == ARX_OK);
-    CHECK(pistoris::fixedStringView(dlf.scene_path).compare("graph/levels/custom") == 0);
+    dlf_result = level.bakeDlf(explicit_scene_options);
+    REQUIRE(dlf_result);
+    CHECK(pistoris::fixedStringView(dlf_result->scene_path).compare("graph/levels/custom") == 0);
   }
 
   TEST_CASE("Copies independently and swaps complete Level state") {
@@ -448,16 +475,16 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Owns an optional Level resource identity") {
     Level level = makeLevelWithRoomAndTriangle();
     CHECK(level.resourcePath().empty());
-    REQUIRE(level.setResourcePath("level:17") == ARX_OK);
+    REQUIRE(level.setResourcePath("level:17"));
     CHECK((level.resourcePath() == "graph/levels/level17/level17.dlf"));
-    CHECK(level.validate() == ARX_OK);
-    REQUIRE(level.setResourcePath(R"(Drafts\MY_LEVEL.DLF)") == ARX_OK);
+    CHECK(level.validate().code() == ARX_OK);
+    REQUIRE(level.setResourcePath(R"(Drafts\MY_LEVEL.DLF)"));
     CHECK((level.resourcePath() == "drafts/my_level.dlf"));
-    CHECK(level.setResourcePath("drafts/my_level.ftl") == ARX_LEVEL_BAD_RESOURCE_PATH);
+    CHECK(level.setResourcePath("drafts/my_level.ftl").code() == ARX_LEVEL_BAD_RESOURCE_PATH);
     CHECK((level.resourcePath() == "drafts/my_level.dlf"));
 
     Level copy(level);
-    REQUIRE(level.setResourcePath({}) == ARX_OK);
+    REQUIRE(level.setResourcePath({}));
     CHECK(level.resourcePath().empty());
     CHECK((copy.resourcePath() == "drafts/my_level.dlf"));
   }
@@ -466,9 +493,9 @@ TEST_SUITE("Level edit API") {
     Level level = makeLevelWithRoomAndTriangle();
     REQUIRE(test::addAnchor(level, anchor(0.0f)) == 0);
     REQUIRE(test::setPlayerSpawn(level, {{1.0f, 2.0f, 3.0f}, {}}) == ARX_OK);
-    REQUIRE(level.setResourcePath("level:1") == ARX_OK);
+    REQUIRE(level.setResourcePath("level:1"));
 
-    level.reset();
+    REQUIRE(level.reset());
 
     CHECK(level.vertexCount() == 0);
     CHECK(level.faceCount() == 0);
@@ -478,8 +505,8 @@ TEST_SUITE("Level edit API") {
     bool has_usable_spawn = true;
     test::playerSpawn(level, &has_usable_spawn);
     CHECK_FALSE(has_usable_spawn);
-    CHECK(level.validatePlayerSpawn() == ARX_OK);
-    CHECK(level.validate() == ARX_LEVEL_NO_GEOMETRY);
+    CHECK(level.validatePlayerSpawn().code() == ARX_OK);
+    CHECK(level.validate().code() == ARX_LEVEL_NO_GEOMETRY);
   }
 
   TEST_CASE("Copies and replaces coherent mesh snapshot") {
@@ -507,7 +534,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::cornerColor(level, 0, 1).g == doctest::Approx(0.5f));
     REQUIRE(level.textureCount() == 1);
     CHECK(test::face(level, 0).texture == 0);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->min.x == doctest::Approx(0.0f));
     CHECK(level.bounds()->max.x == doctest::Approx(10.0f));
@@ -522,11 +549,11 @@ TEST_SUITE("Level edit API") {
     ArxLevelMeshInput oversized{};
     oversized.vertex_count = std::numeric_limits<std::size_t>::max();
     if constexpr (std::numeric_limits<std::size_t>::max() > static_cast<std::size_t>(pistoris::kInvalidVertexIndex))
-      CHECK(level.replaceMesh(oversized) == ARX_LEVEL_TOO_MANY_VERTICES);
+      CHECK(level.replaceMesh(oversized).code() == ARX_LEVEL_TOO_MANY_VERTICES);
 
     ArxLevelMeshInput maximum_count{};
     maximum_count.vertex_count = pistoris::kInvalidVertexIndex;
-    CHECK(level.replaceMesh(maximum_count) == ARX_INVALID_DATA_POINTER);
+    CHECK(level.replaceMesh(maximum_count).code() == ARX_INVALID_DATA_POINTER);
 
     test::MeshSnapshot snapshot;
     REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
@@ -568,7 +595,7 @@ TEST_SUITE("Level edit API") {
     outside.position = {-0.01f, 0.0f, 0.0f};
     REQUIRE(test::setVertex(level, 0, outside) == ARX_OK);
     CHECK_FALSE(level.bounds().has_value());
-    CHECK(level.validateVertices() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
+    CHECK(level.validateVertices().code() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
 
     test::MeshSnapshot snapshot;
     REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
@@ -579,7 +606,7 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Face edits update room and corner-color collections atomically") {
     Level level = makeLevelWithRoomAndTriangle();
     REQUIRE(test::addRoom(level, {"second"}) == 1);
-    REQUIRE(level.setCornerColor(0, 0, {0.1f, 0.2f, 0.3f}) == ARX_OK);
+    REQUIRE(level.setCornerColor(0, 0, {0.1f, 0.2f, 0.3f}));
     std::array<RoomDistance, 1> distances = {{{.distance = -1.0f}}};
     REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
     REQUIRE(test::addVertex(level, vertex(1.0f, 0.0f, 1.0f)) == 3);
@@ -595,14 +622,14 @@ TEST_SUITE("Level edit API") {
     CHECK(test::addFace(level, added, 1) == 1);
     CHECK(level.faceCount() == old_faces + 1);
     CHECK((test::face(level, 1).flags & kFaceBitQuad) == 0);
-    REQUIRE(level.removeFace(1) == ARX_OK);
+    REQUIRE(level.removeFace(1));
     added.flags = 0;
 
     Face invalid_normal = added;
     invalid_normal.corners[0].normal = {};
     CHECK(test::addFace(level, invalid_normal, 1) == kInvalidFaceIndex);
     CHECK(test::setFace(level, 0, invalid_normal) == ARX_LEVEL_BAD_CORNER_NORMAL);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
 
     Face invalid_uv = added;
     invalid_uv.corners[0].u = std::numeric_limits<float>::infinity();
@@ -613,7 +640,7 @@ TEST_SUITE("Level edit API") {
     Face repeated_vertex = added;
     repeated_vertex.corners[1].vertex = repeated_vertex.corners[0].vertex;
     CHECK(test::setFace(level, 0, repeated_vertex) == ARX_LEVEL_BAD_FACE_VERTEX);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
 
     REQUIRE(test::addFace(level, added, 1) == 1);
     REQUIRE(level.faceCount() == 2);
@@ -621,16 +648,16 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::cornerColors(level).size() == 6);
     CHECK(test::cornerColor(level, 1, 0).r == doctest::Approx(0.5f));
     CHECK(level.roomDistanceCount() == 1);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
 
-    REQUIRE(level.removeFace(0) == ARX_OK);
+    REQUIRE(level.removeFace(0));
     REQUIRE(level.faceCount() == 1);
     CHECK(test::faceRoom(level, 0) == 1);
     REQUIRE(test::cornerColors(level).size() == 3);
     CHECK(test::cornerColor(level, 0, 0).r == doctest::Approx(0.5f));
     CHECK(level.roomDistanceCount() == 1);
-    CHECK(level.removeFace(1) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.removeFace(1).code() == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(level.validateMesh().code() == ARX_OK);
   }
 
   TEST_CASE("Level mesh replacement strips flags reserved for native quad encoding") {
@@ -649,13 +676,14 @@ TEST_SUITE("Level edit API") {
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->max.x == doctest::Approx(100.0f));
 
-    std::size_t removed = 0;
-    REQUIRE(level.compactVertices(&removed) == ARX_OK);
+    auto compact_result = level.compactVertices();
+    REQUIRE(compact_result);
+    const std::size_t removed = *compact_result;
     CHECK(removed == 1);
     CHECK(level.vertexCount() == 3);
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->max.x == doctest::Approx(1.0f));
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
   }
 
   TEST_CASE("Texture compaction removes unused textures and preserves referenced images") {
@@ -665,26 +693,29 @@ TEST_SUITE("Level edit API") {
     const std::string unused_path = "graph/obj3d/textures/unused.bmp";
     const std::string retained_path = "graph/obj3d/textures/retained.bmp";
 
-    TextureIndex unused = kNoTexture;
-    REQUIRE(level.addTexture({{unused_path.data(), unused_path.size()}, {}}, unused) == ARX_OK);
+    auto texture_result = level.addTexture({{unused_path.data(), unused_path.size()}, {}});
+    REQUIRE(texture_result);
+    const TextureIndex unused = *texture_result;
     REQUIRE(unused == 0);
-    TextureIndex retained = kNoTexture;
-    REQUIRE(level.addTexture({{retained_path.data(), retained_path.size()}, {second_image.data(), second_image.size()}},
-                             retained) == ARX_OK);
+    texture_result =
+        level.addTexture({{retained_path.data(), retained_path.size()}, {second_image.data(), second_image.size()}});
+    REQUIRE(texture_result);
+    const TextureIndex retained = *texture_result;
     REQUIRE(retained == 1);
 
     Face face = test::face(level, 0);
     face.texture = retained;
     REQUIRE(test::setFace(level, 0, face) == ARX_OK);
 
-    std::size_t removed = 0;
-    REQUIRE(level.compactTextures(&removed) == ARX_OK);
+    auto compact_result = level.compactTextures();
+    REQUIRE(compact_result);
+    const std::size_t removed = *compact_result;
     CHECK(removed == 1);
     REQUIRE(level.textureCount() == 1);
     CHECK(test::face(level, 0).texture == 0);
     CHECK(test::texture(level, 0).path == "graph/obj3d/textures/retained.bmp");
     CHECK(test::texture(level, 0).encoded_image == second_image);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
   }
 
   TEST_CASE("Welding discarded faces remaps rooms and corner colors") {
@@ -713,7 +744,7 @@ TEST_SUITE("Level edit API") {
                           {0.6f, 0.6f, 0.6f}};
     REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
     const std::vector<std::uint8_t> image = makeTestBmp();
-    REQUIRE(level.setTextureImage(0, {image.data(), image.size()}) == ARX_OK);
+    REQUIRE(level.setTextureImage(0, {image.data(), image.size()}));
     Portal distance_portal = portal(0, 1);
     for (ArxVector3& position : distance_portal.vertices) {
       position.x += 100.0f;
@@ -726,7 +757,7 @@ TEST_SUITE("Level edit API") {
     Level::VertexWeldOptions options;
     options.radius = 0.2f;
     options.degenerate_faces = Level::DegenerateFacePolicy::kDiscard;
-    REQUIRE(level.weldVertices(options) == ARX_OK);
+    REQUIRE(level.weldVertices(options));
 
     REQUIRE(level.faceCount() == 1);
     CHECK(test::faceRoom(level, 0) == 1);
@@ -737,17 +768,15 @@ TEST_SUITE("Level edit API") {
     CHECK(test::roomDistances(level)[0].distance == doctest::Approx(10.0f));
     CHECK(test::texture(level, 0).path == "graph/obj3d/textures/weld.bmp");
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
   }
 
   TEST_CASE("Face edits replace corner normals directly") {
     Level level = makeLevelWithRoomAndTriangle();
-    ArxLevelFace face{};
-    REQUIRE(level.copyFaces(0, 1, &face) == ARX_OK);
+    ArxLevelFace face = level.faces()[0];
     face.corners[0].normal = {1.0f, 0.0f, 0.0f};
-    REQUIRE(level.setFace(0, face) == ARX_OK);
-    face = {};
-    REQUIRE(level.copyFaces(0, 1, &face) == ARX_OK);
+    REQUIRE(level.setFace(0, face));
+    face = level.faces()[0];
     CHECK(face.corners[0].normal == ArxVector3{1.0f, 0.0f, 0.0f});
   }
 
@@ -781,14 +810,14 @@ TEST_SUITE("Level edit API") {
 
     Level::VertexWeldOptions options;
     options.radius = 0.1f;
-    REQUIRE(level.weldVertices(options) == ARX_OK);
+    REQUIRE(level.weldVertices(options));
 
     const VertexIndex shared = test::face(level, 0).corners[0].vertex;
     CHECK(test::face(level, 1).corners[0].vertex == shared);
     CHECK(test::face(level, 2).corners[0].vertex == shared);
     CHECK(test::vertex(level, shared).position.x == doctest::Approx(1.0f));
     CHECK(level.vertexCount() == 5);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
   }
 
   TEST_CASE("Portal snapping preserves room distances and rejects invalid options atomically") {
@@ -811,13 +840,13 @@ TEST_SUITE("Level edit API") {
     const std::array<RoomDistance, 1> distances = {{{.distance = 0.0f, .low_room_portal = 0, .high_room_portal = 0}}};
     REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
 
-    REQUIRE(level.snapGeometryToPortals({.radius = 0.5f}) == ARX_OK);
+    REQUIRE(level.snapGeometryToPortals({.radius = 0.5f}));
     CHECK(test::vertex(level, 0).position == ArxVector3{0.0f, 0.5f, 0.5f});
     REQUIRE(test::roomDistances(level).size() == 1);
     CHECK(test::roomDistances(level)[0].low_room_portal == 0);
 
     const ArxVector3 snapped = test::vertex(level, 0).position;
-    CHECK(level.snapGeometryToPortals({.radius = 0.0f}) == ARX_INVALID_OPTIONS);
+    CHECK(level.snapGeometryToPortals({.radius = 0.0f}).code() == ARX_INVALID_OPTIONS);
     CHECK(test::vertex(level, 0).position == snapped);
   }
 
@@ -830,12 +859,14 @@ TEST_SUITE("Level edit API") {
     const std::array<RoomDistance, 1> distances = {{{.distance = 0.0f, .low_room_portal = 0, .high_room_portal = 0}}};
     REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
 
-    REQUIRE(level.flattenPortals() == ARX_OK);
+    REQUIRE(level.flattenPortals());
     CHECK(test::portal(level, 0).vertices[2] == ArxVector3{1.0f, 1.0f, 0.0f});
-    CHECK(level.roomDistanceCount() == 0);
+    CHECK(level.roomDistanceCount() == 1);
+    REQUIRE(test::roomDistance(level, 0, 1).has_value());
+    CHECK(test::roomDistance(level, 0, 1)->distance == doctest::Approx(-1.0f));
 
     REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
-    REQUIRE(level.flattenPortals() == ARX_OK);
+    REQUIRE(level.flattenPortals());
     CHECK(level.roomDistanceCount() == 1);
   }
 
@@ -848,7 +879,7 @@ TEST_SUITE("Level edit API") {
     const std::array<RoomDistance, 1> distances = {{{.distance = 0.0f, .low_room_portal = 0, .high_room_portal = 0}}};
     REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
 
-    CHECK(level.flattenPortals() == ARX_LEVEL_PORTAL_OUT_OF_BOUNDS);
+    CHECK(level.flattenPortals().code() == ARX_LEVEL_PORTAL_OUT_OF_BOUNDS);
     CHECK(test::portal(level, 0).vertices[2] == portal_value.vertices[2]);
     CHECK(level.roomDistanceCount() == 1);
   }
@@ -865,27 +896,69 @@ TEST_SUITE("Level edit API") {
 
     Level::VertexWeldOptions options;
     options.radius = 0.1f;
-    REQUIRE(level.weldVertices(options) == ARX_OK);
+    REQUIRE(level.weldVertices(options));
 
     REQUIRE(level.faceCount() == 1);
     CHECK(level.vertexCount() == 3);
     CHECK(test::face(level, 0).corners[0].vertex != test::face(level, 0).corners[1].vertex);
-    CHECK(level.validateMesh() == ARX_OK);
+    CHECK(level.validateMesh().code() == ARX_OK);
   }
 
   TEST_CASE("Vertex edits eagerly invalidate cached face validity") {
     Level level = makeLevelWithRoomAndTriangle();
-    REQUIRE(level.validate() == ARX_OK);
+    REQUIRE(level.validate());
 
     Vertex moved = test::vertex(level, 2);
     moved.position = {2.0f, 0.0f, 0.0f};
     REQUIRE(test::setVertex(level, 2, moved) == ARX_OK);
-    CHECK(level.validateVertices() == ARX_OK);
-    CHECK(level.validateFaces() == ARX_LEVEL_DEGENERATE_FACE);
+    CHECK(level.validateVertices().code() == ARX_OK);
+    CHECK(level.validateFaces().code() == ARX_LEVEL_DEGENERATE_FACE);
 
     moved.position = {0.0f, 0.0f, 1.0f};
     REQUIRE(test::setVertex(level, 2, moved) == ARX_OK);
-    CHECK(level.validateFaces() == ARX_OK);
+    CHECK(level.validateFaces().code() == ARX_OK);
+  }
+
+  TEST_CASE("Owning Level operations report prerequisite validation failures once") {
+    Level level = makeLevelWithRoomAndTriangle();
+    const std::vector<std::uint8_t> image = makeTestBmp();
+    REQUIRE(level.setMinimap({image.data(), image.size()}, {{0.0f, 0.0f}, {25.0f, 25.0f}}));
+
+    Vertex moved = test::vertex(level, 2);
+    moved.position = test::vertex(level, 1).position;
+    REQUIRE(test::setVertex(level, 2, moved) == ARX_OK);
+    const ArxReturnCode mesh_error = level.validateMesh().code();
+    REQUIRE(mesh_error != ARX_OK);
+
+    const auto expect_one_source_trace = [&](auto&& operation) {
+      ErrorLogCapture logs;
+      CHECK(operation().code() == mesh_error);
+      CHECK(logs.errors == 0);
+      CHECK(logs.sourceFailures() == 1);
+    };
+    expect_one_source_trace([&] { return level.setMinimapFromProjection({image.data(), image.size()}, {}); });
+    expect_one_source_trace([&] { return level.renderMinimap(); });
+    expect_one_source_trace([&] {
+      Level::MinimapRenderOptions options;
+      options.mode = level_images::MinimapRenderMode::kGame;
+      options.projection_offset = ArxVector2{};
+      return level.renderMinimap(options);
+    });
+    expect_one_source_trace([&] { return level.weldVertices(); });
+    expect_one_source_trace([&] { return level.snapGeometryToPortals(); });
+
+    Level portal_level = makeLevelWithRoomAndTriangle();
+    REQUIRE(test::addRoom(portal_level, {"second"}) == 1);
+    REQUIRE(test::addPortal(portal_level, portal(0, 1)) == 0);
+    level_debug::LevelDebugAccess::modules(portal_level).rooms.portals[0].room_1 = kInvalidRoomIndex;
+    level_debug::LevelDebugAccess::validation(portal_level) = {};
+    const ArxReturnCode portal_error = portal_level.validatePortals().code();
+    REQUIRE(portal_error != ARX_OK);
+
+    ErrorLogCapture logs;
+    CHECK(portal_level.flattenPortals().code() == portal_error);
+    CHECK(logs.errors == 0);
+    CHECK(logs.sourceFailures() == 1);
   }
 
   TEST_CASE("Locally complete item edits repair identifiers before mutation") {
@@ -895,14 +968,14 @@ TEST_SUITE("Level edit API") {
     mesh.textures.push_back({"graph/tex.bmp"});
     mesh.faces[0].texture = 0;
     REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
-    REQUIRE(level.validate() == ARX_OK);
+    REQUIRE(level.validate());
 
     CHECK(test::setTexture(level, 0, {""}) == ARX_LEVEL_BAD_TEXTURE_PATH);
     CHECK(test::texture(level, 0).path == "graph/tex.bmp");
     REQUIRE(test::setTexture(level, 0, {"graph/bad__texture.bmp"}) == ARX_OK);
     CHECK(test::texture(level, 0).path == "graph/bad__texture.bmp");
     REQUIRE(test::setTexture(level, 0, {"graph/fixed.bmp"}) == ARX_OK);
-    CHECK(level.validateFaces() == ARX_OK);
+    CHECK(level.validateFaces().code() == ARX_OK);
 
     REQUIRE(test::setRoom(level, 0, {""}) == ARX_OK);
     CHECK(test::room(level, 0).name == "unnamed");
@@ -914,23 +987,21 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::setRoom(level, 3, {"room"}) == ARX_OK);
     CHECK(test::room(level, 3).name == "room_1");
     REQUIRE(test::setRoom(level, 3, {"renamed"}) == ARX_OK);
-    CHECK(level.validateFaceRooms() == ARX_OK);
+    CHECK(level.validateFaceRooms().code() == ARX_OK);
   }
 
   TEST_CASE("LevelAllowsAtMost254Rooms") {
     Level level;
     for (std::size_t i = 0; i < 254; ++i) {
       const std::string name = "room_" + std::to_string(i);
-      RoomIndex index = kInvalidRoomIndex;
-      REQUIRE(level.addRoom({{name.data(), name.size()}}, index) == ARX_OK);
-      REQUIRE(index == i);
+      auto result = level.addRoom({{name.data(), name.size()}});
+      REQUIRE(result);
+      REQUIRE(*result == i);
     }
-    CHECK(level.validateRooms() == ARX_OK);
+    CHECK(level.validateRooms().code() == ARX_OK);
 
     constexpr char kOverflowName[] = "overflow";
-    RoomIndex index = kInvalidRoomIndex;
-    CHECK(level.addRoom({{kOverflowName, sizeof(kOverflowName) - 1U}}, index) == ARX_LEVEL_TOO_MANY_ROOMS);
-    CHECK(index == kInvalidRoomIndex);
+    CHECK(level.addRoom({{kOverflowName, sizeof(kOverflowName) - 1U}}).code() == ARX_LEVEL_TOO_MANY_ROOMS);
     CHECK(level.roomCount() == 254);
   }
 
@@ -938,7 +1009,7 @@ TEST_SUITE("Level edit API") {
     Level level = makeLevelWithRoomAndTriangle();
     REQUIRE(test::addRoom(level, {"second"}) == 1);
     REQUIRE(test::addPortal(level, portal(0, 1)) == 0);
-    REQUIRE(level.validatePortals() == ARX_OK);
+    REQUIRE(level.validatePortals());
     CHECK(test::addPortal(level, portal(0, 1)) == 1);
     CHECK(test::portal(level, 1).name == "portal_1");
 
@@ -966,12 +1037,12 @@ TEST_SUITE("Level edit API") {
     replacement.name = "door";
     CHECK(test::setPortal(level, 0, replacement) == ARX_OK);
     CHECK(test::portal(level, 0).name == "door");
-    CHECK(level.validatePortals() == ARX_OK);
+    CHECK(level.validatePortals().code() == ARX_OK);
   }
 
   TEST_CASE("Bounds validation is independent from face validity") {
     Level level = makeLevelWithRoomAndTriangle();
-    REQUIRE(level.validate() == ARX_OK);
+    REQUIRE(level.validate());
 
     Vertex duplicate = test::vertex(level, 2);
     duplicate.position = test::vertex(level, 0).position;
@@ -987,12 +1058,12 @@ TEST_SUITE("Level edit API") {
     Anchor authored;
     authored.position = {0.75f, 0.0f, 0.0f};
     REQUIRE(test::addAnchor(level, authored) == 0);
-    REQUIRE(level.validateAnchors() == ARX_OK);
+    REQUIRE(level.validateAnchors());
 
     Vertex moved = test::vertex(level, 1);
     moved.position.x = 0.5f;
     REQUIRE(test::setVertex(level, 1, moved) == ARX_OK);
-    CHECK(level.validateAnchors() == ARX_OK);
+    CHECK(level.validateAnchors().code() == ARX_OK);
   }
 
   TEST_CASE("Anchor validation uses native XZ bounds instead of referenced geometry") {
@@ -1001,11 +1072,11 @@ TEST_SUITE("Level edit API") {
     authored.position = {2.0f, 0.0f, 0.0f};
 
     REQUIRE(test::addAnchor(level, authored) == 0);
-    CHECK(level.validateAnchors() == ARX_OK);
+    CHECK(level.validateAnchors().code() == ARX_OK);
 
     authored.position.x = -0.01f;
     REQUIRE(test::setAnchor(level, 0, authored) == ARX_OK);
-    CHECK(level.validateAnchors() == ARX_LEVEL_ANCHOR_OUT_OF_BOUNDS);
+    CHECK(level.validateAnchors().code() == ARX_LEVEL_ANCHOR_OUT_OF_BOUNDS);
   }
 
   TEST_CASE("Strict interior vertex updates expand cached full bounds") {
@@ -1033,7 +1104,7 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Clears mesh and generated dependent data explicitly") {
     Level level = makeLevelWithRoomAndTriangle();
     CHECK(test::addRoom(level, {"second"}) == 1);
-    CHECK(level.setCornerColor(0, 0, {0.5f, 0.5f, 0.5f}) == ARX_OK);
+    CHECK(level.setCornerColor(0, 0, {0.5f, 0.5f, 0.5f}).code() == ARX_OK);
     std::array<RoomDistance, 1> distances = {{{.distance = -1.0f}}};
     CHECK(test::replaceRoomDistances(level, distances) == ARX_OK);
     CHECK(test::setNavSurface(level, navSurface()) == ARX_OK);
@@ -1052,7 +1123,7 @@ TEST_SUITE("Level edit API") {
     CHECK(level.anchorCount() == 0);
     CHECK(level.anchorConnectionCount() == 0);
     CHECK(level.roomDistanceCount() == 1);
-    CHECK(level.validateMesh() == ARX_LEVEL_NO_GEOMETRY);
+    CHECK(level.validateMesh().code() == ARX_LEVEL_NO_GEOMETRY);
     CHECK_FALSE(level.bounds().has_value());
     CHECK_FALSE(level.referencedBounds().has_value());
   }
@@ -1061,9 +1132,9 @@ TEST_SUITE("Level edit API") {
     Level level = makeLevelWithRoomAndTriangle();
     CHECK(test::addRoom(level, {"middle"}) == 1);
     CHECK(test::addRoom(level, {"last"}) == 2);
-    CHECK(level.setFaceRoom(0, 2) == ARX_OK);
+    CHECK(level.setFaceRoom(0, 2).code() == ARX_OK);
     CHECK(test::faceRoom(level, 0) == 2);
-    CHECK(level.setFaceRoom(0, 0) == ARX_OK);
+    CHECK(level.setFaceRoom(0, 0).code() == ARX_OK);
     CHECK(level.faceCount() == 1);
     Portal first_portal = portal(0, 1);
     first_portal.name = "first";
@@ -1079,15 +1150,18 @@ TEST_SUITE("Level edit API") {
                                               {.distance = -1.0f, .low_room_portal = 1, .high_room_portal = 1}}};
     CHECK(test::replaceRoomDistances(level, distances) == ARX_OK);
 
-    CHECK(level.removeRoom(0) == ARX_LEVEL_BAD_FACE_ROOM_INDEX);
+    CHECK(level.removeRoom(0).code() == ARX_LEVEL_BAD_FACE_ROOM_INDEX);
     REQUIRE(level.roomCount() == 3);
 
-    CHECK(level.removeRoom(1) == ARX_OK);
+    CHECK(level.removeRoom(1).code() == ARX_OK);
     REQUIRE(level.roomCount() == 2);
     REQUIRE(level.portalCount() == 1);
     CHECK(test::portal(level, 0).room_1 == 0);
     CHECK(test::portal(level, 0).room_2 == 1);
-    CHECK(level.roomDistanceCount() == 0);
+    CHECK(level.roomDistanceCount() == 1);
+    REQUIRE(test::roomDistance(level, 0, 1).has_value());
+    CHECK(test::roomDistance(level, 0, 1)->portal_a == kInvalidPortalIndex);
+    CHECK(test::roomDistance(level, 0, 1)->portal_b == kInvalidPortalIndex);
   }
 
   TEST_CASE("Room distances follow room and portal topology") {
@@ -1105,11 +1179,15 @@ TEST_SUITE("Level edit API") {
     Portal moved = renamed;
     for (ArxVector3& vertex : moved.vertices) vertex.x += 1.0f;
     REQUIRE(test::setPortal(level, 0, moved) == ARX_OK);
-    CHECK(level.roomDistanceCount() == 0);
+    CHECK(level.roomDistanceCount() == 1);
+    REQUIRE(test::roomDistance(level, 0, 1).has_value());
+    CHECK(test::roomDistance(level, 0, 1)->distance == doctest::Approx(-1.0f));
 
     REQUIRE(test::replaceRoomDistances(level, distances) == ARX_OK);
     REQUIRE(test::addRoom(level, {"third"}) == 2);
-    CHECK(level.roomDistanceCount() == 0);
+    CHECK(level.roomDistanceCount() == 3);
+    REQUIRE(test::roomDistance(level, 0, 2).has_value());
+    CHECK(test::roomDistance(level, 0, 2)->distance == doctest::Approx(-1.0f));
   }
 
   TEST_CASE("Room distance API preserves canonical room pairs") {
@@ -1141,25 +1219,28 @@ TEST_SUITE("Level edit API") {
         {2, 0, 20.0f, 2, 0},
         {2, 1, 30.0f, 1, 0},
     }};
-    CHECK(level.replaceRoomDistances(reversed.data(), reversed.size()) == ARX_OK);
+    CHECK(level.replaceRoomDistances(reversed).code() == ARX_OK);
     REQUIRE(test::roomDistance(level, 0, 1).has_value());
     CHECK(test::roomDistance(level, 0, 1)->portal_a == 1);
     CHECK(test::roomDistance(level, 0, 1)->portal_b == 2);
 
-    CHECK(level.setRoomDistance({2, 0, 40.0f, 2, 0}) == ARX_OK);
+    CHECK(level.setRoomDistance({2, 0, 40.0f, 2, 0}).code() == ARX_OK);
     REQUIRE(test::roomDistance(level, 0, 2).has_value());
     CHECK(test::roomDistance(level, 0, 2)->distance == doctest::Approx(40.0f));
     CHECK(test::roomDistance(level, 0, 2)->portal_a == 0);
     CHECK(test::roomDistance(level, 0, 2)->portal_b == 2);
-    CHECK(level.setRoomDistance({0, 2, 40.0f, 0, 0}) == ARX_LEVEL_BAD_ROOM_DISTANCE);
+    CHECK(level.setRoomDistance({0, 2, 40.0f, 0, 0}).code() == ARX_LEVEL_BAD_ROOM_DISTANCE);
 
     std::array<RoomDistance, 1> incomplete = {{{.distance = 10.0f}}};
     CHECK(test::replaceRoomDistances(level, incomplete) == ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT);
     REQUIRE(level.roomDistanceCount() == 3);
 
     level.clearRoomDistances();
-    CHECK(level.roomDistanceCount() == 0);
-    CHECK_FALSE(test::roomDistance(level, 0, 1).has_value());
+    CHECK(level.roomDistanceCount() == 3);
+    REQUIRE(test::roomDistance(level, 0, 1).has_value());
+    CHECK(test::roomDistance(level, 0, 1)->distance == doctest::Approx(-1.0f));
+    CHECK(test::roomDistance(level, 0, 1)->portal_a == kInvalidPortalIndex);
+    CHECK(test::roomDistance(level, 0, 1)->portal_b == kInvalidPortalIndex);
   }
 
   TEST_CASE("Anchor edits keep connections sorted and remapped") {
@@ -1169,16 +1250,14 @@ TEST_SUITE("Level edit API") {
     CHECK(test::addAnchor(level, anchor(2.0f)) == 2);
     CHECK(test::addAnchorConnection(level, {1, 2}) == 0);
     CHECK(test::addAnchorConnection(level, {0, 2}) == 0);
-    AnchorConnectionIndex duplicate = kInvalidAnchorConnectionIndex;
-    CHECK(level.addAnchorConnection({0, 2}, duplicate) == ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION);
-    CHECK(duplicate == kInvalidAnchorConnectionIndex);
+    CHECK(level.addAnchorConnection({0, 2}).code() == ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION);
     REQUIRE(level.anchorConnectionCount() == 2);
     CHECK(test::anchorConnection(level, 0).first == 0);
     CHECK(test::anchorConnection(level, 0).second == 2);
     CHECK(test::anchorConnection(level, 1).first == 1);
     CHECK(test::anchorConnection(level, 1).second == 2);
 
-    CHECK(level.removeAnchor(1) == ARX_OK);
+    CHECK(level.removeAnchor(1).code() == ARX_OK);
     REQUIRE(level.anchorCount() == 2);
     REQUIRE(level.anchorConnectionCount() == 1);
     CHECK(test::anchorConnection(level, 0).first == 0);
@@ -1254,21 +1333,26 @@ TEST_SUITE("Level edit API") {
 
   TEST_CASE("Corner color edits use current mesh shape") {
     Level level = makeLevelWithRoomAndTriangle();
-    CHECK(test::cornerColors(level).empty());
+    REQUIRE(test::cornerColors(level).size() == 3);
     CHECK(test::cornerColor(level, 0, 0).r == doctest::Approx(0.5f));
 
-    CHECK(level.setCornerColor(0, 1, {0.1f, 0.2f, 0.3f}) == ARX_OK);
+    CHECK(level.setCornerColor(0, 1, {0.1f, 0.2f, 0.3f}).code() == ARX_OK);
     REQUIRE(test::cornerColors(level).size() == 3);
     CHECK(test::cornerColor(level, 0, 1).g == doctest::Approx(0.2f));
     CHECK(test::cornerColor(level, 0, 0).r == doctest::Approx(0.5f));
 
-    CHECK(level.setCornerColor(1, 0, {0.1f, 0.2f, 0.3f}) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(level.setCornerColor(0, 3, {0.1f, 0.2f, 0.3f}) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(level.setCornerColor(0, 0, {1.1f, 0.0f, 0.0f}) == ARX_LEVEL_BAD_CORNER_COLOR);
+    CHECK(level.setCornerColor(1, 0, {0.1f, 0.2f, 0.3f}).code() == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(level.setCornerColor(0, 3, {0.1f, 0.2f, 0.3f}).code() == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(level.setCornerColor(0, 0, {1.1f, 0.0f, 0.0f}).code() == ARX_LEVEL_BAD_CORNER_COLOR);
     CHECK(test::cornerColor(level, 0, 1).g == doctest::Approx(0.2f));
 
-    level.clearCornerColors();
-    CHECK(test::cornerColors(level).empty());
+    level.resetCornerColors();
+    REQUIRE(test::cornerColors(level).size() == 3);
+    for (const ArxColor3 color : test::cornerColors(level)) {
+      CHECK(color.r == doctest::Approx(0.5f));
+      CHECK(color.g == doctest::Approx(0.5f));
+      CHECK(color.b == doctest::Approx(0.5f));
+    }
   }
 
   TEST_CASE("Light edits validate individual lights") {
@@ -1295,8 +1379,8 @@ TEST_SUITE("Level edit API") {
     CHECK(test::light(level, 2).name == "unnamed");
     CHECK(test::addLight(level, light("light__one")) == 3);
     CHECK(test::light(level, 3).name == "light_one");
-    CHECK(level.removeLight(4) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(level.removeLight(0) == ARX_OK);
+    CHECK(level.removeLight(4).code() == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(level.removeLight(0).code() == ARX_OK);
     CHECK(level.lightCount() == 3);
   }
 
@@ -1305,7 +1389,7 @@ TEST_SUITE("Level edit API") {
     bool has_usable_spawn = true;
     CHECK(test::playerSpawn(level, &has_usable_spawn).position.x == doctest::Approx(0.0f));
     CHECK_FALSE(has_usable_spawn);
-    CHECK(level.validatePlayerSpawn() == ARX_OK);
+    CHECK(level.validatePlayerSpawn().code() == ARX_OK);
 
     PlayerSpawn spawn;
     spawn.position = {1.0f, 2.0f, 3.0f};
@@ -1356,7 +1440,7 @@ TEST_SUITE("Level edit API") {
     authored.name = "human_base";
     REQUIRE(test::addEntity(level, authored) == 3);
     CHECK(test::entity(level, 3).name == "human_base");
-    CHECK(level.validateEntities() == ARX_OK);
+    CHECK(level.validateEntities().code() == ARX_OK);
   }
 
   TEST_CASE("Entity collision suffixes preserve the identifier length limit") {
@@ -1369,7 +1453,7 @@ TEST_SUITE("Level edit API") {
     const Entity duplicate = test::entity(level, 1);
     CHECK(duplicate.name.size() == 1023);
     CHECK(duplicate.name.ends_with("_1"));
-    CHECK(level.validateEntities() == ARX_OK);
+    CHECK(level.validateEntities().code() == ARX_OK);
   }
 
   TEST_CASE("Scene collection edits validate module invariants") {
@@ -1398,8 +1482,8 @@ TEST_SUITE("Level edit API") {
     bad_entity.name = "entity__one";
     REQUIRE(test::setEntity(level, 0, bad_entity) == ARX_OK);
     CHECK(test::entity(level, 0).name == "entity_one");
-    CHECK(level.removeEntity(2) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(level.removeEntity(0) == ARX_OK);
+    CHECK(level.removeEntity(2).code() == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(level.removeEntity(0).code() == ARX_OK);
 
     Fog fog;
     fog.position = {1.0f, 2.0f, 3.0f};
@@ -1417,8 +1501,8 @@ TEST_SUITE("Level edit API") {
     CHECK(test::setFog(level, 0, fog) == ARX_OK);
     REQUIRE(test::setFog(level, 1, fog) == ARX_OK);
     CHECK(test::fog(level, 1).name == "mist_1");
-    CHECK(level.removeFog(1) == ARX_OK);
-    CHECK(level.removeFog(0) == ARX_OK);
+    CHECK(level.removeFog(1).code() == ARX_OK);
+    CHECK(level.removeFog(0).code() == ARX_OK);
 
     CHECK(test::addZone(level, zone()) == 0);
     CHECK(test::addZone(level, zone("ZONE")) == 1);
@@ -1436,7 +1520,7 @@ TEST_SUITE("Level edit API") {
     bad_zone.ambiance = ZoneAmbiance{"ambient?cave", 100.0f};
     CHECK(test::setZone(level, 0, bad_zone) == ARX_LEVEL_BAD_ZONE_AMBIANCE);
     CHECK(test::zone(level, 0).ambiance->name == "ambient__cave.v2");
-    CHECK(level.removeZone(0) == ARX_OK);
+    CHECK(level.removeZone(0).code() == ARX_OK);
 
     CHECK(test::addPath(level, path()) == 0);
     CHECK(test::addPath(level, path()) == 1);
@@ -1453,15 +1537,16 @@ TEST_SUITE("Level edit API") {
     CHECK(test::path(level, 1).name == "path");
     REQUIRE(test::setPath(level, 0, path()) == ARX_OK);
     CHECK(test::path(level, 0).name == "path_1");
-    CHECK(level.removePath(4) == ARX_OK);
-    CHECK(level.removePath(0) == ARX_OK);
+    CHECK(level.removePath(4).code() == ARX_OK);
+    CHECK(level.removePath(0).code() == ARX_OK);
   }
 
   TEST_CASE("Shared projection enums reject values outside their declared domains") {
     Level level;
-    RoomIndex room_index = kInvalidRoomIndex;
-    REQUIRE(level.addRoom({{"first", 5}}, room_index) == ARX_OK);
-    REQUIRE(level.addRoom({{"second", 6}}, room_index) == ARX_OK);
+    auto room_result = level.addRoom({{"first", 5}});
+    REQUIRE(room_result);
+    room_result = level.addRoom({{"second", 6}});
+    REQUIRE(room_result);
 
     ArxLevelPortal projected_portal{};
     projected_portal.name = {"portal", 6};
@@ -1472,12 +1557,12 @@ TEST_SUITE("Level edit API") {
     projected_portal.vertices[1] = {1.0f, 0.0f, 0.0f};
     projected_portal.vertices[2] = {1.0f, 1.0f, 0.0f};
     projected_portal.vertices[3] = {0.0f, 1.0f, 0.0f};
-    PortalIndex portal_index = kInvalidPortalIndex;
-    REQUIRE(level.addPortal(projected_portal, portal_index) == ARX_OK);
+    auto portal_result = level.addPortal(projected_portal);
+    REQUIRE(portal_result);
+    const PortalIndex portal_index = *portal_result;
     projected_portal.shape = ARX_PORTAL_TRIANGLE + 256U;
-    CHECK(level.setPortal(portal_index, projected_portal) == ARX_LEVEL_BAD_PORTAL_SHAPE);
-    CHECK(level.addPortal(projected_portal, portal_index) == ARX_LEVEL_BAD_PORTAL_SHAPE);
-    CHECK(portal_index == kInvalidPortalIndex);
+    CHECK(level.setPortal(portal_index, projected_portal).code() == ARX_LEVEL_BAD_PORTAL_SHAPE);
+    CHECK(level.addPortal(projected_portal).code() == ARX_LEVEL_BAD_PORTAL_SHAPE);
 
     const std::array<ArxVector2, 3> perimeter = {{{0.0f, 0.0f}, {1.0f, 0.0f}, {0.0f, 1.0f}}};
     ArxLevelZoneInput projected_zone{};
@@ -1486,20 +1571,20 @@ TEST_SUITE("Level edit API") {
     projected_zone.value.height_mode = ARX_ZONE_HEIGHT_FINITE;
     projected_zone.value.height = 1.0f;
     projected_zone.perimeter_xz = perimeter.data();
-    ZoneIndex zone_index = kInvalidZoneIndex;
-    REQUIRE(level.addZone(projected_zone, zone_index) == ARX_OK);
+    auto zone_result = level.addZone(projected_zone);
+    REQUIRE(zone_result);
+    const ZoneIndex zone_index = *zone_result;
     projected_zone.value.height_mode = ARX_ZONE_HEIGHT_FINITE + 256U;
-    CHECK(level.setZone(zone_index, projected_zone) == ARX_LEVEL_BAD_ZONE_HEIGHT_MODE);
-    CHECK(level.addZone(projected_zone, zone_index) == ARX_LEVEL_BAD_ZONE_HEIGHT_MODE);
-    CHECK(zone_index == kInvalidZoneIndex);
+    CHECK(level.setZone(zone_index, projected_zone).code() == ARX_LEVEL_BAD_ZONE_HEIGHT_MODE);
+    CHECK(level.addZone(projected_zone).code() == ARX_LEVEL_BAD_ZONE_HEIGHT_MODE);
 
     std::array<ArxLevelPathNode, 1> nodes{};
     ArxLevelPathInput projected_path{{"path", 4}, {}, nodes.data(), nodes.size()};
-    PathIndex path_index = kInvalidPathIndex;
-    REQUIRE(level.addPath(projected_path, path_index) == ARX_OK);
+    auto path_result = level.addPath(projected_path);
+    REQUIRE(path_result);
+    const PathIndex path_index = *path_result;
     nodes[0].type = 2U;
-    CHECK(level.setPath(path_index, projected_path) == ARX_LEVEL_BAD_PATH_NODE_TYPE);
-    CHECK(level.addPath(projected_path, path_index) == ARX_LEVEL_BAD_PATH_NODE_TYPE);
-    CHECK(path_index == kInvalidPathIndex);
+    CHECK(level.setPath(path_index, projected_path).code() == ARX_LEVEL_BAD_PATH_NODE_TYPE);
+    CHECK(level.addPath(projected_path).code() == ARX_LEVEL_BAD_PATH_NODE_TYPE);
   }
 }

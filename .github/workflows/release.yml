@@ -120,7 +120,9 @@ jobs:
 
   release:
     name: Publish release
-    needs: build
+    needs:
+      - build
+      - ci
     runs-on: ubuntu-24.04
     permissions:
       contents: write

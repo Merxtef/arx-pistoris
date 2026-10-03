@@ -6,7 +6,6 @@
 #include "arx_pistoris/animation.hpp"
 #include "arx_pistoris/animation/bake.hpp"
 #include "arx_pistoris/base/math.h"
-#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/model/bake.hpp"
 #include "arx_pistoris/model/glb.hpp"
@@ -29,7 +28,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -46,12 +44,11 @@ struct ModelBounds {
 };
 
 ModelBounds modelBounds(const pistoris::Model& model) {
-  REQUIRE(model.vertexCount() > 0);
-  std::vector<ArxModelVertex> vertices(model.vertexCount());
-  REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+  const auto vertices = model.vertices();
+  REQUIRE_FALSE(vertices.size() == 0);
 
-  ModelBounds result{vertices.front().position, vertices.front().position};
-  for (const ArxModelVertex& vertex : vertices) {
+  ModelBounds result{vertices[0].position, vertices[0].position};
+  for (const ArxModelVertex vertex : vertices) {
     result.minimum.x = std::min(result.minimum.x, vertex.position.x);
     result.minimum.y = std::min(result.minimum.y, vertex.position.y);
     result.minimum.z = std::min(result.minimum.z, vertex.position.z);
@@ -81,14 +78,14 @@ TEST_SUITE("model_corpus") {
 
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Ftl source;
-      if (!test_support::checkCorpusStatus(path, "read FTL", pistoris::readFtl(source_bytes, source))) continue;
+      auto source_result = pistoris::readFtl(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read FTL", source_result)) continue;
+      pistoris::Ftl source = std::move(*source_result);
 
-      pistoris::Model model;
       std::vector<std::string> texture_source_paths;
-      if (!test_support::checkCorpusStatus(
-              path, "import FTL into Model", pistoris::Model::importNative(model, source, &texture_source_paths)))
-        continue;
+      auto imported = pistoris::Model::importNative(source, &texture_source_paths);
+      if (!test_support::checkCorpusStatus(path, "import FTL into Model", imported)) continue;
+      pistoris::Model model = std::move(*imported);
       if (!test_support::checkCorpusStatus(path, "validate Model", model.validate())) continue;
       CHECK(model.resourcePath().empty());
       const std::optional<test_support::HydrationResult> hydration =
@@ -96,19 +93,16 @@ TEST_SUITE("model_corpus") {
       if (!hydration) continue;
       if (test_support::isCommittedFixture(path)) fixture_hydrations += hydration->hydrated;
 
-      pistoris::NativeModelBundle baked;
-      if (!test_support::checkCorpusStatus(
-              path, "bake Model to native bundle", model.bakeNativeBundle({.include_texture_files = true}, baked)))
-        continue;
+      auto baked_result = model.bakeNativeBundle({.include_texture_files = true});
+      if (!test_support::checkCorpusStatus(path, "bake Model to native bundle", baked_result)) continue;
+      pistoris::NativeModelBundle baked = std::move(*baked_result);
       if (!test_support::validateTextureFiles(model, std::span<const pistoris::NativeTextureFile>(baked.texture_files)))
         continue;
 
-      pistoris::Model roundtrip;
       std::vector<std::string> roundtrip_sources;
-      if (!test_support::checkCorpusStatus(path,
-                                           "import baked FTL into Model",
-                                           pistoris::Model::importNative(roundtrip, baked.ftl, &roundtrip_sources)))
-        continue;
+      auto roundtrip_result = pistoris::Model::importNative(baked.ftl, &roundtrip_sources);
+      if (!test_support::checkCorpusStatus(path, "import baked FTL into Model", roundtrip_result)) continue;
+      pistoris::Model roundtrip = std::move(*roundtrip_result);
       const std::optional<test_support::HydrationResult> roundtrip_hydration = test_support::hydrateTexturesFromFiles(
           roundtrip, roundtrip_sources, std::span<const pistoris::NativeTextureFile>(baked.texture_files));
       if (!roundtrip_hydration) continue;
@@ -136,27 +130,30 @@ TEST_SUITE("model_corpus") {
       if (!input) continue;
       const std::vector<pistoris::ObjMaterialLibraryView> material_libraries =
           test_support::objMaterialLibraryViews(*input);
-      pistoris::Model model;
       std::vector<std::string> texture_source_paths;
-      REQUIRE(pistoris::Model::importObj(model, input->obj, material_libraries, &texture_source_paths) == ARX_OK);
-      REQUIRE(model.validate() == ARX_OK);
+      auto imported = pistoris::Model::importObj(input->obj, material_libraries, &texture_source_paths);
+      REQUIRE(imported);
+      pistoris::Model model = std::move(*imported);
+      REQUIRE(model.validate());
       const std::optional<test_support::HydrationResult> hydration =
           test_support::hydrateTextures(model, fixture.obj.parent_path(), texture_source_paths);
       if (!hydration) continue;
       fixture_hydrations += hydration->hydrated;
 
-      pistoris::ObjBundle encoded;
-      REQUIRE(model.exportObj(fixture.obj.stem().string(), {.include_files = true}, encoded) == ARX_OK);
+      auto encoded_result = model.exportObj(fixture.obj.stem().string(), {.include_files = true});
+      REQUIRE(encoded_result);
+      pistoris::ObjBundle encoded = std::move(*encoded_result);
       if (!test_support::validateTextureFiles(model, std::span<const pistoris::ObjTextureFile>(encoded.texture_files)))
         continue;
 
-      pistoris::Model roundtrip;
       std::vector<std::string> roundtrip_sources;
-      REQUIRE(pistoris::Model::importObj(roundtrip, encoded.text, encoded.mtl, &roundtrip_sources) == ARX_OK);
+      auto roundtrip_result = pistoris::Model::importObj(encoded.text, encoded.mtl, &roundtrip_sources);
+      REQUIRE(roundtrip_result);
+      pistoris::Model roundtrip = std::move(*roundtrip_result);
       const std::optional<test_support::HydrationResult> roundtrip_hydration = test_support::hydrateTexturesFromFiles(
           roundtrip, roundtrip_sources, std::span<const pistoris::ObjTextureFile>(encoded.texture_files));
       if (!roundtrip_hydration) continue;
-      REQUIRE(roundtrip.validate() == ARX_OK);
+      REQUIRE(roundtrip.validate());
       CHECK(roundtrip_hydration->hydrated >= hydration->hydrated);
       test_support::checkModelsEquivalent(model, roundtrip, {.compare_external_texture_extensions = false});
     }
@@ -174,18 +171,20 @@ TEST_SUITE("model_corpus") {
       pistoris::Model::GlbExportOptions export_options;
       export_options.arx_units_per_glb_unit = fixture.glb.arx_units_per_glb_unit;
 
-      pistoris::Model model;
       std::vector<std::string> texture_source_paths;
-      REQUIRE(pistoris::Model::importGlb(
-                  model, test_support::readBytes(fixture.glb.path), import_options, &texture_source_paths) == ARX_OK);
-      REQUIRE(model.validate() == ARX_OK);
+      auto imported =
+          pistoris::Model::importGlb(test_support::readBytes(fixture.glb.path), import_options, &texture_source_paths);
+      REQUIRE(imported);
+      pistoris::Model model = std::move(*imported);
+      REQUIRE(model.validate());
       if (!test_support::hydrateTextures(model, fixture.glb.path.parent_path(), texture_source_paths)) continue;
 
-      std::vector<std::uint8_t> encoded;
-      REQUIRE(model.exportGlb(encoded, export_options) == ARX_OK);
-      pistoris::Model roundtrip;
-      REQUIRE(pistoris::Model::importGlb(roundtrip, encoded, import_options) == ARX_OK);
-      CHECK(roundtrip.validate() == ARX_OK);
+      auto encoded = model.exportGlb(export_options);
+      REQUIRE(encoded);
+      auto roundtrip_result = pistoris::Model::importGlb(*encoded, import_options);
+      REQUIRE(roundtrip_result);
+      pistoris::Model roundtrip = std::move(*roundtrip_result);
+      CHECK(roundtrip.validate());
       test_support::checkModelsEquivalent(model,
                                           roundtrip,
                                           {.compare_external_texture_extensions = false,
@@ -202,14 +201,15 @@ TEST_SUITE("model_corpus") {
 
       pistoris::Model::GlbImportOptions import_options;
       import_options.arx_units_per_glb_unit = fixture.glb.arx_units_per_glb_unit;
-      pistoris::Model authored;
-      REQUIRE(pistoris::Model::importGlb(authored, test_support::readBytes(fixture.glb.path), import_options) ==
-              ARX_OK);
+      auto authored_result = pistoris::Model::importGlb(test_support::readBytes(fixture.glb.path), import_options);
+      REQUIRE(authored_result);
+      pistoris::Model authored = std::move(*authored_result);
 
-      pistoris::Ftl native;
-      REQUIRE(pistoris::readFtl(test_support::readBytes(fixture.ftl), native) == ARX_OK);
-      pistoris::Model generated;
-      REQUIRE(pistoris::Model::importNative(generated, native) == ARX_OK);
+      auto native = pistoris::readFtl(test_support::readBytes(fixture.ftl));
+      REQUIRE(native);
+      auto generated_result = pistoris::Model::importNative(*native);
+      REQUIRE(generated_result);
+      pistoris::Model generated = std::move(*generated_result);
 
       checkBoundsEquivalent(modelBounds(authored), modelBounds(generated));
     }
@@ -231,22 +231,17 @@ TEST_SUITE("model_corpus") {
 
       pistoris::Model::GlbImportOptions import_options;
       import_options.arx_units_per_glb_unit = fixture.glb.arx_units_per_glb_unit;
-      pistoris::Model model;
-      std::vector<std::unique_ptr<pistoris::Animation>> animations;
       std::vector<std::string> texture_source_paths;
       std::vector<pistoris::AnimationSoundSourceReference> sound_sources;
-      REQUIRE(pistoris::Model::importGlb(model,
-                                         animations,
-                                         test_support::readBytes(fixture.glb.path),
-                                         import_options,
-                                         nullptr,
-                                         &texture_source_paths,
-                                         &sound_sources) == ARX_OK);
-      REQUIRE(model.validate() == ARX_OK);
+      auto imported = pistoris::Model::importGlbWithAnimations(
+          test_support::readBytes(fixture.glb.path), import_options, nullptr, &texture_source_paths, &sound_sources);
+      REQUIRE(imported);
+      pistoris::Model model = std::move(imported->model);
+      std::vector<pistoris::Animation> animations = std::move(imported->animations);
+      REQUIRE(model.validate());
       if (!test_support::hydrateTextures(model, fixture.glb.path.parent_path(), texture_source_paths)) continue;
-      for (const std::unique_ptr<pistoris::Animation>& animation : animations) {
-        REQUIRE(animation != nullptr);
-        REQUIRE(animation->validate() == ARX_OK);
+      for (const pistoris::Animation& animation : animations) {
+        REQUIRE(animation.validate());
       }
       const std::optional<test_support::HydrationResult> hydration =
           test_support::hydrateAnimationSounds(animations, fixture.glb.path.parent_path(), sound_sources);
@@ -255,19 +250,20 @@ TEST_SUITE("model_corpus") {
 
       for (const test_support::AnimationFixture* animation_fixture : animation_fixtures) {
         CAPTURE(animation_fixture->name);
-        const auto found = std::ranges::find_if(animations, [&](const std::unique_ptr<pistoris::Animation>& animation) {
-          return animation != nullptr && animation->name() == animation_fixture->name;
+        const auto found = std::ranges::find_if(animations, [&](const pistoris::Animation& animation) {
+          return animation.name() == animation_fixture->name;
         });
         REQUIRE(found != animations.end());
 
-        pistoris::NativeAnimationBundle baked;
-        REQUIRE((*found)->bakeNativeBundle({.include_sound_files = true}, baked) == ARX_OK);
-        if (!test_support::validateSoundFiles(**found, std::span<const pistoris::SoundFile>(baked.sound_files)))
+        auto baked_result = found->bakeNativeBundle({.include_sound_files = true});
+        REQUIRE(baked_result);
+        const pistoris::NativeAnimationBundle& baked = *baked_result;
+        if (!test_support::validateSoundFiles(*found, std::span<const pistoris::SoundFile>(baked.sound_files)))
           continue;
 
-        pistoris::Tea native;
-        REQUIRE(pistoris::readTea(test_support::readBytes(animation_fixture->tea), native) == ARX_OK);
-        test_support::checkEquivalent(native, baked.tea, {.comparison_epsilon = 1e-5f});
+        auto native = pistoris::readTea(test_support::readBytes(animation_fixture->tea));
+        REQUIRE(native);
+        test_support::checkEquivalent(*native, baked.tea, {.comparison_epsilon = 1e-5f});
       }
     }
     CHECK(fixture_count > 0);
@@ -285,25 +281,27 @@ TEST_SUITE("model_corpus") {
       if (animation_fixtures.empty()) continue;
       REQUIRE_FALSE(fixture.glb.empty());
 
-      pistoris::Ftl native_model;
-      REQUIRE(pistoris::readFtl(test_support::readBytes(fixture.ftl), native_model) == ARX_OK);
-      pistoris::Model model;
-      REQUIRE(pistoris::Model::importNative(model, native_model) == ARX_OK);
-      REQUIRE(model.setResourcePath(fixture.selector) == ARX_OK);
+      auto native_model = pistoris::readFtl(test_support::readBytes(fixture.ftl));
+      REQUIRE(native_model);
+      auto model_result = pistoris::Model::importNative(*native_model);
+      REQUIRE(model_result);
+      pistoris::Model model = std::move(*model_result);
+      REQUIRE(model.setResourcePath(fixture.selector));
 
-      std::vector<std::unique_ptr<pistoris::Animation>> animations;
-      std::vector<const pistoris::Animation*> views;
+      std::vector<pistoris::Animation> animations;
+      animations.reserve(animation_fixtures.size());
       std::size_t source_hydrations = 0;
       bool hydration_failed = false;
       for (const test_support::AnimationFixture* animation_fixture : animation_fixtures) {
-        pistoris::Tea native_animation;
-        REQUIRE(pistoris::readTea(test_support::readBytes(animation_fixture->tea), native_animation) == ARX_OK);
-        auto animation = std::make_unique<pistoris::Animation>();
+        auto native_animation = pistoris::readTea(test_support::readBytes(animation_fixture->tea));
+        REQUIRE(native_animation);
         std::vector<pistoris::SoundSourceReference> sound_sources;
-        REQUIRE(pistoris::Animation::importNative(*animation, native_animation, &sound_sources) == ARX_OK);
-        REQUIRE(animation->setResourcePath(animation_fixture->selector) == ARX_OK);
+        auto animation_result = pistoris::Animation::importNative(*native_animation, &sound_sources);
+        REQUIRE(animation_result);
+        pistoris::Animation animation = std::move(*animation_result);
+        REQUIRE(animation.setResourcePath(animation_fixture->selector));
         const std::optional<test_support::HydrationResult> hydration =
-            test_support::hydrateSounds(*animation,
+            test_support::hydrateSounds(animation,
                                         test_support::nativeMount(animation_fixture->tea),
                                         sound_sources,
                                         test_support::SoundSourceLayout::kNativeAnimation);
@@ -313,54 +311,50 @@ TEST_SUITE("model_corpus") {
         }
         source_hydrations += hydration->hydrated;
         fixture_hydrations += hydration->hydrated;
-        views.push_back(animation.get());
         animations.push_back(std::move(animation));
       }
       if (hydration_failed) continue;
 
-      pistoris::ModelGlbBundle bundle;
+      std::vector<const pistoris::Animation*> views;
+      views.reserve(animations.size());
+      for (const pistoris::Animation& animation : animations) views.push_back(&animation);
       pistoris::Model::GlbExportOptions export_options;
       export_options.arx_units_per_glb_unit = fixture.glb.arx_units_per_glb_unit;
-      REQUIRE(model.exportGlbBundle(views, export_options, nullptr, bundle) == ARX_OK);
+      auto bundle_result = model.exportGlbBundle(views, export_options, nullptr);
+      REQUIRE(bundle_result);
+      pistoris::ModelGlbBundle bundle = std::move(*bundle_result);
       if (!test_support::validateAnimationSoundFiles(views, bundle.sound_files)) continue;
 
-      pistoris::Model roundtrip;
-      std::vector<std::unique_ptr<pistoris::Animation>> roundtrip_animations;
       std::vector<std::string> texture_source_paths;
       std::vector<pistoris::AnimationSoundSourceReference> sound_sources;
       pistoris::Model::GlbImportOptions import_options;
       import_options.arx_units_per_glb_unit = fixture.glb.arx_units_per_glb_unit;
-      REQUIRE(pistoris::Model::importGlb(roundtrip,
-                                         roundtrip_animations,
-                                         bundle.glb,
-                                         import_options,
-                                         nullptr,
-                                         &texture_source_paths,
-                                         &sound_sources) == ARX_OK);
+      auto roundtrip_result = pistoris::Model::importGlbWithAnimations(
+          bundle.glb, import_options, nullptr, &texture_source_paths, &sound_sources);
+      REQUIRE(roundtrip_result);
+      pistoris::ModelGlbImport roundtrip = std::move(*roundtrip_result);
+      std::vector<pistoris::Animation>& roundtrip_animations = roundtrip.animations;
       REQUIRE(roundtrip_animations.size() == animations.size());
       std::size_t roundtrip_hydrations = 0;
       for (const pistoris::AnimationSoundSourceReference& source : sound_sources) {
         REQUIRE(source.animation_index < roundtrip_animations.size());
-        ArxSoundView sound{};
-        REQUIRE(roundtrip_animations[source.animation_index]->copySoundViews(source.reference.sound, 1, &sound) ==
-                ARX_OK);
+        const ArxSoundView sound = roundtrip_animations[source.animation_index].sounds()[source.reference.sound];
         if (sound.encoded_audio.size != 0) continue;
         const auto found = std::ranges::find_if(bundle.sound_files, [&](const pistoris::AnimationSoundFile& file) {
           return file.animation_index == source.animation_index &&
                  test_support::resourceKey(file.file.path) == test_support::resourceKey(source.reference.path);
         });
         if (found == bundle.sound_files.end()) continue;
-        REQUIRE(roundtrip_animations[source.animation_index]->setSoundData(
-                    source.reference.sound, {found->file.encoded_audio.data(), found->file.encoded_audio.size()}) ==
-                ARX_OK);
+        REQUIRE(roundtrip_animations[source.animation_index].setSoundData(
+            source.reference.sound, {found->file.encoded_audio.data(), found->file.encoded_audio.size()}));
         ++roundtrip_hydrations;
       }
       CHECK(roundtrip_hydrations >= source_hydrations);
       for (std::size_t index = 0; index < roundtrip_animations.size(); ++index) {
-        REQUIRE(roundtrip_animations[index]->validate() == ARX_OK);
+        REQUIRE(roundtrip_animations[index].validate());
         test_support::AnimationEquivalenceOptions equivalence;
         equivalence.comparison_epsilon = 1e-4f;
-        test_support::checkAnimationsEquivalent(*animations[index], *roundtrip_animations[index], equivalence);
+        test_support::checkAnimationsEquivalent(animations[index], roundtrip_animations[index], equivalence);
       }
     }
     CHECK(fixture_hydrations > 0);

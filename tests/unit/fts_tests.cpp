@@ -17,6 +17,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -48,7 +49,9 @@ void setTexturePath(pistoris::fts::Data& data, std::int32_t id, const char* path
 TEST_SUITE("fts") {
   static ArxReturnCode load(const std::vector<uint8_t>& buf, pistoris::fts::Data& d) {
     pistoris::ReadCursor c(buf.data(), buf.size());
-    return pistoris::loadFts(&d, c);
+    auto result = pistoris::loadFts(c);
+    if (result) d = std::move(*result);
+    return result.code();
   }
 
   TEST_CASE("FtsReadMinimal") {
@@ -83,6 +86,36 @@ TEST_SUITE("fts") {
     REQUIRE(out.cells[0].polygons.size() == 1);
     CHECK(out.cells[0].polygons[0].tex == 0);
     CHECK(out.cells[0].polygons[0].type == pistoris::kFaceBitDoublesided);
+  }
+
+  TEST_CASE("FtsDiscardsLegacySourceChecks") {
+    std::vector<std::uint8_t> bytes = makeMinimalFts();
+    FtsStorageHeader header;
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    header.count = 1;
+    std::memcpy(bytes.data(), &header, sizeof(header));
+    bytes.insert(bytes.begin() + sizeof(header), kFtsSourceCheckSize, 0x5A);
+
+    pistoris::fts::Data data;
+    REQUIRE(load(bytes, data) == ARX_OK);
+
+    pistoris::WriteCursor cursor;
+    REQUIRE(pistoris::saveFts(&data, cursor) == ARX_OK);
+    const std::vector<std::uint8_t> written = cursor.take();
+    REQUIRE(written.size() >= sizeof(FtsStorageHeader));
+    std::memcpy(&header, written.data(), sizeof(header));
+    CHECK(header.count == 0);
+  }
+
+  TEST_CASE("FtsRejectsTruncatedLegacySourceChecks") {
+    FtsStorageHeader header;
+    header.count = 1;
+    std::vector<std::uint8_t> bytes;
+    appendBytes(bytes, header);
+    bytes.insert(bytes.end(), kFtsSourceCheckSize - 1U, 0);
+
+    pistoris::fts::Data data;
+    CHECK(load(bytes, data) == ARX_UNEXPECTED_EOF);
   }
 
   TEST_CASE("FtsRejectsNegativeTextureIds") {
@@ -267,9 +300,12 @@ TEST_SUITE("fts") {
 
   TEST_CASE("FtsValidationReportsSpecificContainerErrors") {
     {
-      pistoris::fts::Data in = makeMinimalFtsData();
-      in.header.version = 0.0f;
-      CHECK(pistoris::validateFts(&in) == ARX_FTS_BAD_VERSION);
+      FtsStorageHeader header;
+      header.version = 0.0f;
+      std::vector<std::uint8_t> bytes;
+      appendBytes(bytes, header);
+      pistoris::fts::Data out;
+      CHECK(load(bytes, out) == ARX_FTS_BAD_VERSION);
     }
     {
       pistoris::fts::Data in = makeMinimalFtsData();
@@ -277,8 +313,8 @@ TEST_SUITE("fts") {
       CHECK(pistoris::validateFts(&in) == ARX_FTS_BAD_SCENE_OFFSET);
     }
     {
-      pistoris::fts::Header header;
-      header.count = static_cast<std::int32_t>(pistoris::kFtsMaxHeaderBlocks + 1U);
+      FtsStorageHeader header;
+      header.count = static_cast<std::int32_t>(pistoris::fts_detail::kMaxSourceChecks + 1U);
       std::vector<std::uint8_t> bytes;
       appendBytes(bytes, header);
       pistoris::fts::Data out;
@@ -302,7 +338,7 @@ TEST_SUITE("fts") {
     }
     {
       std::vector<std::uint8_t> bytes = makeMinimalFts();
-      const std::size_t info_offset = sizeof(pistoris::fts::Header) + sizeof(pistoris::fts::SceneHeader);
+      const std::size_t info_offset = sizeof(FtsStorageHeader) + sizeof(pistoris::fts::SceneHeader);
       pistoris::fts::SceneInfo info;
       std::memcpy(&info, bytes.data() + info_offset, sizeof(info));
       info.nbianchors = -1;
@@ -380,7 +416,7 @@ TEST_SUITE("fts") {
     {
       std::vector<std::uint8_t> bytes = makeMinimalFts();
       const std::size_t room_offset =
-          sizeof(pistoris::fts::Header) + sizeof(pistoris::fts::SceneHeader) + sizeof(pistoris::fts::SceneInfo);
+          sizeof(FtsStorageHeader) + sizeof(pistoris::fts::SceneHeader) + sizeof(pistoris::fts::SceneInfo);
       pistoris::fts::RoomData room;
       std::memcpy(&room, bytes.data() + room_offset, sizeof(room));
       room.num_portals = -1;
@@ -391,7 +427,7 @@ TEST_SUITE("fts") {
     {
       std::vector<std::uint8_t> bytes = makeMinimalFts();
       const std::size_t room_offset =
-          sizeof(pistoris::fts::Header) + sizeof(pistoris::fts::SceneHeader) + sizeof(pistoris::fts::SceneInfo);
+          sizeof(FtsStorageHeader) + sizeof(pistoris::fts::SceneHeader) + sizeof(pistoris::fts::SceneInfo);
       pistoris::fts::RoomData room;
       std::memcpy(&room, bytes.data() + room_offset, sizeof(room));
       room.num_polys = -1;
@@ -419,7 +455,7 @@ TEST_SUITE("fts") {
     setTexturePath(in, 2, "graph/obj3d/textures/two.bmp");
     std::vector<std::uint8_t> bytes = makeFtsBytes(in);
 
-    const std::size_t first_texture = sizeof(pistoris::fts::Header) + sizeof(pistoris::fts::SceneHeader);
+    const std::size_t first_texture = sizeof(FtsStorageHeader) + sizeof(pistoris::fts::SceneHeader);
     std::int32_t first_id = 0;
     std::memcpy(&first_id, bytes.data() + first_texture, sizeof(first_id));
     std::memcpy(bytes.data() + first_texture + sizeof(TextureRecord), &first_id, sizeof(first_id));
@@ -476,16 +512,19 @@ TEST_SUITE("fts") {
 
   TEST_CASE("FtsStaleUncompressedSizeStillParsesPlainPayload") {
     pistoris::fts::Data in = makeMinimalFtsData();
-    in.header.uncompressedsize = 1234;
     std::vector<uint8_t> bytes = makeFtsBytes(in);
+    FtsStorageHeader header;
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    header.uncompressed_size = 1234;
+    std::memcpy(bytes.data(), &header, sizeof(header));
 
     pistoris::fts::Data out;
     CHECK(load(bytes, out) == ARX_OK);
   }
 
   TEST_CASE("FtsStaleUncompressedSizeDoesNotMaskPlainParseFailure") {
-    pistoris::fts::Header header;
-    header.uncompressedsize = 128;
+    FtsStorageHeader header;
+    header.uncompressed_size = 128;
     std::vector<uint8_t> bytes;
     appendBytes(bytes, header);
     bytes.insert(bytes.end(), 16, 0xFF);
@@ -496,10 +535,13 @@ TEST_SUITE("fts") {
 
   TEST_CASE("FtsStaleUncompressedSizeDoesNotMislabelValidationFailure") {
     pistoris::fts::Data in = makeMinimalFtsData();
-    in.header.uncompressedsize = 128;
     in.portals.resize(1);
     in.scene.num_portals = 1;
     std::vector<uint8_t> bytes = makeFtsBytes(in);
+    FtsStorageHeader header;
+    std::memcpy(&header, bytes.data(), sizeof(header));
+    header.uncompressed_size = 128;
+    std::memcpy(bytes.data(), &header, sizeof(header));
 
     LogCapture logs;
     pistoris::fts::Data out;
@@ -511,7 +553,7 @@ TEST_SUITE("fts") {
     pistoris::fts::Data in = makeMinimalFtsData();
     std::vector<uint8_t> bytes = makeFtsBytes(in);
 
-    auto* scene = reinterpret_cast<pistoris::fts::SceneHeader*>(bytes.data() + sizeof(pistoris::fts::Header));
+    auto* scene = reinterpret_cast<pistoris::fts::SceneHeader*>(bytes.data() + sizeof(FtsStorageHeader));
     scene->sizex = -1;
 
     pistoris::fts::Data out;

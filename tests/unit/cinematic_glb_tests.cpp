@@ -9,6 +9,7 @@
 #include "arx_pistoris/cinematic.hpp"
 #include "arx_pistoris/cinematic/sound.hpp"
 #include "arx_pistoris/cinematic/types.h"
+#include "arx_pistoris/glb/location.hpp"
 #include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.hpp"
@@ -199,6 +200,44 @@ std::vector<std::uint8_t> replaceGlbJson(std::span<const std::uint8_t> source, c
   return result;
 }
 
+ArxReturnCode importGlb(pistoris::Cinematic& out, std::span<const std::uint8_t> encoded,
+                        std::vector<pistoris::CinematicSoundSourceReference>* sources = nullptr) {
+  auto result = pistoris::Cinematic::importGlb(encoded, sources);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode exportGlb(const pistoris::Cinematic& cinematic, std::vector<std::uint8_t>& out) {
+  auto result = cinematic.exportGlb();
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+template <class View, class Value>
+ArxReturnCode copyView(View view, std::size_t offset, std::size_t count, Value* out) {
+  if (offset > view.size() || count > view.size() - offset) return ARX_INDEX_OUT_OF_RANGE;
+  if (count != 0 && out == nullptr) return ARX_INVALID_DATA_POINTER;
+  for (std::size_t index = 0; index < count; ++index) out[index] = view[offset + index];
+  return ARX_OK;
+}
+
+ArxReturnCode copyKeyframes(const pistoris::Cinematic& cinematic, std::size_t offset, std::size_t count,
+                            ArxCinematicKeyframe* out) {
+  return copyView(cinematic.keyframes(), offset, count, out);
+}
+
+ArxReturnCode copyTextureViews(const pistoris::Cinematic& cinematic, std::size_t offset, std::size_t count,
+                               ArxTextureView* out) {
+  return copyView(cinematic.textures(), offset, count, out);
+}
+
+ArxReturnCode copySoundViews(const pistoris::Cinematic& cinematic, pistoris::SoundKind kind, std::size_t offset,
+                             std::size_t count, ArxCinematicSoundView* out) {
+  return copyView(cinematic.sounds(kind), offset, count, out);
+}
+
 struct DebugCapture {
   std::vector<std::string> messages;
   std::vector<std::string> info;
@@ -235,12 +274,6 @@ struct DebugCapture {
   bool containsInfo(std::string_view value) const {
     for (const std::string& message : info)
       if (message.find(value) != std::string::npos) return true;
-    return false;
-  }
-
-  bool containsError(std::string_view value) const {
-    for (const std::string& error : errors)
-      if (error.find(value) != std::string::npos) return true;
     return false;
   }
 };
@@ -311,8 +344,8 @@ TEST_SUITE("Cinematic GLB contract") {
     source.interpolation = pistoris::CinematicInterpolation::kBezier;
     source.outgoing_speed = 1.25f;
     source.base_effect = pistoris::CinematicBaseEffect::kFadeOut;
-    source.color = {1, 2, 3};
-    source.secondary_color = {4, 5, 6};
+    source.color = {0.1f, 0.2f, 0.3f};
+    source.secondary_color = {0.4f, 0.5f, 0.6f};
     source.crossfade = true;
     source.dream = true;
 
@@ -322,15 +355,15 @@ TEST_SUITE("Cinematic GLB contract") {
     CHECK(key.interpolation == pistoris::CinematicInterpolation::kBezier);
     CHECK(near(key.outgoing_speed, 1.25f));
     CHECK(key.base_effect == pistoris::CinematicBaseEffect::kFadeOut);
-    CHECK(key.color.r == 1);
-    CHECK(key.secondary_color.b == 6);
+    CHECK(near(key.color.r, 0.1f));
+    CHECK(near(key.secondary_color.b, 0.6f));
     CHECK(key.crossfade);
     CHECK(key.dream);
 
     REQUIRE(pistoris::glb_cinematic::parseKeyName("KEY_0__FADE_IN__COLOR_1_0.5_0__SECONDARY_0_0_0__key", key));
-    CHECK(key.color.r == 255);
-    CHECK(key.color.g == 128);
-    CHECK(key.color.b == 0);
+    CHECK(near(key.color.r, 1.0f));
+    CHECK(near(key.color.g, 0.5f));
+    CHECK(near(key.color.b, 0.0f));
     pistoris::CinematicKeyframe hidden_flash;
     hidden_flash.post_effect = pistoris::CinematicPostEffect::kSuppressFlash;
     CHECK(pistoris::glb_cinematic::flashName(hidden_flash) == "FLASH__HIDDEN__flash");
@@ -423,10 +456,10 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(near(cinematic.fps(), 30.0f));
     std::array<ArxCinematicKeyframe, 2> keys{};
-    REQUIRE(cinematic.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, keys.size(), keys.data()) == ARX_OK);
     CHECK(keys[0].interpolation == ARX_CINEMATIC_INTERPOLATION_BEZIER);
     CHECK(keys[0].post_effect == ARX_CINEMATIC_POST_EFFECT_SUPPRESS_FLASH);
     CHECK(keys[0].light_active == 1);
@@ -457,7 +490,7 @@ TEST_SUITE("Cinematic GLB contract") {
       builder.addChild(illustration, key);
       addValidKey(builder, illustration, 1);
       pistoris::Cinematic cinematic;
-      return pistoris::Cinematic::importGlb(cinematic, write(builder));
+      return importGlb(cinematic, write(builder));
     };
     CHECK(import_with_paths(0, "SOUND__EFFECT__sound") == ARX_GLB_BAD_CINEMATIC_HELPER);
     CHECK(import_with_paths(2, "SOUND__EFFECT__sound") == ARX_GLB_BAD_CINEMATIC_HELPER);
@@ -503,10 +536,10 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(logs.warnings.empty());
     std::array<ArxCinematicKeyframe, 2> keys{};
-    REQUIRE(cinematic.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, keys.size(), keys.data()) == ARX_OK);
     CHECK(keys[0].post_effect == ARX_CINEMATIC_POST_EFFECT_FLASH);
     CHECK(keys[0].light_active == 1);
     CHECK(keys[0].light.intensity < 0.0f);
@@ -533,9 +566,9 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     std::array<ArxCinematicKeyframe, 3> keys{};
-    REQUIRE(cinematic.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, keys.size(), keys.data()) == ARX_OK);
     CHECK(keys[0].frame == 0);
     CHECK(keys[1].frame == 5);
     CHECK(keys[2].frame == 10);
@@ -571,16 +604,18 @@ TEST_SUITE("Cinematic GLB contract") {
       addValidKey(builder, illustration, 0);
       DebugCapture logs;
       pistoris::Cinematic cinematic;
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_CINEMATIC_BAD_KEY_FRAME);
-      CHECK(logs.containsError("duplicate KEY frame 0"));
+      CHECK(importGlb(cinematic, write(builder)) == ARX_CINEMATIC_BAD_KEY_FRAME);
+      CHECK(logs.contains("duplicate KEY frame 0"));
+      CHECK(logs.errors.empty());
     }
     SUBCASE("negative first frame") {
       addValidKey(builder, illustration, -1);
       addValidKey(builder, illustration, 1);
       DebugCapture logs;
       pistoris::Cinematic cinematic;
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_CINEMATIC_BAD_KEY_FRAME);
-      CHECK(logs.containsError("KEY frame -1 is negative"));
+      CHECK(importGlb(cinematic, write(builder)) == ARX_CINEMATIC_BAD_KEY_FRAME);
+      CHECK(logs.contains("KEY frame -1 is negative"));
+      CHECK(logs.errors.empty());
     }
     SUBCASE("invalid key scale") {
       const int key = builder.addNode("KEY_0__key");
@@ -589,11 +624,18 @@ TEST_SUITE("Cinematic GLB contract") {
       std::vector<std::uint8_t> encoded = write(builder);
       nlohmann::json gltf = parseGlbJson(encoded);
       gltf["nodes"][static_cast<std::size_t>(key)]["scale"] = {0.0f, 1.0f, 1.0f};
+      encoded = replaceGlbJson(encoded, gltf);
       DebugCapture logs;
-      pistoris::Cinematic cinematic;
-      CHECK(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) ==
-            ARX_GLB_BAD_CINEMATIC_KEY_TRANSFORM);
-      CHECK(logs.containsError("KEY 'KEY_0__key' has an invalid transform or nonpositive scale"));
+      const auto result = pistoris::Cinematic::importGlb(encoded);
+      REQUIRE_FALSE(result);
+      REQUIRE(result.error() != nullptr);
+      CHECK(result.code() == ARX_GLB_BAD_CINEMATIC_KEY_TRANSFORM);
+      REQUIRE(result.error()->location().has_value());
+      CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+      CHECK(result.error()->location()->label == "KEY_0__key");
+      CHECK(result.error()->detail() == "KEY 'KEY_0__key' has an invalid transform or nonpositive scale");
+      CHECK(logs.contains("KEY 'KEY_0__key' has an invalid transform or nonpositive scale"));
+      CHECK(logs.errors.empty());
     }
     SUBCASE("claimed malformed helper") {
       const int key = builder.addNode("KEY_0__key");
@@ -602,7 +644,7 @@ TEST_SUITE("Cinematic GLB contract") {
       builder.addChild(illustration, key);
       addValidKey(builder, illustration, 1);
       pistoris::Cinematic cinematic;
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_HELPER);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_HELPER);
     }
   }
 
@@ -616,9 +658,9 @@ TEST_SUITE("Cinematic GLB contract") {
     }
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     std::vector<std::uint8_t> encoded;
-    REQUIRE(cinematic.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(cinematic, encoded) == ARX_OK);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
     REQUIRE(asset.data()->cameras_count == 1);
@@ -695,13 +737,13 @@ TEST_SUITE("Cinematic GLB contract") {
     }
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     std::array<ArxCinematicKeyframe, 2> keys{};
-    REQUIRE(cinematic.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, keys.size(), keys.data()) == ARX_OK);
     CHECK(near(keys[0].camera_position.z, -1.0f));
 
     std::vector<std::uint8_t> encoded;
-    REQUIRE(cinematic.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(cinematic, encoded) == ARX_OK);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
     const cgltf_node* exported_key = nullptr;
@@ -734,9 +776,9 @@ TEST_SUITE("Cinematic GLB contract") {
       }
 
       pistoris::Cinematic cinematic;
-      REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+      REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
       std::array<ArxCinematicKeyframe, 2> keys{};
-      REQUIRE(cinematic.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+      REQUIRE(copyKeyframes(cinematic, 0, keys.size(), keys.data()) == ARX_OK);
       CHECK(near(keys[0].camera_position.z, -2.0f));
       CHECK(near(keys[1].camera_position.z, -2.0f));
     }
@@ -761,9 +803,9 @@ TEST_SUITE("Cinematic GLB contract") {
       gltf["nodes"][illustration]["scale"] = scale;
       gltf["nodes"][key]["scale"] = {0.5f, 1.0f, 1.0f};
       pistoris::Cinematic cinematic;
-      REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
       ArxCinematicKeyframe imported{};
-      REQUIRE(cinematic.copyKeyframes(0, 1, &imported) == ARX_OK);
+      REQUIRE(copyKeyframes(cinematic, 0, 1, &imported) == ARX_OK);
       CHECK(near(imported.camera_position.x, 0.5f));
       CHECK(near(imported.camera_position.y, 0.25f));
       CHECK(near(imported.camera_position.z, expected_depth));
@@ -790,9 +832,9 @@ TEST_SUITE("Cinematic GLB contract") {
     gltf["nodes"][illustration]["scale"] = {2.0f, 3.0f, 4.0f};
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
     ArxCinematicKeyframe imported{};
-    REQUIRE(cinematic.copyKeyframes(0, 1, &imported) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, 1, &imported) == ARX_OK);
     CHECK(near(imported.camera_position.x, 0.5f));
     CHECK(near(imported.camera_position.y, 0.25f));
     CHECK(near(imported.camera_position.z, -0.75f));
@@ -812,18 +854,18 @@ TEST_SUITE("Cinematic GLB contract") {
     nlohmann::json gltf = parseGlbJson(encoded);
     gltf["nodes"][illustration]["scale"] = {2.0f, 1.0f, 1.0f};
     pistoris::Cinematic baseline;
-    REQUIRE(pistoris::Cinematic::importGlb(baseline, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(baseline, replaceGlbJson(encoded, gltf)) == ARX_OK);
     ArxCinematicKeyframe expected{};
-    REQUIRE(baseline.copyKeyframes(0, 1, &expected) == ARX_OK);
+    REQUIRE(copyKeyframes(baseline, 0, 1, &expected) == ARX_OK);
 
     gltf["nodes"][root]["translation"] = {20.0f, -3.0f, 5.0f};
     gltf["nodes"][root]["rotation"] = {0.0f, 0.0f, 0.70710678f, 0.70710678f};
     gltf["nodes"][illustration]["translation"] = {-4.0f, 7.0f, 2.0f};
     gltf["nodes"][illustration]["rotation"] = {0.0f, 0.70710678f, 0.0f, 0.70710678f};
     pistoris::Cinematic moved;
-    REQUIRE(pistoris::Cinematic::importGlb(moved, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(moved, replaceGlbJson(encoded, gltf)) == ARX_OK);
     ArxCinematicKeyframe imported{};
-    REQUIRE(moved.copyKeyframes(0, 1, &imported) == ARX_OK);
+    REQUIRE(copyKeyframes(moved, 0, 1, &imported) == ARX_OK);
     CHECK(near(imported.camera_position.x, expected.camera_position.x));
     CHECK(near(imported.camera_position.y, expected.camera_position.y));
     CHECK(near(imported.camera_position.z, expected.camera_position.z));
@@ -852,13 +894,11 @@ TEST_SUITE("Cinematic GLB contract") {
       nlohmann::json gltf = original;
       gltf["nodes"][illustration]["scale"] = invalid;
       pistoris::Cinematic cinematic;
-      CHECK(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) ==
-            ARX_GLB_BAD_CINEMATIC_ILLUSTRATION);
+      CHECK(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_CINEMATIC_ILLUSTRATION);
 
       gltf = original;
       gltf["nodes"][key]["scale"] = invalid;
-      CHECK(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) ==
-            ARX_GLB_BAD_CINEMATIC_KEY_TRANSFORM);
+      CHECK(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_CINEMATIC_KEY_TRANSFORM);
     }
   }
 
@@ -877,8 +917,9 @@ TEST_SUITE("Cinematic GLB contract") {
     addValidKey(builder, illustration, 10);
     pistoris::Cinematic cinematic;
     DebugCapture logs;
-    CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_KEY_PLACEMENT);
-    CHECK(logs.containsError("KEY_0__key"));
+    CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_KEY_PLACEMENT);
+    CHECK(logs.contains("KEY_0__key"));
+    CHECK(logs.errors.empty());
   }
 
   TEST_CASE("Reports missing and convention-looking key labels") {
@@ -894,7 +935,7 @@ TEST_SUITE("Cinematic GLB contract") {
     builder.addChild(illustration, last);
     pistoris::Cinematic cinematic;
     DebugCapture logs;
-    CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    CHECK(importGlb(cinematic, write(builder)) == ARX_OK);
     CHECK(logs.containsWarning("has no final label"));
     CHECK(logs.containsInfo("FINAL_LABEL"));
   }
@@ -909,7 +950,7 @@ TEST_SUITE("Cinematic GLB contract") {
     const std::vector<std::uint8_t> encoded = write(builder);
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    CHECK(pistoris::Cinematic::importGlb(cinematic, encoded) == ARX_GLB_BAD_CINEMATIC_KEY_NAME);
+    CHECK(importGlb(cinematic, encoded) == ARX_GLB_BAD_CINEMATIC_KEY_NAME);
     CHECK(logs.contains("processing root child node"));
     CHECK(logs.contains("processing illustration child node"));
     CHECK(logs.contains("KEY_bad__key' failed with code"));
@@ -942,9 +983,9 @@ TEST_SUITE("Cinematic GLB contract") {
     }
     const std::vector<std::uint8_t> encoded = write(builder);
     pistoris::Cinematic original;
-    REQUIRE(pistoris::Cinematic::importGlb(original, encoded) == ARX_OK);
+    REQUIRE(importGlb(original, encoded) == ARX_OK);
     std::array<ArxCinematicKeyframe, 3> keys{};
-    REQUIRE(original.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(original, 0, keys.size(), keys.data()) == ARX_OK);
     CHECK(near(keys[0].camera_position.z, 1.0f));
     CHECK(keys[0].light_active == 1);
     CHECK(keys[0].light.intensity < 0.0f);
@@ -953,35 +994,35 @@ TEST_SUITE("Cinematic GLB contract") {
     CHECK(near(keys[2].light.position.x, 100.0f));
     CHECK(std::abs(keys[2].light.position.y) <= 1.0e-4f);
     CHECK(near(keys[2].light.position.z, 0.0f));
-    CHECK(near(keys[2].light.color.r, 255.0f));
-    CHECK(near(keys[2].light.color.g, 127.5f));
+    CHECK(near(keys[2].light.color.r, 1.0f));
+    CHECK(near(keys[2].light.color.g, 0.5f));
 
     nlohmann::json gltf = parseGlbJson(encoded);
     for (float aspect_ratio : {1.0f, 4.0f / 3.0f, 16.0f / 10.0f, 21.0f / 9.0f, 24.0f / 10.0f}) {
       CAPTURE(aspect_ratio);
       gltf["cameras"][0]["perspective"]["aspectRatio"] = aspect_ratio;
       pistoris::Cinematic imported;
-      REQUIRE(pistoris::Cinematic::importGlb(imported, replaceGlbJson(encoded, gltf)) == ARX_OK);
-      REQUIRE(imported.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+      REQUIRE(importGlb(imported, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      REQUIRE(copyKeyframes(imported, 0, keys.size(), keys.data()) == ARX_OK);
       CHECK(near(keys[0].camera_position.z, 1.0f));
       CHECK(near(keys[2].light.position.x, 100.0f));
     }
 
     gltf["cameras"][0]["perspective"].erase("aspectRatio");
     pistoris::Cinematic without_aspect;
-    REQUIRE(pistoris::Cinematic::importGlb(without_aspect, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(without_aspect, replaceGlbJson(encoded, gltf)) == ARX_OK);
 
     const float base_fov = pistoris::glb_cinematic::gameVerticalFov();
     gltf["cameras"][0]["perspective"]["aspectRatio"] = 24.0f / 10.0f;
     gltf["cameras"][0]["perspective"]["yfov"] = 2.0f * std::atan(2.0f * std::tan(base_fov * 0.5f));
     pistoris::Cinematic wider;
-    REQUIRE(pistoris::Cinematic::importGlb(wider, replaceGlbJson(encoded, gltf)) == ARX_OK);
-    REQUIRE(wider.copyKeyframes(0, keys.size(), keys.data()) == ARX_OK);
+    REQUIRE(importGlb(wider, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(copyKeyframes(wider, 0, keys.size(), keys.data()) == ARX_OK);
     CHECK(near(keys[0].camera_position.z, 2.0f));
     CHECK(near(keys[2].light.position.x, 50.0f));
 
     gltf["cameras"][0]["perspective"]["aspectRatio"] = 0.0f;
-    CHECK(pistoris::Cinematic::importGlb(wider, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_CINEMATIC_CAMERA);
+    CHECK(importGlb(wider, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_CINEMATIC_CAMERA);
   }
 
   TEST_CASE("Levels tilted camera and empty KEYs together with their LIGHT child") {
@@ -1011,9 +1052,9 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic canonical;
-    REQUIRE(pistoris::Cinematic::importGlb(canonical, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(canonical, replaceGlbJson(encoded, gltf)) == ARX_OK);
     ArxCinematicKeyframe expected{};
-    REQUIRE(canonical.copyKeyframes(0, 1, &expected) == ARX_OK);
+    REQUIRE(copyKeyframes(canonical, 0, 1, &expected) == ARX_OK);
     CHECK_FALSE(logs.containsWarning("orientation leveled"));
 
     gltf["nodes"][key]["rotation"] = {0.0f, 0.0f, 0.0f, 1.0f};
@@ -1022,9 +1063,9 @@ TEST_SUITE("Cinematic GLB contract") {
       if (!camera_attached) gltf["nodes"][key].erase("camera");
       logs.warnings.clear();
       pistoris::Cinematic corrected;
-      REQUIRE(pistoris::Cinematic::importGlb(corrected, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      REQUIRE(importGlb(corrected, replaceGlbJson(encoded, gltf)) == ARX_OK);
       ArxCinematicKeyframe actual{};
-      REQUIRE(corrected.copyKeyframes(0, 1, &actual) == ARX_OK);
+      REQUIRE(copyKeyframes(corrected, 0, 1, &actual) == ARX_OK);
       CHECK(near(actual.camera_roll, expected.camera_roll));
       CHECK(near(actual.camera_position.x, expected.camera_position.x));
       CHECK(near(actual.camera_position.y, expected.camera_position.y));
@@ -1054,9 +1095,9 @@ TEST_SUITE("Cinematic GLB contract") {
 
     const auto imported_key = [&](const nlohmann::json& gltf) {
       pistoris::Cinematic cinematic;
-      REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
       ArxCinematicKeyframe imported{};
-      REQUIRE(cinematic.copyKeyframes(0, 1, &imported) == ARX_OK);
+      REQUIRE(copyKeyframes(cinematic, 0, 1, &imported) == ARX_OK);
       return imported;
     };
 
@@ -1190,10 +1231,10 @@ TEST_SUITE("Cinematic GLB contract") {
     addValidKey(builder, second, 1);
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     REQUIRE(cinematic.textureCount() == 2);
     ArxTextureView textures[2]{};
-    REQUIRE(cinematic.copyTextureViews(0, 2, textures) == ARX_OK);
+    REQUIRE(copyTextureViews(cinematic, 0, 2, textures) == ARX_OK);
     const std::string_view first_path(textures[0].path.data, textures[0].path.size);
     const std::string_view second_path(textures[1].path.data, textures[1].path.size);
     CHECK((first_path != second_path));
@@ -1211,9 +1252,9 @@ TEST_SUITE("Cinematic GLB contract") {
     addValidKey(builder, illustration, 1);
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     ArxCinematicKeyframe imported;
-    REQUIRE(cinematic.copyKeyframes(0, 1, &imported) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, 1, &imported) == ARX_OK);
     CHECK(near(imported.camera_position.x, -0.5f));
     CHECK(near(imported.camera_position.y, 0.75f));
   }
@@ -1227,7 +1268,7 @@ TEST_SUITE("Cinematic GLB contract") {
     addValidKey(builder, illustration, 1);
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     CHECK(cinematic.textureCount() == 1);
   }
 
@@ -1241,8 +1282,9 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_IMAGE);
-    CHECK(logs.containsError("illustration primitives reference different embedded images"));
+    CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_IMAGE);
+    CHECK(logs.contains("illustration primitives reference different embedded images"));
+    CHECK(logs.errors.empty());
   }
 
   TEST_CASE("Applies KHR texture transforms to the illustration UV chart") {
@@ -1260,9 +1302,9 @@ TEST_SUITE("Cinematic GLB contract") {
         {"offset", {0.25f, 0.1f}}, {"scale", {0.5f, 0.5f}}};
 
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
     ArxCinematicKeyframe imported;
-    REQUIRE(cinematic.copyKeyframes(0, 1, &imported) == ARX_OK);
+    REQUIRE(copyKeyframes(cinematic, 0, 1, &imported) == ARX_OK);
     CHECK(near(imported.camera_position.x, 0.0f));
     CHECK(near(imported.camera_position.y, -0.15f));
   }
@@ -1286,7 +1328,7 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder)) == ARX_OK);
     CHECK(logs.containsWarning("1 animation channel(s) target Cinematic nodes"));
   }
 
@@ -1307,7 +1349,7 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(logs.containsWarning("material tint or emission; only its image is imported"));
     CHECK_FALSE(logs.containsWarning("image has an alpha channel"));
   }
@@ -1344,11 +1386,11 @@ TEST_SUITE("Cinematic GLB contract") {
 
     DebugCapture logs;
     pistoris::Cinematic cinematic;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(cinematic, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(logs.containsWarning("image has an alpha channel but its material is not BLEND") == expect_warning);
 
     std::vector<std::uint8_t> canonical;
-    REQUIRE(cinematic.exportGlb(canonical) == ARX_OK);
+    REQUIRE(exportGlb(cinematic, canonical) == ARX_OK);
     CHECK(parseGlbJson(canonical)["materials"][0]["alphaMode"] == "BLEND");
   }
 
@@ -1363,7 +1405,7 @@ TEST_SUITE("Cinematic GLB contract") {
 
     pistoris::Cinematic cinematic;
     std::vector<pistoris::CinematicSoundSourceReference> sources;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder), &sources) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder), &sources) == ARX_OK);
     CHECK(cinematic.soundCount(pistoris::SoundKind::kEffect) == 1);
     REQUIRE(sources.size() == 2);
     CHECK(sources[0].sound == sources[1].sound);
@@ -1383,10 +1425,10 @@ TEST_SUITE("Cinematic GLB contract") {
 
     pistoris::Cinematic cinematic;
     std::vector<pistoris::CinematicSoundSourceReference> sources;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder), &sources) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder), &sources) == ARX_OK);
     REQUIRE(cinematic.soundCount(pistoris::SoundKind::kEffect) == 3);
     std::array<ArxCinematicSoundView, 3> sounds{};
-    REQUIRE(cinematic.copySoundViews(pistoris::SoundKind::kEffect, 0, sounds.size(), sounds.data()) == ARX_OK);
+    REQUIRE(copySoundViews(cinematic, pistoris::SoundKind::kEffect, 0, sounds.size(), sounds.data()) == ARX_OK);
     CHECK((std::string_view(sounds[0].path.data, sounds[0].path.size) == "effects/hit-.wav"));
     CHECK((std::string_view(sounds[1].path.data, sounds[1].path.size) == "effects/hit-_1.wav"));
     CHECK((std::string_view(sounds[2].path.data, sounds[2].path.size) == "effects/hit-_2.wav"));
@@ -1406,7 +1448,7 @@ TEST_SUITE("Cinematic GLB contract") {
 
     pistoris::Cinematic cinematic;
     std::vector<pistoris::CinematicSoundSourceReference> sources;
-    REQUIRE(pistoris::Cinematic::importGlb(cinematic, write(builder), &sources) == ARX_OK);
+    REQUIRE(importGlb(cinematic, write(builder), &sources) == ARX_OK);
     CHECK(cinematic.soundCount(pistoris::SoundKind::kEffect) == 1);
     CHECK(cinematic.soundCount(pistoris::SoundKind::kSpeech) == 1);
     REQUIRE(sources.size() == 2);
@@ -1420,20 +1462,20 @@ TEST_SUITE("Cinematic GLB contract") {
     SUBCASE("no Cinematic") {
       pistoris::glb::Builder builder;
       builder.addRoot(builder.addNode("ordinary"));
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_NO_CINEMATIC);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_NO_CINEMATIC);
     }
 
     SUBCASE("ambiguous Cinematic") {
       pistoris::glb::Builder builder;
       builder.addRoot(builder.addNode("arx_cinematic__first"));
       builder.addRoot(builder.addNode("arx_cinematic__second"));
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_AMBIGUOUS_CINEMATIC);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_AMBIGUOUS_CINEMATIC);
     }
 
     SUBCASE("bad root") {
       pistoris::glb::Builder builder;
       builder.addRoot(builder.addNode("arx_cinematic__FPS_bad__root"));
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_ROOT);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_ROOT);
     }
 
     SUBCASE("bad illustration") {
@@ -1441,7 +1483,7 @@ TEST_SUITE("Cinematic GLB contract") {
       const int root = builder.addNode("arx_cinematic__cinematic");
       builder.addRoot(root);
       builder.addChild(root, builder.addNode("arx_illustration__0__illustration"));
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_ILLUSTRATION);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_ILLUSTRATION);
     }
 
     SUBCASE("bad image") {
@@ -1449,7 +1491,15 @@ TEST_SUITE("Cinematic GLB contract") {
       const int root = builder.addNode("arx_cinematic__cinematic");
       builder.addRoot(root);
       addIllustration(builder, root, ImageSource::kExternal);
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_IMAGE);
+      const pistoris::GlbResult<pistoris::Cinematic> result = pistoris::Cinematic::importGlb(write(builder));
+      REQUIRE_FALSE(result);
+      CHECK(result.code() == ARX_GLB_BAD_CINEMATIC_IMAGE);
+      REQUIRE(result.error() != nullptr);
+      REQUIRE(result.error()->location().has_value());
+      CHECK(result.error()->location()->element == pistoris::GlbElement::kPrimitive);
+      CHECK(result.error()->location()->index == 0);
+      CHECK(result.error()->location()->subindex == 0);
+      CHECK_FALSE(result.error()->detail().empty());
     }
 
     SUBCASE("bad key") {
@@ -1458,7 +1508,7 @@ TEST_SUITE("Cinematic GLB contract") {
       builder.addRoot(root);
       const int illustration = addIllustration(builder, root, ImageSource::kEmbedded);
       builder.addChild(illustration, builder.addNode("KEY_bad__key"));
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_KEY_NAME);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_KEY_NAME);
     }
 
     SUBCASE("bad helper") {
@@ -1471,7 +1521,7 @@ TEST_SUITE("Cinematic GLB contract") {
       builder.addChild(key, builder.addNode("PRESENTATION__presentation"));
       builder.addChild(illustration, key);
       addValidKey(builder, illustration, 1);
-      CHECK(pistoris::Cinematic::importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_HELPER);
+      CHECK(importGlb(cinematic, write(builder)) == ARX_GLB_BAD_CINEMATIC_HELPER);
     }
   }
 }

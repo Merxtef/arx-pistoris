@@ -8,6 +8,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/glb/location.hpp"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/native/amb.hpp"
 #include "arx_pistoris/pistoris.hpp"
@@ -23,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -33,6 +35,25 @@ namespace {
 ArxStringView view(std::string_view value) { return {value.data(), value.size()}; }
 
 ArxSoundView soundView(std::string_view path) { return {view(path), {nullptr, 0}}; }
+
+pistoris::Ambiance importGlb(std::span<const std::uint8_t> encoded,
+                             std::vector<pistoris::SoundSourceReference>* sources = nullptr) {
+  auto result = pistoris::Ambiance::importGlb(encoded, {}, sources);
+  REQUIRE(result);
+  return std::move(*result);
+}
+
+pistoris::Ambiance importNative(const pistoris::amb::Data& native) {
+  auto result = pistoris::Ambiance::importNative(native);
+  REQUIRE(result);
+  return std::move(*result);
+}
+
+std::vector<std::uint8_t> exportGlb(const pistoris::Ambiance& ambiance) {
+  auto result = ambiance.exportGlb();
+  REQUIRE(result);
+  return std::move(*result);
+}
 
 const cgltf_node* findNode(const cgltf_data& data, std::string_view name) {
   for (std::size_t index = 0; index < data.nodes_count; ++index) {
@@ -66,6 +87,18 @@ struct WarningCapture {
 }  // namespace
 
 TEST_SUITE("Ambiance GLB conversion") {
+  TEST_CASE("Rejects invalid coordinate units") {
+    const pistoris::Ambiance ambiance = importNative(makeAmbData());
+    pistoris::Ambiance::GlbExportOptions export_options;
+    export_options.arx_units_per_glb_unit = 1001.0f;
+    CHECK(ambiance.exportGlb(export_options).code() == ARX_INVALID_OPTIONS);
+
+    const std::vector<std::uint8_t> encoded = exportGlb(ambiance);
+    pistoris::Ambiance::GlbImportOptions import_options;
+    import_options.arx_units_per_glb_unit = 0.0f;
+    CHECK(pistoris::Ambiance::importGlb(encoded, import_options).code() == ARX_INVALID_OPTIONS);
+  }
+
   TEST_CASE("Repairs logical sound paths without losing source spellings") {
     pistoris::glb::Builder builder;
     const int root = builder.addNode("arx_ambiance__MASTER_0__root");
@@ -76,9 +109,8 @@ TEST_SUITE("Ambiance GLB conversion") {
 
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
-    pistoris::Ambiance ambiance;
     std::vector<pistoris::SoundSourceReference> sources;
-    REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded, {}, &sources) == ARX_OK);
+    const pistoris::Ambiance ambiance = importGlb(encoded, &sources);
     CHECK(ambiance.trackCount() == 3);
     CHECK(ambiance.soundCount() == 2);
     REQUIRE(sources.size() == 3);
@@ -86,10 +118,9 @@ TEST_SUITE("Ambiance GLB conversion") {
     CHECK(sources[1].path == "sfx/hit*.wav");
     CHECK(sources[2].path == R"(sfx\hit?.wav)");
 
-    ArxSoundView sounds[2]{};
-    REQUIRE(ambiance.copySoundViews(0, 2, sounds) == ARX_OK);
-    CHECK((std::string_view(sounds[0].path.data, sounds[0].path.size) == "sfx/hit-.wav"));
-    CHECK((std::string_view(sounds[1].path.data, sounds[1].path.size) == "sfx/hit-_1.wav"));
+    REQUIRE(ambiance.sounds().size() == 2);
+    CHECK((std::string_view(ambiance.sounds()[0].path.data, ambiance.sounds()[0].path.size) == "sfx/hit-.wav"));
+    CHECK((std::string_view(ambiance.sounds()[1].path.data, ambiance.sounds()[1].path.size) == "sfx/hit-_1.wav"));
   }
 
   TEST_CASE("Sorts ordinals and positions keyless tracks relative to the Ambiance root") {
@@ -114,24 +145,25 @@ TEST_SUITE("Ambiance GLB conversion") {
 
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
-    pistoris::Ambiance ambiance;
     std::vector<pistoris::SoundSourceReference> sources;
-    REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded, {}, &sources) == ARX_OK);
+    const pistoris::Ambiance ambiance = importGlb(encoded, &sources);
     CHECK(ambiance.trackCount() == 2);
     CHECK(ambiance.masterTrack() == 1);
     REQUIRE(sources.size() == 2);
     CHECK(sources[0].path == R"(sfx\pan.wav)");
 
-    ArxAmbianceTrack tracks[2]{};
-    REQUIRE(ambiance.copyTracks(0, 2, tracks) == ARX_OK);
-    ArxSoundView sounds[2]{};
-    REQUIRE(ambiance.copySoundViews(0, 2, sounds) == ARX_OK);
+    const auto tracks = ambiance.tracks();
+    const auto sounds = ambiance.sounds();
+    REQUIRE(tracks.size() == 2);
+    REQUIRE(sounds.size() == 2);
     CHECK((std::string_view(sounds[tracks[0].sound].path.data, sounds[tracks[0].sound].path.size) == "sfx/pan.wav"));
     CHECK((std::string_view(sounds[tracks[1].sound].path.data, sounds[tracks[1].sound].path.size) ==
            "sfx/wind__wide.wav"));
 
-    ArxAmbiancePositionedKey positioned{};
-    REQUIRE(ambiance.copyPositionedKeys(1, 0, 1, &positioned) == ARX_OK);
+    auto positioned_keys = ambiance.positionedKeys(1);
+    REQUIRE(positioned_keys);
+    REQUIRE(positioned_keys->size() == 1);
+    const ArxAmbiancePositionedKey positioned = (*positioned_keys)[0];
     CHECK(positioned.x.first == doctest::Approx(20.0f));
     CHECK(positioned.y.first == doctest::Approx(-30.0f));
     CHECK(positioned.z.first == doctest::Approx(-40.0f));
@@ -151,11 +183,9 @@ TEST_SUITE("Ambiance GLB conversion") {
     }
 
     pistoris::amb::Data native{{std::move(track)}};
-    pistoris::Ambiance ambiance;
-    REQUIRE(pistoris::Ambiance::importNative(ambiance, native) == ARX_OK);
+    const pistoris::Ambiance ambiance = importNative(native);
 
-    std::vector<std::uint8_t> encoded;
-    REQUIRE(ambiance.exportGlb(encoded) == ARX_OK);
+    const std::vector<std::uint8_t> encoded = exportGlb(ambiance);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
 
@@ -180,12 +210,12 @@ TEST_SUITE("Ambiance GLB conversion") {
       CHECK_FALSE(pan->has_scale);
     }
 
-    pistoris::Ambiance imported;
-    REQUIRE(pistoris::Ambiance::importGlb(imported, encoded) == ARX_OK);
-    std::array<ArxAmbiancePannedKey, 3> imported_keys{};
-    REQUIRE(imported.copyPannedKeys(0, 0, imported_keys.size(), imported_keys.data()) == ARX_OK);
-    for (std::size_t index = 0; index < imported_keys.size(); ++index)
-      CHECK(imported_keys[index].pan.first == doctest::Approx(kPanValues[index]));
+    const pistoris::Ambiance imported = importGlb(encoded);
+    auto imported_keys = imported.pannedKeys(0);
+    REQUIRE(imported_keys);
+    REQUIRE(imported_keys->size() == kPanValues.size());
+    for (std::size_t index = 0; index < imported_keys->size(); ++index)
+      CHECK((*imported_keys)[index].pan.first == doctest::Approx(kPanValues[index]));
   }
 
   TEST_CASE("Maps a back-arc PAN point to the corresponding front-arc value") {
@@ -203,10 +233,11 @@ TEST_SUITE("Ambiance GLB conversion") {
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
     WarningCapture warnings;
-    pistoris::Ambiance ambiance;
-    REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_OK);
-    ArxAmbiancePannedKey imported{};
-    REQUIRE(ambiance.copyPannedKeys(0, 0, 1, &imported) == ARX_OK);
+    const pistoris::Ambiance ambiance = importGlb(encoded);
+    auto imported_keys = ambiance.pannedKeys(0);
+    REQUIRE(imported_keys);
+    REQUIRE(imported_keys->size() == 1);
+    const ArxAmbiancePannedKey imported = (*imported_keys)[0];
     CHECK(imported.pan.first == doctest::Approx(std::sqrt(0.5f)));
     CHECK(warnings.contains("is behind the listener and mapped to the front arc"));
   }
@@ -229,10 +260,11 @@ TEST_SUITE("Ambiance GLB conversion") {
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
     WarningCapture warnings;
-    pistoris::Ambiance ambiance;
-    REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_OK);
-    ArxAmbiancePositionedKey imported{};
-    REQUIRE(ambiance.copyPositionedKeys(0, 0, 1, &imported) == ARX_OK);
+    const pistoris::Ambiance ambiance = importGlb(encoded);
+    auto imported_keys = ambiance.positionedKeys(0);
+    REQUIRE(imported_keys);
+    REQUIRE(imported_keys->size() == 1);
+    const ArxAmbiancePositionedKey imported = (*imported_keys)[0];
     CHECK(imported.x.first == doctest::Approx(25.0f));
     CHECK(imported.x.second == doctest::Approx(15.0f));
     CHECK(imported.y.first == doctest::Approx(-12.5f));
@@ -252,25 +284,25 @@ TEST_SUITE("Ambiance GLB conversion") {
     key.z = {0.0f, 0.0f, 0, ARX_AMBIANCE_AUTOMATION_CONSTANT};
     constexpr std::string_view kSamplePath = "sfx/quiet.wav";
     pistoris::Ambiance ambiance;
-    pistoris::SoundIndex sound = pistoris::kNoSound;
-    REQUIRE(ambiance.addSound(soundView(kSamplePath), sound) == ARX_OK);
+    auto sound_result = ambiance.addSound(soundView(kSamplePath));
+    REQUIRE(sound_result);
+    const pistoris::SoundIndex sound = *sound_result;
     const ArxAmbiancePositionedTrackInput input{sound, &key, 1};
 
-    pistoris::AmbianceTrackIndex track = pistoris::kInvalidAmbianceTrackIndex;
-    REQUIRE(ambiance.addPositionedTrack(input, track) == ARX_OK);
+    REQUIRE(ambiance.addPositionedTrack(input));
 
     WarningCapture warnings;
-    std::vector<std::uint8_t> encoded;
-    REQUIRE(ambiance.exportGlb(encoded) == ARX_OK);
+    const std::vector<std::uint8_t> encoded = exportGlb(ambiance);
     const std::string_view bytes(reinterpret_cast<const char*>(encoded.data()), encoded.size());
     CHECK(bytes.find("VOLUME__VAL_0__volume") != std::string_view::npos);
     CHECK(bytes.find("VOLUME__VAL_0__RANGE_") == std::string_view::npos);
     CHECK(warnings.contains("VOLUME automation for 'sfx/quiet.wav' is too small"));
 
-    pistoris::Ambiance imported;
-    REQUIRE(pistoris::Ambiance::importGlb(imported, encoded) == ARX_OK);
-    ArxAmbiancePositionedKey copied{};
-    REQUIRE(imported.copyPositionedKeys(0, 0, 1, &copied) == ARX_OK);
+    const pistoris::Ambiance imported = importGlb(encoded);
+    auto copied_keys = imported.positionedKeys(0);
+    REQUIRE(copied_keys);
+    REQUIRE(copied_keys->size() == 1);
+    const ArxAmbiancePositionedKey copied = (*copied_keys)[0];
     CHECK(copied.volume.mode == ARX_AMBIANCE_AUTOMATION_CONSTANT);
     CHECK(copied.volume.first == doctest::Approx(0.0f));
     CHECK(copied.volume.second == doctest::Approx(0.0f));
@@ -289,8 +321,7 @@ TEST_SUITE("Ambiance GLB conversion") {
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
     WarningCapture warnings;
-    pistoris::Ambiance ambiance;
-    REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_OK);
+    const pistoris::Ambiance ambiance = importGlb(encoded);
     CHECK(ambiance.masterTrack() == 0);
     CHECK(warnings.contains("arx_ambiance__MASTER_0' has no final label"));
     CHECK(warnings.contains("KEY_0__PLAY_COUNT_2' has no final label"));
@@ -305,21 +336,21 @@ TEST_SUITE("Ambiance GLB conversion") {
 
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
-    pistoris::Ambiance ambiance;
-    CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_BAD_AMBIANCE_TRACK);
+    CHECK(pistoris::Ambiance::importGlb(encoded).code() == ARX_GLB_BAD_AMBIANCE_TRACK);
   }
 
   TEST_CASE("Exports a reference Model preview and aligns the root to view_attach") {
     pistoris::amb::Data native = makeAmbData();
     native.tracks.front().sample_path = "sfx/ambiance/test.wav";
-    pistoris::Ambiance ambiance;
-    REQUIRE(pistoris::Ambiance::importNative(ambiance, native) == ARX_OK);
-    pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    const pistoris::Ambiance ambiance = importNative(native);
+    auto model_result = pistoris::Model::importNative(makeSemanticModelFtl());
+    REQUIRE(model_result);
+    const pistoris::Model& model = *model_result;
 
-    std::vector<std::uint8_t> encoded;
     const pistoris::Ambiance::GlbExportOptions options;
-    REQUIRE(ambiance.exportGlb(encoded, options, &model) == ARX_OK);
+    auto encoded_result = ambiance.exportGlb(options, &model);
+    REQUIRE(encoded_result);
+    const std::vector<std::uint8_t>& encoded = *encoded_result;
 
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
@@ -336,8 +367,7 @@ TEST_SUITE("Ambiance GLB conversion") {
     CHECK(root->translation[1] == doctest::Approx(0.0f));
     CHECK(root->translation[2] == doctest::Approx(0.0f));
 
-    pistoris::Ambiance imported;
-    REQUIRE(pistoris::Ambiance::importGlb(imported, encoded) == ARX_OK);
+    const pistoris::Ambiance imported = importGlb(encoded);
     CHECK(imported.trackCount() == ambiance.trackCount());
     CHECK(imported.masterTrack() == ambiance.masterTrack());
   }
@@ -347,15 +377,23 @@ TEST_SUITE("Ambiance GLB conversion") {
     const int root = builder.addNode("arx_ambiance__root");
     const int track = builder.addNode("TRACK_0__sfx/test.wav__track");
     const int key = builder.addNode("KEY_0__key");
-    builder.addChild(key, builder.addNode("VOLUME__volume"));
+    const int automation = builder.addNode("VOLUME__volume");
+    builder.addChild(key, automation);
     builder.addChild(track, key);
     builder.addChild(root, track);
     builder.addRoot(root);
 
     std::vector<std::uint8_t> encoded;
     REQUIRE(builder.write(encoded) == ARX_OK);
-    pistoris::Ambiance ambiance;
-    CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_BAD_AMBIANCE_AUTOMATION);
+    const pistoris::GlbResult<pistoris::Ambiance> result = pistoris::Ambiance::importGlb(encoded);
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_GLB_BAD_AMBIANCE_AUTOMATION);
+    REQUIRE(result.error() != nullptr);
+    REQUIRE(result.error()->location().has_value());
+    CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+    CHECK(result.error()->location()->index == static_cast<std::size_t>(automation));
+    CHECK(result.error()->location()->label == "VOLUME__volume");
+    CHECK(result.error()->location()->property == "automation");
   }
 
   TEST_CASE("Returns focused hierarchy and naming errors") {
@@ -364,8 +402,7 @@ TEST_SUITE("Ambiance GLB conversion") {
       builder.addRoot(builder.addNode("ordinary"));
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
-      pistoris::Ambiance ambiance;
-      CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_NO_AMBIANCE);
+      CHECK(pistoris::Ambiance::importGlb(encoded).code() == ARX_GLB_NO_AMBIANCE);
     }
 
     SUBCASE("Ambiguous roots") {
@@ -374,8 +411,26 @@ TEST_SUITE("Ambiance GLB conversion") {
       builder.addRoot(builder.addNode("arx_ambiance__second"));
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
-      pistoris::Ambiance ambiance;
-      CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_AMBIGUOUS_AMBIANCE);
+      CHECK(pistoris::Ambiance::importGlb(encoded).code() == ARX_GLB_AMBIGUOUS_AMBIANCE);
+    }
+
+    SUBCASE("Nested root") {
+      pistoris::glb::Builder builder;
+      const int root = builder.addNode("arx_ambiance__root");
+      const int nested = builder.addNode("arx_ambiance__nested");
+      builder.addChild(root, nested);
+      builder.addRoot(root);
+      std::vector<std::uint8_t> encoded;
+      REQUIRE(builder.write(encoded) == ARX_OK);
+
+      const pistoris::GlbResult<pistoris::Ambiance> result = pistoris::Ambiance::importGlb(encoded);
+      REQUIRE_FALSE(result);
+      CHECK(result.code() == ARX_GLB_BAD_AMBIANCE_ROOT);
+      REQUIRE(result.error() != nullptr);
+      REQUIRE(result.error()->location().has_value());
+      CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+      CHECK(result.error()->location()->index == static_cast<std::size_t>(nested));
+      CHECK(result.error()->location()->label == "arx_ambiance__nested");
     }
 
     SUBCASE("Missing root label") {
@@ -386,8 +441,7 @@ TEST_SUITE("Ambiance GLB conversion") {
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
       WarningCapture warnings;
-      pistoris::Ambiance ambiance;
-      REQUIRE(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_OK);
+      [[maybe_unused]] const pistoris::Ambiance ambiance = importGlb(encoded);
       CHECK(warnings.contains("arx_ambiance' has no final label"));
     }
 
@@ -398,8 +452,7 @@ TEST_SUITE("Ambiance GLB conversion") {
       builder.addRoot(root);
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
-      pistoris::Ambiance ambiance;
-      CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_BAD_AMBIANCE_ROOT);
+      CHECK(pistoris::Ambiance::importGlb(encoded).code() == ARX_GLB_BAD_AMBIANCE_ROOT);
     }
 
     SUBCASE("Malformed track") {
@@ -409,8 +462,15 @@ TEST_SUITE("Ambiance GLB conversion") {
       builder.addRoot(root);
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
-      pistoris::Ambiance ambiance;
-      CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_BAD_AMBIANCE_TRACK);
+      const pistoris::GlbResult<pistoris::Ambiance> result = pistoris::Ambiance::importGlb(encoded);
+      REQUIRE_FALSE(result);
+      CHECK(result.code() == ARX_GLB_BAD_AMBIANCE_TRACK);
+      REQUIRE(result.error() != nullptr);
+      REQUIRE(result.error()->location().has_value());
+      CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+      CHECK(result.error()->location()->label == "TRACK_bad__sfx/test.wav__track");
+      CHECK(result.error()->location()->property.empty());
+      CHECK_FALSE(result.error()->detail().empty());
     }
 
     SUBCASE("Malformed key") {
@@ -422,8 +482,7 @@ TEST_SUITE("Ambiance GLB conversion") {
       builder.addRoot(root);
       std::vector<std::uint8_t> encoded;
       REQUIRE(builder.write(encoded) == ARX_OK);
-      pistoris::Ambiance ambiance;
-      CHECK(pistoris::Ambiance::importGlb(ambiance, encoded) == ARX_GLB_BAD_AMBIANCE_KEY);
+      CHECK(pistoris::Ambiance::importGlb(encoded).code() == ARX_GLB_BAD_AMBIANCE_KEY);
     }
   }
 }

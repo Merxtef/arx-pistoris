@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include "arx_pistoris/glb.hpp"
+
+#include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
@@ -102,8 +105,10 @@ inline std::filesystem::path fixturePath(const nlohmann::json& entry, const char
 inline GlbFixture fixtureGlb(const nlohmann::json& entry) {
   if (!entry.contains("glb")) return {};
   const nlohmann::json& glb = entry.at("glb");
-  return {std::filesystem::path(kFixtureRoot) / glb.at("path").get<std::string>(),
-          glb.at("arx_units_per_glb_unit").get<float>()};
+  const float units = glb.at("arx_units_per_glb_unit").get<float>();
+  if (!std::isfinite(units) || units < pistoris::glb::kMinArxUnitsPerUnit || units > pistoris::glb::kMaxArxUnitsPerUnit)
+    throw std::runtime_error("Fixture catalog GLB unit ratio must be inside inclusive [1, 1000]");
+  return {std::filesystem::path(kFixtureRoot) / glb.at("path").get<std::string>(), units};
 }
 
 inline const FixtureCatalog& fixtureCatalog() {

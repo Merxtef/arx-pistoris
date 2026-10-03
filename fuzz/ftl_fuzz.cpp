@@ -10,7 +10,7 @@
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   arx_fuzz::silenceLogs();
   ArxFtl* raw_ftl = nullptr;
-  const ArxReturnCode rc = arx_pistoris_ftl_read(data, size, &raw_ftl);
+  const ArxReturnCode rc = arx_pistoris_ftl_read(data, size, &raw_ftl, nullptr);
   arx_fuzz::FtlHandle ftl(raw_ftl);
   if (rc != ARX_OK) {
     if (ftl.get()) std::abort();

@@ -177,23 +177,35 @@ BLUR
 
 Omission means no base effect. `FADE_IN` and `FADE_OUT` require both `COLOR`
 and `SECONDARY`; each component is a finite number from 0 through 1. Colors
-are forbidden without a fade effect. Import quantizes these values to native
-8-bit channels. `CROSSFADE` and `DREAM` are independent flags.
+are forbidden without a fade effect. Native CIN export quantizes these values
+to 8-bit channels. The base effect stored on a key governs the outgoing
+interval from that key to the next. For normalized interval progress `p`,
+`FADE_IN` produces `COLOR * (1 - p) + SECONDARY * p`; `FADE_OUT` produces
+`COLOR * p + SECONDARY * (1 - p)`.
+
+`CROSSFADE` and `DREAM` are independent flags. Crossfade renders the current
+view with opacity `1 - p` and the next view with opacity `p` over the outgoing
+interval. Dream applies the engine's grid displacement to the active
+illustration. Its visible resolution is therefore governed by the
+illustration subdivision, and a Dream crossfade also uses the next
+illustration's grid.
 
 ## Flash And Light
 
 Omitting `FLASH` means no post effect. `HIDDEN` hides an ongoing flash and is
 exclusive with active-flash fields. An active flash requires RGB components in
-the 0 to 1 range and a finite `DECAY` value. RGB is quantized to 8-bit channels.
+the 0 to 1 range and a finite `DECAY` value. Native CIN export quantizes RGB to
+8-bit channels.
 
-Omitting `LIGHT` leaves the key without a light cue. `LIGHT__OFF` explicitly
-stores an off cue. An active light requires every name field shown in the
-layout. Its position, including illustration and key scale, is projected onto
-the camera's 640 by 480 screen; only that screen position is stored. Canonical
-export places the helper 3.5 GLB units in front of the camera. `RGB` uses `1`
-for a native channel value of `255`; values above `1` remain valid for brighter
-lights. Falloff, intensity, and random intensity are finite floating-point
-values.
+Omitting `LIGHT` stores no light cue on that key. During playback, keys without
+a cue interpolate through the surrounding light cues; absence does not mean
+off. `LIGHT__OFF` explicitly stores an off cue. An active light
+requires every name field shown in the layout. Its position, including
+illustration and key scale, is projected onto the camera's 640 by 480 screen;
+only that screen position is stored. Canonical export places the helper 3.5
+GLB units in front of the camera. `RGB` uses `1` for a native channel value of
+`255`; values above `1` remain valid for brighter lights. Falloff, intensity,
+and random intensity are finite floating-point values.
 The light's rotation and scale have no meaning. `FLASH`, `SOUND`, `PATH`, and
 `LIGHT__OFF` transforms are presentation-only and do not affect import.
 

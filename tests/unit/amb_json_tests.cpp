@@ -14,6 +14,18 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <utility>
+
+namespace pistoris {
+
+ArxReturnCode importJsonToAmb(std::string_view text, NativeTextMode text_mode, amb::Data* out) {
+  auto result = importJsonToAmb(text, text_mode);
+  if (result) *out = std::move(*result);
+  return result.code();
+}
+
+}  // namespace pistoris
 
 TEST_SUITE("amb_json") {
   TEST_CASE("ExportsArxConvertShapeAndLogicalOrder") {
@@ -21,8 +33,9 @@ TEST_SUITE("amb_json") {
     data.tracks.front().sample_path = "sfx/ambiance/test.wav";
     data.tracks.front().keys.front().loop_minus_one = UINT32_MAX;
 
-    std::string text;
-    REQUIRE(pistoris::exportAmbToJson(data, false, pistoris::NativeTextMode::kUtf8, text) == ARX_OK);
+    auto exported = pistoris::exportAmbToJson(data, false, pistoris::NativeTextMode::kUtf8);
+    REQUIRE(exported);
+    const std::string& text = *exported;
     const nlohmann::json json = nlohmann::json::parse(text);
     CHECK(json["$schema"] == "https://arx-tools.github.io/schemas/amb.schema.json");
     CHECK(json["tracks"][0]["filename"] == "sfx/ambiance/test.wav");
@@ -35,8 +48,9 @@ TEST_SUITE("amb_json") {
     pistoris::amb::Data source = makeAmbData();
     source.tracks.front().keys.front().loop_minus_one = UINT32_MAX;
 
-    std::string text;
-    REQUIRE(pistoris::exportAmbToJson(source, true, pistoris::NativeTextMode::kUtf8, text) == ARX_OK);
+    auto exported = pistoris::exportAmbToJson(source, true, pistoris::NativeTextMode::kUtf8);
+    REQUIRE(exported);
+    const std::string& text = *exported;
     pistoris::amb::Data result;
     REQUIRE(pistoris::importJsonToAmb(text, pistoris::NativeTextMode::kUtf8, &result) == ARX_OK);
     test_support::checkEquivalent(source, result);

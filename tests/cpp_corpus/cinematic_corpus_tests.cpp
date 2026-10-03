@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 TEST_SUITE("cinematic_corpus") {
@@ -30,42 +31,40 @@ TEST_SUITE("cinematic_corpus") {
       CAPTURE(path.string());
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Cin native;
-      if (!test_support::checkCorpusStatus(path, "read CIN", pistoris::readCin(source_bytes, native))) continue;
+      auto native_result = pistoris::readCin(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read CIN", native_result)) continue;
+      pistoris::Cin native = std::move(*native_result);
 
-      pistoris::Cinematic cinematic;
       std::vector<std::string> illustration_sources;
       std::vector<pistoris::CinematicSoundSourceReference> sound_sources;
-      if (!test_support::checkCorpusStatus(
-              path,
-              "import CIN into Cinematic",
-              pistoris::Cinematic::importNative(cinematic, native, &illustration_sources, &sound_sources)))
-        continue;
+      auto imported = pistoris::Cinematic::importNative(native, &illustration_sources, &sound_sources);
+      if (!test_support::checkCorpusStatus(path, "import CIN into Cinematic", imported)) continue;
+      pistoris::Cinematic cinematic = std::move(*imported);
       if (!test_support::checkCorpusStatus(path, "validate Cinematic", cinematic.validate())) continue;
       CHECK(illustration_sources.size() == cinematic.textureCount());
 
-      pistoris::Cin baked;
-      if (!test_support::checkCorpusStatus(path, "bake Cinematic", cinematic.bakeNative(baked))) continue;
-      pistoris::Cinematic roundtrip;
-      if (!test_support::checkCorpusStatus(
-              path, "import baked CIN", pistoris::Cinematic::importNative(roundtrip, baked)))
-        continue;
+      auto baked_result = cinematic.bakeNative();
+      if (!test_support::checkCorpusStatus(path, "bake Cinematic", baked_result)) continue;
+      pistoris::Cin baked = std::move(*baked_result);
+      auto roundtrip_result = pistoris::Cinematic::importNative(baked);
+      if (!test_support::checkCorpusStatus(path, "import baked CIN", roundtrip_result)) continue;
+      pistoris::Cinematic roundtrip = std::move(*roundtrip_result);
       if (!test_support::checkCorpusStatus(path, "validate roundtrip Cinematic", roundtrip.validate())) continue;
 
-      pistoris::Cin rebaked;
-      if (!test_support::checkCorpusStatus(path, "rebake Cinematic", roundtrip.bakeNative(rebaked))) continue;
-      test_support::checkEquivalent(baked, rebaked);
+      auto rebaked = roundtrip.bakeNative();
+      if (!test_support::checkCorpusStatus(path, "rebake Cinematic", rebaked)) continue;
+      test_support::checkEquivalent(baked, *rebaked, {.comparison_epsilon = 1.0e-4f});
     }
   }
 
   TEST_CASE("GLB fixtures convert through Cinematic") {
     for (const test_support::CinematicFixture& fixture : test_support::fixtureCatalog().cinematics) {
       CAPTURE(fixture.glb.string());
-      pistoris::Cinematic cinematic;
       std::vector<pistoris::CinematicSoundSourceReference> sound_sources;
-      REQUIRE(pistoris::Cinematic::importGlb(cinematic, test_support::readBytes(fixture.glb), &sound_sources) ==
-              ARX_OK);
-      REQUIRE(cinematic.validate() == ARX_OK);
+      auto imported = pistoris::Cinematic::importGlb(test_support::readBytes(fixture.glb), &sound_sources);
+      REQUIRE(imported);
+      pistoris::Cinematic cinematic = std::move(*imported);
+      REQUIRE(cinematic.validate());
       std::size_t effect_references = 0;
       std::size_t speech_references = 0;
       for (const pistoris::CinematicSoundSourceReference& source : sound_sources) {
@@ -79,16 +78,17 @@ TEST_SUITE("cinematic_corpus") {
       CHECK(effect_references == fixture.audio.effect_references);
       CHECK(speech_references == fixture.audio.speech_references);
 
-      pistoris::Cin baked;
-      REQUIRE(cinematic.bakeNative(baked) == ARX_OK);
-      std::vector<std::uint8_t> encoded;
-      REQUIRE(cinematic.exportGlb(encoded) == ARX_OK);
-      pistoris::Cinematic roundtrip;
-      REQUIRE(pistoris::Cinematic::importGlb(roundtrip, encoded) == ARX_OK);
-      REQUIRE(roundtrip.validate() == ARX_OK);
-      pistoris::Cin rebaked;
-      REQUIRE(roundtrip.bakeNative(rebaked) == ARX_OK);
-      test_support::checkEquivalent(baked, rebaked, {.comparison_epsilon = 1.0e-4f});
+      const auto baked = cinematic.bakeNative();
+      REQUIRE(baked);
+      const auto encoded = cinematic.exportGlb();
+      REQUIRE(encoded);
+      auto roundtrip_result = pistoris::Cinematic::importGlb(*encoded);
+      REQUIRE(roundtrip_result);
+      pistoris::Cinematic roundtrip = std::move(*roundtrip_result);
+      REQUIRE(roundtrip.validate());
+      const auto rebaked = roundtrip.bakeNative();
+      REQUIRE(rebaked);
+      test_support::checkEquivalent(*baked, *rebaked, {.comparison_epsilon = 1.0e-4f});
     }
   }
 }

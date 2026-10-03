@@ -15,11 +15,13 @@ logical AMB resource and its semantic audio tracks. Cinematic owns one
 CIN-compatible illustration timeline with effects and localized speech
 references.
 
-The library has a C++20 API and a C ABI for all five editing classes and
-supported native carriers. The CLI owns filesystem discovery, mounts, sidecars,
-overwrite policy, and game-resource placement. The library itself operates on
-memory buffers and logical resource paths. Third-party source dependencies are
-vendored, and produced binaries have no third-party runtime dependencies.
+The library has C++20, C, and Python 3.12+ APIs for all five editing classes
+and supported native carriers. The CLI owns filesystem discovery, mounts,
+sidecars, overwrite policy, and game-resource placement. The library itself
+operates on memory buffers and logical resource paths. Third-party C++
+dependencies are vendored. The native library and CLI require no separately
+installed third-party libraries. The Python package requires a compatible
+CPython 3.12+ runtime.
 
 ## Supported Formats
 
@@ -51,6 +53,28 @@ when requested. TEA, AMB, and CIN remain uncompressed.
 The public interfaces are still pre-1.0. Source and ABI compatibility are not
 promised between minor releases.
 
+## Conversion Model
+
+Pistoris separates serialized files from editable resources:
+
+```text
+native bytes <-> native carrier <-> editing class <-> authoring projection
+```
+
+A native carrier is a close, in-memory representation of one native format.
+Use carriers for direct binary or compatible-JSON conversion. Use `Level`,
+`Model`, `Animation`, `Ambiance`, and `Cinematic` when data needs coherent
+editing, validation, generation, or authoring-format conversion. GLB covers
+Level, Model, Ambiance, and Cinematic, with Animation authored through Model
+GLB. OBJ covers static Models only.
+
+Images and audio are sidecars rather than hidden filesystem operations.
+Imports can return source lookup paths that need resolving, and exports return
+encoded files for the caller to place. Native imports use canonical logical
+resource paths; external formats may preserve their authored lookup spelling.
+The CLI performs resolution and placement through mounts or beside loose files;
+library callers retain control of their own storage.
+
 ## Quick Start
 
 Build the CLI and export the installed Level 1 through the platform's standard
@@ -80,6 +104,8 @@ See `arx-pistor --help` for the installed option set and defaults.
   names, structures, flags, and defaults for Level, Model, Animation,
   Ambiance, and Cinematic.
 - **[API Guide](docs/API.md)** - C++ and C integration.
+- **[Python Bindings](bindings/python/README.md)** - Python installation and
+  resource conversion.
 - **[Fidelity and Limitations](docs/LIMITATIONS.md)** - deliberate losses and
   format constraints.
 - **[Building](docs/BUILD.md)** - prerequisites, targets, and installation.
