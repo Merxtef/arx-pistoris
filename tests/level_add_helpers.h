@@ -169,7 +169,6 @@ inline ArxReturnCode replaceMesh(pistoris::Level& level, const MeshSnapshot& val
     const pistoris::RoomIndex room = face < value.face_rooms.size() ? value.face_rooms[face] : 0;
     ArxLevelFace projected = detail::publicFace(value.faces[face], room);
     if (value.corner_colors.size() == value.faces.size() * 3U) {
-      projected.has_corner_colors = 1;
       for (std::size_t corner = 0; corner < 3; ++corner) {
         projected.corners[corner].color = value.corner_colors[face * 3U + corner];
       }
@@ -180,34 +179,28 @@ inline ArxReturnCode replaceMesh(pistoris::Level& level, const MeshSnapshot& val
   std::vector<ArxTextureView> textures;
   textures.reserve(value.textures.size());
   for (const pistoris::Texture& texture : value.textures) textures.push_back(detail::publicTexture(texture));
-  return level.replaceMesh(
-      {vertices.data(), vertices.size(), faces.data(), faces.size(), textures.data(), textures.size()});
+  return level
+      .replaceMesh({vertices.data(), vertices.size(), faces.data(), faces.size(), textures.data(), textures.size()})
+      .code();
 }
 
 inline ArxReturnCode copyMesh(const pistoris::Level& level, MeshSnapshot& out) {
-  std::vector<ArxLevelVertex> vertices(level.vertexCount());
-  std::vector<ArxLevelFace> faces(level.faceCount());
-  std::vector<ArxTextureView> textures(level.textureCount());
-  ArxReturnCode rc = level.copyVertices(0, vertices.size(), vertices.data());
-  if (rc != ARX_OK) return rc;
-  rc = level.copyFaces(0, faces.size(), faces.data());
-  if (rc != ARX_OK) return rc;
-  rc = level.copyTextureViews(0, textures.size(), textures.data());
-  if (rc != ARX_OK) return rc;
+  const auto vertices = level.vertices();
+  const auto faces = level.faces();
+  const auto textures = level.textures();
 
   MeshSnapshot copied;
   copied.vertices.reserve(vertices.size());
   for (const ArxLevelVertex& vertex : vertices) copied.vertices.push_back({vertex.position});
   copied.faces.reserve(faces.size());
   copied.face_rooms.reserve(faces.size());
-  const bool has_corner_colors = !faces.empty() && faces.front().has_corner_colors != 0;
-  if (has_corner_colors) copied.corner_colors.reserve(faces.size() * 3U);
+  copied.corner_colors.reserve(faces.size() * 3U);
   for (const ArxLevelFace& face : faces) {
     pistoris::Face internal{};
     for (std::size_t corner = 0; corner < internal.corners.size(); ++corner) {
       internal.corners[corner] = {
           face.corners[corner].vertex, face.corners[corner].normal, face.corners[corner].u, face.corners[corner].v};
-      if (has_corner_colors) copied.corner_colors.push_back(face.corners[corner].color);
+      copied.corner_colors.push_back(face.corners[corner].color);
     }
     internal.texture = face.texture;
     internal.flags = face.flags;
@@ -236,7 +229,7 @@ inline ArxReturnCode replaceAnchors(pistoris::Level& level, const AnchorsSnapsho
   for (const pistoris::AnchorConnection& connection : value.connections) {
     connections.push_back({connection.first, connection.second});
   }
-  return level.replaceAnchors({anchors.data(), anchors.size(), connections.data(), connections.size()});
+  return level.replaceAnchors({anchors.data(), anchors.size(), connections.data(), connections.size()}).code();
 }
 
 inline ArxReturnCode replaceRoomDistances(pistoris::Level& level, std::span<const pistoris::RoomDistance> values) {
@@ -250,7 +243,7 @@ inline ArxReturnCode replaceRoomDistances(pistoris::Level& level, std::span<cons
     }
   }
   if (source != values.size()) distances.resize(values.size());
-  return level.replaceRoomDistances(distances.data(), distances.size());
+  return level.replaceRoomDistances(distances).code();
 }
 
 inline ArxReturnCode setNavSurface(pistoris::Level& level, const pistoris::NavSurface& value) {
@@ -262,77 +255,71 @@ inline ArxReturnCode setNavSurface(pistoris::Level& level, const pistoris::NavSu
   for (const pistoris::NavSurfaceTriangle& triangle : value.triangles) {
     triangles.push_back({triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]});
   }
-  return level.setNavSurface({vertices.data(), vertices.size(), triangles.data(), triangles.size()});
+  return level.setNavSurface({vertices.data(), vertices.size(), triangles.data(), triangles.size()}).code();
 }
 
 inline ArxReturnCode setVertex(pistoris::Level& level, pistoris::VertexIndex index, const pistoris::Vertex& value) {
-  return level.setVertex(index, detail::publicVertex(value));
+  return level.setVertex(index, detail::publicVertex(value)).code();
 }
 
 inline ArxReturnCode setTexture(pistoris::Level& level, pistoris::TextureIndex index, const pistoris::Texture& value) {
-  return level.setTexture(index, detail::publicTexture(value));
+  return level.setTexture(index, detail::publicTexture(value)).code();
 }
 
 inline ArxReturnCode setRoom(pistoris::Level& level, pistoris::RoomIndex index, const pistoris::Room& value) {
-  return level.setRoom(index, detail::publicRoom(value));
+  return level.setRoom(index, detail::publicRoom(value)).code();
 }
 
 inline ArxReturnCode setPortal(pistoris::Level& level, pistoris::PortalIndex index, const pistoris::Portal& value) {
-  return level.setPortal(index, detail::publicPortal(value));
+  return level.setPortal(index, detail::publicPortal(value)).code();
 }
 
 inline ArxReturnCode setFace(pistoris::Level& level, pistoris::FaceIndex index, const pistoris::Face& value) {
-  ArxLevelFace current{};
-  ArxReturnCode rc = level.copyFaces(index, 1, &current);
-  if (rc != ARX_OK) return rc;
+  if (index >= level.faces().size()) return ARX_INDEX_OUT_OF_RANGE;
+  const ArxLevelFace current = level.faces()[index];
   ArxLevelFace projected = detail::publicFace(value, current.room);
-  if (current.has_corner_colors != 0) {
-    projected.has_corner_colors = 1;
-    for (std::size_t corner = 0; corner < 3; ++corner) projected.corners[corner].color = current.corners[corner].color;
-  }
-  return level.setFace(index, projected);
+  for (std::size_t corner = 0; corner < 3; ++corner) projected.corners[corner].color = current.corners[corner].color;
+  return level.setFace(index, projected).code();
 }
 
 inline ArxReturnCode setAnchor(pistoris::Level& level, pistoris::AnchorIndex index, const pistoris::Anchor& value) {
-  return level.setAnchor(index, detail::publicAnchor(value));
+  return level.setAnchor(index, detail::publicAnchor(value)).code();
 }
 
 inline ArxReturnCode setLight(pistoris::Level& level, pistoris::LightIndex index, const pistoris::Light& value) {
-  return level.setLight(index, detail::publicLight(value));
+  return level.setLight(index, detail::publicLight(value)).code();
 }
 
 inline ArxReturnCode setPlayerSpawn(pistoris::Level& level, const pistoris::PlayerSpawn& value) {
-  return level.setPlayerSpawn({value.position, value.rotation, 1});
+  return level.setPlayerSpawn({value.position, value.rotation, 1}).code();
 }
 
 inline ArxReturnCode setEntity(pistoris::Level& level, pistoris::EntityIndex index, const pistoris::Entity& value) {
-  return level.setEntity(index, detail::publicEntity(value));
+  return level.setEntity(index, detail::publicEntity(value)).code();
 }
 
 inline ArxReturnCode setFog(pistoris::Level& level, pistoris::FogIndex index, const pistoris::Fog& value) {
-  return level.setFog(index, detail::publicFog(value));
+  return level.setFog(index, detail::publicFog(value)).code();
 }
 
 inline ArxReturnCode setZone(pistoris::Level& level, pistoris::ZoneIndex index, const pistoris::Zone& value) {
   const ArxLevelZoneInput input = detail::publicZone(value);
-  return level.setZone(index, input);
+  return level.setZone(index, input).code();
 }
 
 inline ArxReturnCode setPath(pistoris::Level& level, pistoris::PathIndex index, const pistoris::Path& value) {
   std::vector<ArxLevelPathNode> nodes;
   const ArxLevelPathInput input = detail::publicPath(value, nodes);
-  return level.setPath(index, input);
+  return level.setPath(index, input).code();
 }
 
 inline pistoris::Vertex vertex(const pistoris::Level& level, pistoris::VertexIndex index) {
-  ArxLevelVertex value{};
-  static_cast<void>(level.copyVertices(index, 1, &value));
+  const ArxLevelVertex value = level.vertices()[index];
   return {value.position};
 }
 
 inline pistoris::Face face(const pistoris::Level& level, pistoris::FaceIndex index) {
-  ArxLevelFace value{};
-  static_cast<void>(level.copyFaces(index, 1, &value));
+  const ArxLevelFace value = level.faces()[index];
   pistoris::Face out{};
   for (std::size_t corner = 0; corner < out.corners.size(); ++corner) {
     out.corners[corner] = {
@@ -345,8 +332,7 @@ inline pistoris::Face face(const pistoris::Level& level, pistoris::FaceIndex ind
 }
 
 inline pistoris::Texture texture(const pistoris::Level& level, pistoris::TextureIndex index) {
-  ArxTextureView value{};
-  static_cast<void>(level.copyTextureViews(index, 1, &value));
+  const ArxTextureView value = level.textures()[index];
   pistoris::Texture out(detail::string(value.path));
   out.encoded_image = detail::bytes(value.encoded_image);
   out.external_image_extension = detail::string(value.external_image_extension);
@@ -354,14 +340,12 @@ inline pistoris::Texture texture(const pistoris::Level& level, pistoris::Texture
 }
 
 inline pistoris::Room room(const pistoris::Level& level, pistoris::RoomIndex index) {
-  ArxLevelRoom value{};
-  static_cast<void>(level.copyRooms(index, 1, &value));
+  const ArxLevelRoom value = level.rooms()[index];
   return {detail::string(value.name)};
 }
 
 inline pistoris::Portal portal(const pistoris::Level& level, pistoris::PortalIndex index) {
-  ArxLevelPortal value{};
-  static_cast<void>(level.copyPortals(index, 1, &value));
+  const ArxLevelPortal value = level.portals()[index];
   pistoris::Portal out{};
   out.name = detail::string(value.name);
   out.room_1 = value.room_1;
@@ -372,21 +356,18 @@ inline pistoris::Portal portal(const pistoris::Level& level, pistoris::PortalInd
 }
 
 inline pistoris::Anchor anchor(const pistoris::Level& level, pistoris::AnchorIndex index) {
-  ArxLevelAnchor value{};
-  static_cast<void>(level.copyAnchors(index, 1, &value));
+  const ArxLevelAnchor value = level.anchors()[index];
   return {value.position, value.radius, value.height, value.flags, detail::string(value.name)};
 }
 
 inline pistoris::AnchorConnection anchorConnection(const pistoris::Level& level,
                                                    pistoris::AnchorConnectionIndex index) {
-  ArxLevelAnchorConnection value{};
-  static_cast<void>(level.copyAnchorConnections(index, 1, &value));
+  const ArxLevelAnchorConnection value = level.anchorConnections()[index];
   return {value.first, value.second};
 }
 
 inline pistoris::Light light(const pistoris::Level& level, pistoris::LightIndex index) {
-  ArxLevelLight value{};
-  static_cast<void>(level.copyLights(index, 1, &value));
+  const ArxLevelLight value = level.lights()[index];
   return {detail::string(value.name),
           value.position,
           value.color,
@@ -403,14 +384,12 @@ inline pistoris::Light light(const pistoris::Level& level, pistoris::LightIndex 
 }
 
 inline pistoris::Entity entity(const pistoris::Level& level, pistoris::EntityIndex index) {
-  ArxLevelEntity value{};
-  static_cast<void>(level.copyEntities(index, 1, &value));
+  const ArxLevelEntity value = level.entities()[index];
   return {detail::string(value.class_path), value.ident, value.position, value.rotation, detail::string(value.name)};
 }
 
 inline pistoris::Fog fog(const pistoris::Level& level, pistoris::FogIndex index) {
-  ArxLevelFog value{};
-  static_cast<void>(level.copyFogs(index, 1, &value));
+  const ArxLevelFog value = level.fogs()[index];
   return {value.position,
           value.color,
           value.size,
@@ -425,15 +404,14 @@ inline pistoris::Fog fog(const pistoris::Level& level, pistoris::FogIndex index)
 }
 
 inline pistoris::Zone zone(const pistoris::Level& level, pistoris::ZoneIndex index) {
-  ArxLevelZone value{};
-  static_cast<void>(level.copyZones(index, 1, &value));
+  const ArxLevelZone value = level.zones()[index];
   pistoris::Zone out{};
   out.name = detail::string(value.name);
   out.reference_y = value.reference_y;
   out.height_mode = static_cast<pistoris::ZoneHeightMode>(value.height_mode);
   out.height = value.height;
-  out.perimeter_xz.resize(value.perimeter_count);
-  static_cast<void>(level.copyZonePerimeter(index, 0, out.perimeter_xz.size(), out.perimeter_xz.data()));
+  auto perimeter = level.zonePerimeter(index);
+  if (perimeter) out.perimeter_xz.assign(perimeter->begin(), perimeter->end());
   if (value.has_color != 0) out.color = value.color;
   if (value.has_farclip != 0) out.farclip = value.farclip;
   if (value.has_ambiance != 0) {
@@ -443,25 +421,22 @@ inline pistoris::Zone zone(const pistoris::Level& level, pistoris::ZoneIndex ind
 }
 
 inline pistoris::Path path(const pistoris::Level& level, pistoris::PathIndex index) {
-  ArxLevelPath value{};
-  static_cast<void>(level.copyPaths(index, 1, &value));
+  const ArxLevelPath value = level.paths()[index];
   pistoris::Path out{};
   out.name = detail::string(value.name);
   out.position = value.position;
-  std::vector<ArxLevelPathNode> nodes(value.node_count);
-  static_cast<void>(level.copyPathNodes(index, 0, nodes.size(), nodes.data()));
-  for (const ArxLevelPathNode& node : nodes) {
+  auto nodes = level.pathNodes(index);
+  if (!nodes) return out;
+  for (const ArxLevelPathNode& node : *nodes) {
     out.nodes.push_back({node.relative_position, static_cast<pistoris::PathNodeType>(node.type), node.time_ms});
   }
   return out;
 }
 
 inline std::vector<pistoris::Vertex> vertices(const pistoris::Level& level) {
-  std::vector<ArxLevelVertex> projected(level.vertexCount());
-  static_cast<void>(level.copyVertices(0, projected.size(), projected.data()));
   std::vector<pistoris::Vertex> out;
-  out.reserve(projected.size());
-  for (const ArxLevelVertex& value : projected) out.push_back({value.position});
+  out.reserve(level.vertices().size());
+  for (const ArxLevelVertex value : level.vertices()) out.push_back({value.position});
   return out;
 }
 
@@ -494,11 +469,9 @@ inline std::vector<pistoris::Portal> portals(const pistoris::Level& level) {
 }
 
 inline std::vector<pistoris::RoomDistance> roomDistances(const pistoris::Level& level) {
-  std::vector<ArxLevelRoomDistance> projected(level.roomDistanceCount());
-  static_cast<void>(level.copyRoomDistances(0, projected.size(), projected.data()));
   std::vector<pistoris::RoomDistance> out;
-  out.reserve(projected.size());
-  for (const ArxLevelRoomDistance& value : projected) {
+  out.reserve(level.roomDistances().size());
+  for (const ArxLevelRoomDistance value : level.roomDistances()) {
     out.push_back({value.distance, value.portal_a, value.portal_b});
   }
   return out;
@@ -506,10 +479,9 @@ inline std::vector<pistoris::RoomDistance> roomDistances(const pistoris::Level& 
 
 inline std::optional<ArxLevelRoomDistance> roomDistance(const pistoris::Level& level, pistoris::RoomIndex first,
                                                         pistoris::RoomIndex second) {
-  std::uint8_t has_distance = 0;
-  ArxLevelRoomDistance value{};
-  if (level.roomDistance(first, second, has_distance, value) != ARX_OK || has_distance == 0) return std::nullopt;
-  return value;
+  auto result = level.roomDistance(first, second);
+  if (!result) return std::nullopt;
+  return *result;
 }
 
 inline std::vector<pistoris::Anchor> anchors(const pistoris::Level& level) {
@@ -566,11 +538,8 @@ inline std::vector<pistoris::Path> paths(const pistoris::Level& level) {
 inline std::optional<pistoris::NavSurface> navSurface(const pistoris::Level& level) {
   ArxLevelNavSurfaceInfo info = level.navSurfaceInfo();
   if (info.has_surface == 0) return std::nullopt;
-  std::vector<ArxLevelVertex> vertices(info.vertex_count);
-  std::vector<ArxLevelNavSurfaceTriangle> triangles(info.triangle_count);
-  if (level.copyNavSurfaceVertices(0, vertices.size(), vertices.data()) != ARX_OK ||
-      level.copyNavSurfaceTriangles(0, triangles.size(), triangles.data()) != ARX_OK)
-    return std::nullopt;
+  const auto vertices = level.navSurfaceVertices();
+  const auto triangles = level.navSurfaceTriangles();
   pistoris::NavSurface out;
   out.vertices.reserve(vertices.size());
   for (const ArxLevelVertex& vertex : vertices) out.vertices.push_back({vertex.position});
@@ -588,15 +557,11 @@ inline pistoris::PlayerSpawn playerSpawn(const pistoris::Level& level, bool* out
 }
 
 inline pistoris::RoomIndex faceRoom(const pistoris::Level& level, pistoris::FaceIndex index) {
-  ArxLevelFace value{};
-  static_cast<void>(level.copyFaces(index, 1, &value));
-  return value.room;
+  return level.faces()[index].room;
 }
 
 inline std::vector<ArxColor3> cornerColors(const pistoris::Level& level) {
-  std::vector<ArxLevelFace> projected(level.faceCount());
-  static_cast<void>(level.copyFaces(0, projected.size(), projected.data()));
-  if (projected.empty() || projected.front().has_corner_colors == 0) return {};
+  const auto projected = level.faces();
   std::vector<ArxColor3> out;
   out.reserve(projected.size() * 3U);
   for (const ArxLevelFace& face : projected) {
@@ -606,9 +571,7 @@ inline std::vector<ArxColor3> cornerColors(const pistoris::Level& level) {
 }
 
 inline ArxColor3 cornerColor(const pistoris::Level& level, pistoris::FaceIndex face_index, std::size_t corner_index) {
-  ArxLevelFace value{};
-  static_cast<void>(level.copyFaces(face_index, 1, &value));
-  return value.corners[corner_index].color;
+  return level.faces()[face_index].corners[corner_index].color;
 }
 
 inline ArxReturnCode copyAnchors(const pistoris::Level& level, AnchorsSnapshot& out) {
@@ -620,13 +583,13 @@ inline ArxReturnCode copyAnchors(const pistoris::Level& level, AnchorsSnapshot& 
 }
 
 inline pistoris::VertexIndex addVertex(pistoris::Level& level, const pistoris::Vertex& value) {
-  pistoris::VertexIndex index = pistoris::kInvalidVertexIndex;
-  return level.addVertex(detail::publicVertex(value), index) == ARX_OK ? index : pistoris::kInvalidVertexIndex;
+  auto result = level.addVertex(detail::publicVertex(value));
+  return result ? *result : pistoris::kInvalidVertexIndex;
 }
 
 inline pistoris::FaceIndex addFace(pistoris::Level& level, const pistoris::Face& value, pistoris::RoomIndex room) {
-  pistoris::FaceIndex index = pistoris::kInvalidFaceIndex;
-  return level.addFace(detail::publicFace(value, room), index) == ARX_OK ? index : pistoris::kInvalidFaceIndex;
+  auto result = level.addFace(detail::publicFace(value, room));
+  return result ? *result : pistoris::kInvalidFaceIndex;
 }
 
 inline pistoris::Corner corner(pistoris::VertexIndex vertex, ArxVector3 normal, float u = 0.0f, float v = 0.0f) {
@@ -634,52 +597,52 @@ inline pistoris::Corner corner(pistoris::VertexIndex vertex, ArxVector3 normal, 
 }
 
 inline pistoris::RoomIndex addRoom(pistoris::Level& level, const pistoris::Room& value) {
-  pistoris::RoomIndex index = pistoris::kInvalidRoomIndex;
-  return level.addRoom(detail::publicRoom(value), index) == ARX_OK ? index : pistoris::kInvalidRoomIndex;
+  auto result = level.addRoom(detail::publicRoom(value));
+  return result ? *result : pistoris::kInvalidRoomIndex;
 }
 
 inline pistoris::PortalIndex addPortal(pistoris::Level& level, const pistoris::Portal& value) {
-  pistoris::PortalIndex index = pistoris::kInvalidPortalIndex;
-  return level.addPortal(detail::publicPortal(value), index) == ARX_OK ? index : pistoris::kInvalidPortalIndex;
+  auto result = level.addPortal(detail::publicPortal(value));
+  return result ? *result : pistoris::kInvalidPortalIndex;
 }
 
 inline pistoris::AnchorIndex addAnchor(pistoris::Level& level, const pistoris::Anchor& value) {
-  pistoris::AnchorIndex index = pistoris::kInvalidAnchorIndex;
-  return level.addAnchor(detail::publicAnchor(value), index) == ARX_OK ? index : pistoris::kInvalidAnchorIndex;
+  auto result = level.addAnchor(detail::publicAnchor(value));
+  return result ? *result : pistoris::kInvalidAnchorIndex;
 }
 
 inline pistoris::AnchorConnectionIndex addAnchorConnection(pistoris::Level& level, pistoris::AnchorConnection value) {
-  pistoris::AnchorConnectionIndex index = pistoris::kInvalidAnchorConnectionIndex;
   const ArxLevelAnchorConnection connection{value.first, value.second};
-  return level.addAnchorConnection(connection, index) == ARX_OK ? index : pistoris::kInvalidAnchorConnectionIndex;
+  auto result = level.addAnchorConnection(connection);
+  return result ? *result : pistoris::kInvalidAnchorConnectionIndex;
 }
 
 inline pistoris::LightIndex addLight(pistoris::Level& level, const pistoris::Light& value) {
-  pistoris::LightIndex index = pistoris::kInvalidLightIndex;
-  return level.addLight(detail::publicLight(value), index) == ARX_OK ? index : pistoris::kInvalidLightIndex;
+  auto result = level.addLight(detail::publicLight(value));
+  return result ? *result : pistoris::kInvalidLightIndex;
 }
 
 inline pistoris::EntityIndex addEntity(pistoris::Level& level, const pistoris::Entity& value) {
-  pistoris::EntityIndex index = pistoris::kInvalidEntityIndex;
-  return level.addEntity(detail::publicEntity(value), index) == ARX_OK ? index : pistoris::kInvalidEntityIndex;
+  auto result = level.addEntity(detail::publicEntity(value));
+  return result ? *result : pistoris::kInvalidEntityIndex;
 }
 
 inline pistoris::FogIndex addFog(pistoris::Level& level, const pistoris::Fog& value) {
-  pistoris::FogIndex index = pistoris::kInvalidFogIndex;
-  return level.addFog(detail::publicFog(value), index) == ARX_OK ? index : pistoris::kInvalidFogIndex;
+  auto result = level.addFog(detail::publicFog(value));
+  return result ? *result : pistoris::kInvalidFogIndex;
 }
 
 inline pistoris::ZoneIndex addZone(pistoris::Level& level, const pistoris::Zone& value) {
-  pistoris::ZoneIndex index = pistoris::kInvalidZoneIndex;
   const ArxLevelZoneInput input = detail::publicZone(value);
-  return level.addZone(input, index) == ARX_OK ? index : pistoris::kInvalidZoneIndex;
+  auto result = level.addZone(input);
+  return result ? *result : pistoris::kInvalidZoneIndex;
 }
 
 inline pistoris::PathIndex addPath(pistoris::Level& level, const pistoris::Path& value) {
   std::vector<ArxLevelPathNode> nodes;
   const ArxLevelPathInput input = detail::publicPath(value, nodes);
-  pistoris::PathIndex index = pistoris::kInvalidPathIndex;
-  return level.addPath(input, index) == ARX_OK ? index : pistoris::kInvalidPathIndex;
+  auto result = level.addPath(input);
+  return result ? *result : pistoris::kInvalidPathIndex;
 }
 
 }  // namespace test

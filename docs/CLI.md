@@ -76,6 +76,35 @@ Options that edit, generate, transform, or rebase resource data also require a
 rebuild. Images and audio may be processed independently. The sections below
 state where either kind of processing changes paths, encoding, or normalization.
 
+## Input And Output Spelling
+
+The same argument spelling can select a different storage layout. The
+resource-specific sections below define companion-file discovery precisely;
+this table gives the common rule:
+
+| Spelling | Meaning |
+| --- | --- |
+| `level:1`, `model:npc:human_base`, and other selectors | One canonical game resource resolved through active mounts |
+| Relative FTL, TEA, DLF, AMB, or CIN path | A game-layout resource resolved through active mounts; the selected format defines companion discovery |
+| Relative FTS path | A loose Level primary resolved through active mounts; optional LLF and DLF companions are supplied explicitly |
+| Absolute native path | A loose file that bypasses mounts where that format accepts a loose primary; loose Level input and output use FTS rather than DLF as the primary path |
+| GLB, OBJ, or JSON path | An authoring or interchange file; relative sidecars are resolved from the file or an explicit input folder |
+
+Relative loose outputs go below the current directory. Selectors and
+game-layout native destinations go below the write mount. Absolute output
+paths bypass it.
+
+## Common Output Options
+
+`--pretty` is valid only for compatible JSON output and indents that output.
+Using it with another output format is an error.
+
+FTL, FTS, and DLF outputs use game-compatible PKWARE DCL compression by
+default. `--no-compression` is valid only for those output formats and writes
+the corresponding native output without compression. For a Level bundle this
+also applies to the LLF companion. Using the option with another output format
+is an error.
+
 ## Mounts and Resource Selectors
 
 Mounts are roots of the Arx resource namespace:
@@ -540,8 +569,6 @@ and `arx-pistoris` signer. `--sign-level <text>` accepts printable ASCII and
 changes the signer to `arx-pistoris/<text>`. If output contains neither DLF nor
 LLF, the option has no effect.
 
-Native writers compress by default. Use `--no-compression` for raw output.
-
 ## Level GLB Coordinates
 
 Level stores native Arx coordinates with -Y up. GLB uses +Y up and defaults to
@@ -769,7 +796,7 @@ Use a compatible base FTL to copy exact bone positions or selection
 memberships after editing a replacement Model:
 
 ```text
-arx-pistor --kind model edited.glb repaired.ftl --ftl-reference human_base.ftl --snap-bone-origins --copy-bone-selections --copy-action-selections
+arx-pistor --kind model edited.glb repaired.ftl --ftl-reference human_base.ftl --snap-bone-positions --copy-bone-selections --copy-action-selections
 ```
 
 `--ftl-reference` requires at least one of the three reference operations. The
@@ -779,20 +806,20 @@ reference-only selections are not created. Unmatched target action-point
 memberships clear. Selection memberships on unmatched reference action points
 are omitted with a warning.
 
-Snapping and bone-origin selection copying require equal bone counts and
+Snapping and bone selection copying require equal bone counts and
 identical parent topology. Action-point selection copying does not require
 matching skeletons. Bone names may differ; mismatches are reported without
 preventing the operation. Selections correspond by name. Repeated action points
 correspond by name and occurrence order.
 
-Infer bone-origin memberships from directly owned geometry without a reference:
+Infer bone selection memberships from directly owned geometry without a reference:
 
 ```text
 arx-pistor edited.glb inferred.ftl --infer-bone-selections
 ```
 
 Inference uses a 90% vertex-membership threshold and replaces existing
-bone-origin memberships. It cannot be combined with
+bone memberships. It cannot be combined with
 `--copy-bone-selections`.
 
 ## Ambiance Workflows

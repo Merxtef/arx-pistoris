@@ -157,7 +157,7 @@ The English number clips are used as-is. Native regeneration converts them
 from Ogg Vorbis to WAV.
 
 ```text
-data/fixtures/cinematic/numbers/speech/*[english].ogg
+data/fixtures/cinematic/glb/numbers/speech/*[english].ogg
 data/fixtures/mount/speech/english/*.wav
 ```
 
@@ -172,7 +172,7 @@ The German number clips are excerpts from the source recording. Native
 regeneration converts them to WAV.
 
 ```text
-data/fixtures/cinematic/numbers/speech/*[deutsch].ogg
+data/fixtures/cinematic/glb/numbers/speech/*[deutsch].ogg
 data/fixtures/mount/speech/deutsch/*.wav
 ```
 
@@ -185,7 +185,7 @@ data/fixtures/mount/speech/deutsch/*.wav
 The French number clips are excerpts from the source recording.
 
 ```text
-data/fixtures/cinematic/numbers/speech/*[francais].wav
+data/fixtures/cinematic/glb/numbers/speech/*[francais].wav
 data/fixtures/mount/speech/francais/*.wav
 ```
 
@@ -198,7 +198,7 @@ data/fixtures/mount/speech/francais/*.wav
 The WAV is used as-is by the authored Cinematic and its native fixture.
 
 ```text
-data/fixtures/cinematic/numbers/sfx/flash_bang.wav
+data/fixtures/cinematic/glb/numbers/sfx/flash_bang.wav
 data/fixtures/mount/sfx/flash_bang.wav
 ```
 
@@ -214,7 +214,7 @@ source scenes.
 
 ```text
 data/fixtures/json/
-data/fixtures/cinematic/numbers/numbers.glb
+data/fixtures/cinematic/glb/numbers/numbers.glb
 data/fixtures/level/glb/level9/level9.glb
 data/fixtures/model/glb/json_dummy/json_dummy.glb
 data/fixtures/mount/graph/interface/illustrations/numbers.cin

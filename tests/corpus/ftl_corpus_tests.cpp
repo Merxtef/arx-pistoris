@@ -25,7 +25,7 @@ TEST_SUITE("ftl") {
       std::vector<std::uint8_t> bytes;
       if (!test_support::readCorpusBytes(path, bytes)) continue;
       ArxFtl* h = nullptr;
-      const ArxReturnCode rc = arx_pistoris_ftl_read(bytes.data(), bytes.size(), &h);
+      const ArxReturnCode rc = arx_pistoris_ftl_read(bytes.data(), bytes.size(), &h, nullptr);
       if (!test_support::checkCorpusStatus(path, "read FTL", rc)) {
         if (h) arx_pistoris_ftl_destroy(h);
         continue;
@@ -41,7 +41,7 @@ TEST_SUITE("ftl") {
       std::vector<std::uint8_t> bytes;
       if (!test_support::readCorpusBytes(path, bytes)) continue;
       ArxFtl* h1 = nullptr;
-      ArxReturnCode rc = arx_pistoris_ftl_read(bytes.data(), bytes.size(), &h1);
+      ArxReturnCode rc = arx_pistoris_ftl_read(bytes.data(), bytes.size(), &h1, nullptr);
       if (!test_support::checkCorpusStatus(path, "read source FTL", rc)) {
         if (h1) arx_pistoris_ftl_destroy(h1);
         continue;
@@ -50,7 +50,7 @@ TEST_SUITE("ftl") {
 
       uint8_t* out = nullptr;
       size_t sz = 0;
-      rc = arx_pistoris_ftl_write(h1, 1, &out, &sz);
+      rc = arx_pistoris_ftl_write(h1, 1, &out, &sz, nullptr);
       if (!test_support::checkCorpusStatus(path, "write FTL", rc) ||
           !test_support::checkCorpusCondition(path, "write FTL", out != nullptr, "returned no bytes")) {
         if (out) arx_pistoris_free_bytes(out);
@@ -59,7 +59,7 @@ TEST_SUITE("ftl") {
       }
 
       ArxFtl* h2 = nullptr;
-      const ArxReturnCode rc2 = arx_pistoris_ftl_read(out, sz, &h2);
+      const ArxReturnCode rc2 = arx_pistoris_ftl_read(out, sz, &h2, nullptr);
       arx_pistoris_free_bytes(out);
       if (!test_support::checkCorpusStatus(path, "read written FTL", rc2)) {
         if (h2) arx_pistoris_ftl_destroy(h2);

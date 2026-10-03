@@ -10,7 +10,7 @@
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   arx_fuzz::silenceLogs();
   ArxAmb* raw_native = nullptr;
-  const ArxReturnCode native_rc = arx_pistoris_amb_read(data, size, &raw_native);
+  const ArxReturnCode native_rc = arx_pistoris_amb_read(data, size, &raw_native, nullptr);
   arx_fuzz::AmbHandle native(raw_native);
   if (native_rc != ARX_OK) {
     if (native.get()) std::abort();
@@ -21,7 +21,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   ArxAmbiance* raw_ambiance = nullptr;
   ArxSoundSourceReferences* raw_sources = nullptr;
   const ArxReturnCode rc =
-      arx_pistoris_ambiance_import_native(native.get(), &raw_ambiance, &raw_sources, ARX_NATIVE_TEXT_AUTO);
+      arx_pistoris_ambiance_import_native(native.get(), &raw_ambiance, &raw_sources, ARX_NATIVE_TEXT_AUTO, nullptr);
   arx_fuzz::AmbianceHandle ambiance(raw_ambiance);
   arx_fuzz::SoundSourceReferencesHandle sources(raw_sources);
   if (rc != ARX_OK) {
@@ -29,9 +29,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     return 0;
   }
   if (!ambiance.get() || !sources.get()) std::abort();
-  if (arx_pistoris_ambiance_validate(ambiance.get()) != ARX_OK) std::abort();
+  if (arx_pistoris_ambiance_validate(ambiance.get(), nullptr) != ARX_OK) std::abort();
   std::size_t sound_count = 0;
-  if (arx_pistoris_ambiance_sound_count(ambiance.get(), &sound_count) != ARX_OK) std::abort();
+  if (arx_pistoris_ambiance_sound_count(ambiance.get(), &sound_count, nullptr) != ARX_OK) std::abort();
   arx_fuzz::validateSoundSourceReferences(sources.get(), sound_count);
   return 0;
 }

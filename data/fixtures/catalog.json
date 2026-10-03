@@ -197,7 +197,7 @@
     {
       "name": "numbers",
       "selector": "cinematic:numbers",
-      "glb": "cinematic/numbers/numbers.glb",
+      "glb": "cinematic/glb/numbers/numbers.glb",
       "cin": "mount/graph/interface/illustrations/numbers.cin",
       "audio": {
         "effect_references": 1,

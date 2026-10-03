@@ -26,8 +26,8 @@ NavSurface makeSurface() {
 NavigationData makeNavigation() {
   NavigationData navigation;
   navigation.surface = makeSurface();
-  navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, {}});
-  navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, {}});
+  navigation.anchors.push_back({{50.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, "anchor_0"});
+  navigation.anchors.push_back({{150.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, "anchor_1"});
   navigation.connections.push_back({0, 1});
   return navigation;
 }
@@ -69,10 +69,15 @@ TEST_SUITE("navigation::validation") {
     CHECK(navigation::validateAnchor(navigation.anchors[0]) == navigation::Error::kBadAnchorName);
   }
 
-  TEST_CASE("Nonempty anchor names are unique and empty names may repeat") {
+  TEST_CASE("Anchor names are nonempty and unique") {
     NavigationData navigation = makeNavigation();
     CHECK(navigation::validateAnchorDefinitions(navigation.anchors) == navigation::Error::kNone);
 
+    navigation.anchors[0].name.clear();
+    CHECK(navigation::validateAnchor(navigation.anchors[0]) == navigation::Error::kBadAnchorName);
+    CHECK(navigation::validateAnchorDefinitions(navigation.anchors) == navigation::Error::kBadAnchorName);
+
+    navigation = makeNavigation();
     navigation.anchors[0].name = "marker";
     navigation.anchors[1].name = "marker";
     CHECK(navigation::validateAnchorDefinitions(navigation.anchors) == navigation::Error::kDuplicateAnchorName);
@@ -80,6 +85,35 @@ TEST_SUITE("navigation::validation") {
     CHECK(navigation.anchors[0].name == "marker");
     CHECK(navigation.anchors[1].name == "marker_1");
     CHECK(navigation::validateAnchorDefinitions(navigation.anchors) == navigation::Error::kNone);
+  }
+
+  TEST_CASE("Anchor name repair preserves authored names and allocates unique defaults") {
+    NavigationData navigation = makeNavigation();
+    navigation.anchors = {
+        {{}, 30.0f, -80.0f, 0, "anchor_1"},
+        {{}, 30.0f, -80.0f, 0, {}},
+        {{}, 30.0f, -80.0f, 0, "anchor_3"},
+        {{}, 30.0f, -80.0f, 0, {}},
+    };
+
+    CHECK(navigation::repairAnchorNames(navigation.anchors) == 2);
+    CHECK(navigation.anchors[0].name == "anchor_1");
+    CHECK(navigation.anchors[1].name == "anchor_0");
+    CHECK(navigation.anchors[2].name == "anchor_3");
+    CHECK(navigation.anchors[3].name == "anchor_2");
+
+    navigation.anchors = {
+        {{}, 30.0f, -80.0f, 0, "anchor_0"},
+        {{}, 30.0f, -80.0f, 0, "anchor_2"},
+    };
+    Anchor added{{}, 30.0f, -80.0f, 0, {}};
+    navigation::repairAnchorName(navigation, added);
+    CHECK(added.name == "anchor_1");
+
+    navigation::addAnchor(navigation, added);
+    Anchor next{{}, 30.0f, -80.0f, 0, {}};
+    navigation::repairAnchorName(navigation, next);
+    CHECK(next.name == "anchor_3");
   }
 
   TEST_CASE("Rejects invalid connections") {
@@ -101,7 +135,7 @@ TEST_SUITE("navigation::validation") {
 
   TEST_CASE("Inserts connections in canonical order") {
     NavigationData navigation = makeNavigation();
-    navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, {}});
+    navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, "anchor_2"});
     navigation.connections = {{1, 2}};
 
     AnchorConnectionIndex index = kInvalidAnchorConnectionIndex;
@@ -121,7 +155,7 @@ TEST_SUITE("navigation::validation") {
 
   TEST_CASE("Set connection distinguishes duplicates from ordering errors") {
     NavigationData navigation = makeNavigation();
-    navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, {}});
+    navigation.anchors.push_back({{250.0f, 0.0f, 50.0f}, 30.0f, -80.0f, 0, "anchor_2"});
     navigation.connections = {{0, 1}, {1, 2}};
 
     CHECK(navigation::validateConnectionPlacement(navigation, 1, {0, 1}) == navigation::Error::kDuplicateConnection);

@@ -262,8 +262,9 @@ defaults are `0.5` and `1.65`. Canonical export omits default-valued tokens.
 Option order is arbitrary on import and canonical on export as `RADIUS`,
 `HEIGHT`, `BLOCKED`, then name.
 
-Nonempty anchor names are unique. Empty Level names export as
-`anchor_<ordinal>`. Name collisions receive `_N` suffixes.
+Anchor names are unique. Empty names supplied through the editing API receive
+a generated `anchor_<number>` name. The generated number has no semantic
+meaning and need not fill gaps. Name collisions receive `_N` suffixes.
 
 Anchor connections have no authored GLB notation. Canonical export can
 preserve the current graph as opaque round-trip data. Import keeps usable

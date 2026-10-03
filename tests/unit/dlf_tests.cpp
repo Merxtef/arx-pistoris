@@ -70,10 +70,21 @@ Studios, c/o ZeniMax Media Inc., Suite 120, Rockville, Maryland 20850 USA.
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <ostream>  // IWYU pragma: keep
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+namespace pistoris {
+
+ArxReturnCode importJsonToDlf(std::string_view text, NativeTextMode text_mode, dlf::Data* out) {
+  auto result = importJsonToDlf(text, text_mode);
+  if (result) *out = std::move(*result);
+  return result.code();
+}
+
+}  // namespace pistoris
 
 namespace {
 
@@ -146,7 +157,12 @@ struct LogCapture {
 ArxReturnCode load(const std::vector<std::uint8_t>& bytes, pistoris::dlf::Data& out,
                    std::optional<pistoris::llf::Data>* lighting = nullptr) {
   pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-  return pistoris::loadDlf(&out, lighting, cursor);
+  auto result = pistoris::loadDlf(cursor, lighting != nullptr);
+  if (result) {
+    out = std::move(result->data);
+    if (lighting) *lighting = std::move(result->embedded_lighting);
+  }
+  return result.code();
 }
 
 ArxReturnCode save(const pistoris::dlf::Data& data, std::vector<std::uint8_t>& out,
@@ -184,6 +200,29 @@ TEST_SUITE("dlf") {
     CHECK_FALSE(lighting.has_value());
   }
 
+  TEST_CASE("DlfReadCanonicalizesOnlyTheStoredSceneDirectory") {
+    struct Case {
+      std::string_view encoded;
+      std::string_view expected;
+    };
+    constexpr Case kCases[] = {
+        {R"(Graph\Levels\.\Level1\)", "graph/levels/level1"},
+        {R"(my_folder\sub\..\scene)", "my_folder/scene"},
+        {R"(prefix\graph\levels\level1)", "prefix/graph/levels/level1"},
+        {R"(..\graph\custom)", "../graph/custom"},
+        {"..", ".."},
+    };
+
+    for (const Case& item : kCases) {
+      CAPTURE(item.encoded);
+      Scene scene;
+      setText(scene.name, item.encoded);
+      pistoris::dlf::Data data;
+      REQUIRE(load(minimalDlf({}, scene), data) == ARX_OK);
+      CHECK(pistoris::fixedStringView(data.scene_path) == item.expected);
+    }
+  }
+
   TEST_CASE("DlfRejectsHeaderErrors") {
     pistoris::dlf::Data data;
     CHECK(load({}, data) == ARX_UNEXPECTED_EOF);
@@ -206,6 +245,9 @@ TEST_SUITE("dlf") {
     header = {};
     Scene scene;
     scene.name[0] = '\0';
+    CHECK(load(minimalDlf(header, scene), data) == ARX_DLF_BAD_SCENE_PATH);
+
+    setText(scene.name, "../../custom");
     CHECK(load(minimalDlf(header, scene), data) == ARX_DLF_BAD_SCENE_PATH);
 
     std::memset(scene.name, 'x', sizeof(scene.name));
@@ -385,8 +427,9 @@ TEST_SUITE("dlf") {
     setText(source.scene_path, "graph/levels/level1");
     source.entities.emplace_back();
     setText(source.entities.back().class_path, "graph/obj3d/interactive/fix_inter/timed_lever/timed_lever");
-    std::string json;
-    REQUIRE(pistoris::exportDlfToJson(source, false, {}, pistoris::NativeTextMode::kUtf8, json) == ARX_OK);
+    auto exported = pistoris::exportDlfToJson(source, false, {}, pistoris::NativeTextMode::kUtf8);
+    REQUIRE(exported);
+    std::string json = std::move(*exported);
     const std::size_t name = json.find("fix_inter/timed_lever");
     REQUIRE(name != std::string::npos);
     json.insert(name + std::string_view("fix_inter/timed_lever").size(), ".TEO");
@@ -594,6 +637,10 @@ TEST_SUITE("dlf") {
     CHECK(save(data, out) == ARX_DLF_BAD_SCENE_PATH);
     std::memset(data.scene_path, 'x', sizeof(data.scene_path));
     CHECK(save(data, out) == ARX_DLF_BAD_SCENE_PATH);
+    setText(data.scene_path, "../../custom");
+    CHECK(save(data, out) == ARX_DLF_BAD_SCENE_PATH);
+    setText(data.scene_path, "../graph/custom");
+    CHECK(save(data, out) == ARX_OK);
     setText(data.scene_path, "graph/levels/level1");
     data.entities.emplace_back();
     std::memset(data.entities.back().class_path, 'x', sizeof(data.entities.back().class_path));

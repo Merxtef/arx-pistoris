@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 TEST_SUITE("animation_corpus") {
@@ -28,33 +29,29 @@ TEST_SUITE("animation_corpus") {
 
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Tea native;
-      if (!test_support::checkCorpusStatus(path, "read TEA", pistoris::readTea(source_bytes, native))) continue;
-      pistoris::Animation animation;
+      auto native_result = pistoris::readTea(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read TEA", native_result)) continue;
+      pistoris::Tea native = std::move(*native_result);
       std::vector<pistoris::SoundSourceReference> sound_sources;
-      if (!test_support::checkCorpusStatus(
-              path, "import TEA into Animation", pistoris::Animation::importNative(animation, native, &sound_sources)))
-        continue;
+      auto imported = pistoris::Animation::importNative(native, &sound_sources);
+      if (!test_support::checkCorpusStatus(path, "import TEA into Animation", imported)) continue;
+      pistoris::Animation animation = std::move(*imported);
       if (!test_support::checkCorpusStatus(path, "validate Animation", animation.validate())) continue;
       const std::optional<test_support::HydrationResult> hydration = test_support::hydrateSounds(
           animation, test_support::nativeMount(path), sound_sources, test_support::SoundSourceLayout::kNativeAnimation);
       if (!hydration) continue;
       if (test_support::isCommittedFixture(path)) fixture_hydrations += hydration->hydrated;
 
-      pistoris::NativeAnimationBundle baked;
-      if (!test_support::checkCorpusStatus(path,
-                                           "bake Animation to native bundle",
-                                           animation.bakeNativeBundle({.include_sound_files = true}, baked)))
-        continue;
+      auto baked_result = animation.bakeNativeBundle({.include_sound_files = true});
+      if (!test_support::checkCorpusStatus(path, "bake Animation to native bundle", baked_result)) continue;
+      pistoris::NativeAnimationBundle baked = std::move(*baked_result);
       if (!test_support::validateSoundFiles(animation, std::span<const pistoris::SoundFile>(baked.sound_files)))
         continue;
 
-      pistoris::Animation roundtrip;
       std::vector<pistoris::SoundSourceReference> roundtrip_sources;
-      if (!test_support::checkCorpusStatus(path,
-                                           "import baked TEA into Animation",
-                                           pistoris::Animation::importNative(roundtrip, baked.tea, &roundtrip_sources)))
-        continue;
+      auto roundtrip_result = pistoris::Animation::importNative(baked.tea, &roundtrip_sources);
+      if (!test_support::checkCorpusStatus(path, "import baked TEA into Animation", roundtrip_result)) continue;
+      pistoris::Animation roundtrip = std::move(*roundtrip_result);
       const std::optional<test_support::HydrationResult> roundtrip_hydration =
           test_support::hydrateSoundsFromFiles(roundtrip,
                                                roundtrip_sources,

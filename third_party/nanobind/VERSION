@@ -1,0 +1,6 @@
+nanobind: 3.1.0
+commit: 68480a9e6883bb1bf65e1925423321e2a89d07f9
+source: https://github.com/wjakob/nanobind/tree/v3.1.0
+sdist-sha256: 6661e3dc1434d78781ccf7913442d90361dab395c3424efadb63bbb6ddea7ea3
+robin-map: 1.4.0
+robin-map-commit: 4ec1bf19c6a96125ea22062f38c2cf5b958e448e

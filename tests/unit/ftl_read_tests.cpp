@@ -3,8 +3,10 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/location.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/native/ftl.hpp"
+#include "arx_pistoris/native/location.hpp"
 
 #include "helpers.h"
 #include "native/ftl.h"
@@ -45,15 +47,35 @@ static std::vector<uint8_t> makeFtlWithSelIndex(int32_t idx_val) {
 
 static ArxReturnCode load(const std::vector<uint8_t>& buf, pistoris::ftl::Data& d) {
   pistoris::ReadCursor c(buf.data(), buf.size());
-  return pistoris::loadFtl(&d, c);
+  auto result = pistoris::loadFtl(c);
+  if (result) d = std::move(*result);
+  return result.code();
 }
 
 TEST_SUITE("ftl") {
+  TEST_CASE("Semantic failures retain their explicit region") {
+    std::vector<std::uint8_t> buf(kFtlDataOff, 0);
+    std::memcpy(buf.data(), pistoris::kFtlMagic, 4);
+    pistoris::ReadCursor cursor(buf.data(), buf.size());
+
+    const auto result = pistoris::loadFtl(cursor, pistoris::NativeBinaryRegion::kDecodedPayload);
+
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error());
+    REQUIRE(result.error()->location());
+    const pistoris::FtlBinaryLocation& location = *result.error()->location();
+    CHECK(location.element == pistoris::FtlElement::kHeader);
+    CHECK(location.field == "version");
+    CHECK(location.region == pistoris::NativeBinaryRegion::kDecodedPayload);
+    CHECK(location.byte_offset == 4);
+    CHECK(location.requested_bytes == 0);
+  }
+
   TEST_CASE("FtlBadIdentifier") {
     uint8_t data[] = {'X', 'X', 'X', '\0', 0, 0, 0, 0};
     pistoris::ftl::Data d;
     pistoris::ReadCursor c(data, sizeof(data));
-    CHECK(pistoris::loadFtl(&d, c) == ARX_INVALID_IDENTIFIER);
+    CHECK(pistoris::loadFtl(c).code() == ARX_INVALID_IDENTIFIER);
   }
 
   TEST_CASE("FtlBadVersion") {
@@ -208,8 +230,19 @@ TEST_SUITE("ftl") {
     std::memcpy(buf.data() + kFtlDataOff + kFtlVertexSize + kFtlFaceOffVertIdx, idx, sizeof(idx));
     int16_t no_tex = -1;  // kFtlTextureNone
     std::memcpy(buf.data() + kFtlDataOff + kFtlVertexSize + kFtlFaceOffTexId, &no_tex, 2);
-    pistoris::ftl::Data d;
-    CHECK(load(buf, d) == ARX_FTL_BAD_FACE_VERT_IDX);
+    pistoris::ReadCursor cursor(buf.data(), buf.size());
+    const auto result = pistoris::loadFtl(cursor);
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_FTL_BAD_FACE_VERT_IDX);
+    REQUIRE(result.error());
+    REQUIRE(result.error()->location());
+    const pistoris::FtlBinaryLocation& location = *result.error()->location();
+    CHECK(location.element == pistoris::FtlElement::kFace);
+    CHECK(location.index == 0);
+    CHECK(location.subindex == 0);
+    CHECK(location.field == "vertex_idx");
+    CHECK(location.byte_offset == pistoris::kNoElementIndex);
+    CHECK(location.requested_bytes == 0);
   }
 
   TEST_CASE("FtlRejectsNegativeTextureCount") {

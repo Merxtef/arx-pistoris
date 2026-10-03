@@ -15,6 +15,33 @@ Keep the final descriptive labels shown in the GLB naming examples. Import can
 recover labels from fixed Model and Animation helper names when omitted, but
 warns; path-bearing helpers still need their label.
 
+## Start From An Export
+
+Export an installed Model by selector. Add one or more Animation selectors to
+edit their TEA timelines in the same GLB:
+
+```text
+arx-pistor --auto-mount model:npc:human_base human.glb
+arx-pistor --auto-mount model:npc:human_base anim:npc:human_walk human.glb
+arx-pistor --auto-mount human.glb model:npc:human_base
+```
+
+Loose native files work the same way when supplied by absolute path:
+
+```text
+arx-pistor C:/project/human.ftl C:/project/walk.tea human.glb
+arx-pistor --kind model human.glb C:/project/human.ftl
+```
+
+FTL and TEA remain separate native resources even though Model GLB can carry
+them together. Baking the GLB writes the FTL and one sibling TEA per authored
+Animation. The Model supplies the skeleton that gives Animation group indices
+their meaning; a TEA is not a self-contained rig.
+GLB embeds Model textures but writes Animation audio as files relative to the
+GLB. Loose native output writes texture paths below the output directory and
+puts an inventory icon beside the FTL when present; mounted output uses the
+corresponding game resource paths.
+
 ## Coordinates and Origin
 
 Model GLB defaults to 10 Arx units per GLB unit. Create one semantic origin and
@@ -141,11 +168,10 @@ arx_animation__human_walk
 
 `VOID` replaces each marked group's sampled transforms with exact identity.
 `CLAIM` preserves sampled motion that is close enough to be treated as
-conversion noise and retains the group when its transforms are exact identity.
-Canonical export marks unclaimed exact-identity groups and Model bones beyond
-the Animation's retained group range as `VOID`, merging adjacent indices into
-ranges. Trailing unclaimed identity groups are removed on import and native
-bake. `groups` is a label.
+conversion noise and retains an otherwise identity group. In practice, keep
+exported `GROUPS` metadata unless you deliberately want to clear a group or
+protect subtle motion. `groups` is a label; the reference specifies the exact
+canonicalization and trailing-group rules.
 
 For a rigged Model, animate translation and rotation on the Armature object that
 contains all imported meshes, root bones, and unbound action or selection-probe

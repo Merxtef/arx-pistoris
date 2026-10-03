@@ -6,11 +6,12 @@
 #include "arx_pistoris/base/flags.h"
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/json/location.hpp"
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/fts.hpp"
+#include "arx_pistoris/native/location.hpp"
 #include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/native/text.hpp"
-#include "arx_pistoris/paths.hpp"
 
 #include "external/json.h"
 #include "helpers.h"
@@ -21,7 +22,42 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
+
+namespace pistoris {
+
+template <class T>
+ArxReturnCode assignJsonResult(JsonResult<T> result, T* out) {
+  if (result) *out = std::move(*result);
+  return result.code();
+}
+
+template <class Result>
+ArxReturnCode assignJsonOutput(Result result, std::string& out) {
+  if (result) out = std::move(*result);
+  return result.code();
+}
+
+ArxReturnCode importJsonToFtl(std::string_view text, NativeTextMode text_mode, ftl::Data* out) {
+  return assignJsonResult(importJsonToFtl(text, text_mode), out);
+}
+
+ArxReturnCode importJsonToFts(std::string_view text, NativeTextMode text_mode, fts::Data* out,
+                              std::uint32_t* level = nullptr) {
+  auto result = importJsonToFts(text, text_mode);
+  if (result) {
+    *out = std::move(result->fts);
+    if (level) *level = result->level;
+  }
+  return result.code();
+}
+
+ArxReturnCode importJsonToTea(std::string_view text, NativeTextMode text_mode, tea::Data* out) {
+  return assignJsonResult(importJsonToTea(text, text_mode), out);
+}
+
+}  // namespace pistoris
 
 TEST_SUITE("json") {
   TEST_CASE("JsonFieldNames") {
@@ -36,7 +72,8 @@ TEST_SUITE("json") {
     d.groups.push_back(std::move(g));
 
     std::string out;
-    CHECK(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8, out) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8), out) ==
+          ARX_OK);
     CHECK(out.find("\"vector\"") != std::string::npos);    // not "position"
     CHECK(out.find("\"norm\"") != std::string::npos);      // not "normal"
     CHECK(out.find("\"faceType\"") != std::string::npos);  // not "type"
@@ -49,8 +86,10 @@ TEST_SUITE("json") {
   TEST_CASE("JsonPretty") {
     auto d = makeData(1);
     std::string compact, pretty;
-    CHECK(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8, compact) == ARX_OK);
-    CHECK(pistoris::exportFtlToJson(d, true, pistoris::NativeTextMode::kUtf8, pretty) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8), compact) ==
+          ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, true, pistoris::NativeTextMode::kUtf8), pretty) ==
+          ARX_OK);
     CHECK(compact.find('\n') == std::string::npos);
     CHECK(pretty.find('\n') != std::string::npos);
     CHECK(pretty.size() > compact.size());
@@ -69,7 +108,8 @@ TEST_SUITE("json") {
     auto d = makeData(1);
 
     std::string s;
-    CHECK(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8, s) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8), s) ==
+          ARX_OK);
 
     pistoris::ftl::Data d2;
     CHECK(pistoris::importJsonToFtl(s, pistoris::NativeTextMode::kUtf8, &d2) == ARX_OK);
@@ -79,7 +119,8 @@ TEST_SUITE("json") {
   TEST_CASE("FtlJsonAcceptsMissingSchemaAndRejectsDeclaredMismatch") {
     const auto source = makeData(1);
     std::string encoded;
-    REQUIRE(pistoris::exportFtlToJson(source, false, pistoris::NativeTextMode::kUtf8, encoded) == ARX_OK);
+    REQUIRE(pistoris::assignJsonOutput(pistoris::exportFtlToJson(source, false, pistoris::NativeTextMode::kUtf8),
+                                       encoded) == ARX_OK);
 
     nlohmann::json json = nlohmann::json::parse(encoded);
     json.erase("$schema");
@@ -106,9 +147,14 @@ TEST_SUITE("json") {
     pistoris::ftl::Data source = makeData(1);
     source.vertices[0].normal.x = std::numeric_limits<float>::infinity();
     std::string output = "unchanged";
-    CHECK(pistoris::exportFtlToJson(source, false, pistoris::NativeTextMode::kUtf8, output) ==
-          ARX_JSON_UNREPRESENTABLE_VALUE);
+    auto result = pistoris::exportFtlToJson(source, false, pistoris::NativeTextMode::kUtf8);
+    CHECK(pistoris::assignJsonOutput(result, output) == ARX_JSON_UNREPRESENTABLE_VALUE);
     CHECK(output == "unchanged");
+    REQUIRE(result.error());
+    REQUIRE(result.error()->location());
+    CHECK(result.error()->location()->element == pistoris::FtlElement::kVertex);
+    CHECK(result.error()->location()->index == 0);
+    CHECK(result.error()->location()->field == "normal");
   }
 
   TEST_CASE("JsonRoundtripFull") {
@@ -139,7 +185,8 @@ TEST_SUITE("json") {
     d.selections.push_back(std::move(sel));
 
     std::string s;
-    CHECK(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8, s) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8), s) ==
+          ARX_OK);
 
     pistoris::ftl::Data d2;
     CHECK(pistoris::importJsonToFtl(s, pistoris::NativeTextMode::kUtf8, &d2) == ARX_OK);
@@ -155,10 +202,6 @@ TEST_SUITE("json") {
     source.cells.resize(160U * 160U);
     source.rooms.resize(3);
     source.room_distances.resize(9);
-
-    const std::string path = pistoris::paths::levelFts(1);
-    REQUIRE(path.size() < sizeof(source.header.path));
-    std::memcpy(source.header.path, path.c_str(), path.size() + 1U);
 
     source.cells[0].polygons[0].area = 1.0f;
     pistoris::fts::Poly second = source.cells[0].polygons[0];
@@ -180,9 +223,12 @@ TEST_SUITE("json") {
     source.rooms[2].polygons = {{0, 0, 1, 0}};
 
     std::string encoded;
-    REQUIRE(pistoris::exportFtsToJson(source, false, pistoris::NativeTextMode::kUtf8, encoded) == ARX_OK);
+    REQUIRE(pistoris::assignJsonOutput(pistoris::exportFtsToJson(source, 1, false, pistoris::NativeTextMode::kUtf8),
+                                       encoded) == ARX_OK);
     pistoris::fts::Data roundtrip;
-    REQUIRE(pistoris::importJsonToFts(encoded, pistoris::NativeTextMode::kUtf8, &roundtrip) == ARX_OK);
+    std::uint32_t level = 0;
+    REQUIRE(pistoris::importJsonToFts(encoded, pistoris::NativeTextMode::kUtf8, &roundtrip, &level) == ARX_OK);
+    CHECK(level == 1);
     REQUIRE(roundtrip.cells[0].polygons.size() == 2);
     CHECK(roundtrip.cells[0].polygons[0].area == 1.0f);
     CHECK(roundtrip.cells[0].polygons[1].area == 2.0f);
@@ -216,7 +262,8 @@ TEST_SUITE("json") {
     d.faces.push_back(makeFace(0, 1, 2, 0));
 
     std::string out;
-    CHECK(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8, out) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8), out) ==
+          ARX_OK);
     CHECK(out.find("\"vertexIdx\":[") != std::string::npos);
     CHECK(out.find("\"u\":[") != std::string::npos);
     CHECK(out.find("\"v\":[") != std::string::npos);
@@ -232,7 +279,8 @@ TEST_SUITE("json") {
     d.faces.push_back(f);
 
     std::string s;
-    CHECK(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8, s) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportFtlToJson(d, false, pistoris::NativeTextMode::kUtf8), s) ==
+          ARX_OK);
 
     pistoris::ftl::Data d2;
     CHECK(pistoris::importJsonToFtl(s, pistoris::NativeTextMode::kUtf8, &d2) == ARX_OK);
@@ -281,7 +329,8 @@ TEST_SUITE("json") {
     pistoris::ftl::Data source = makeData(3);
     source.faces.push_back(makeFace(0, 1, 2));
     std::string encoded;
-    REQUIRE(pistoris::exportFtlToJson(source, false, pistoris::NativeTextMode::kUtf8, encoded) == ARX_OK);
+    REQUIRE(pistoris::assignJsonOutput(pistoris::exportFtlToJson(source, false, pistoris::NativeTextMode::kUtf8),
+                                       encoded) == ARX_OK);
 
     nlohmann::json json = nlohmann::json::parse(encoded);
     json["faces"][0]["textureIdx"] = std::numeric_limits<std::uint64_t>::max();
@@ -368,7 +417,8 @@ TEST_SUITE("json") {
     tea.keyframes.push_back(kf);
 
     std::string out;
-    CHECK(pistoris::exportTeaToJson(tea, false, pistoris::NativeTextMode::kUtf8, out) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportTeaToJson(tea, false, pistoris::NativeTextMode::kUtf8), out) ==
+          ARX_OK);
     CHECK(out.find("\"$schema\"") != std::string::npos);
     CHECK(out.find("\"totalNumberOfFrames\"") != std::string::npos);
     CHECK(out.find("\"keyframes\"") != std::string::npos);
@@ -391,7 +441,8 @@ TEST_SUITE("json") {
     tea.keyframes.push_back(kf);
 
     std::string out;
-    CHECK(pistoris::exportTeaToJson(tea, false, pistoris::NativeTextMode::kUtf8, out) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportTeaToJson(tea, false, pistoris::NativeTextMode::kUtf8), out) ==
+          ARX_OK);
     CHECK(out.find("\"translate\"") == std::string::npos);
     CHECK(out.find("\"quaternion\"") == std::string::npos);
     CHECK(out.find("\"zoom\"") == std::string::npos);
@@ -419,7 +470,8 @@ TEST_SUITE("json") {
     tea.keyframes.push_back(kf);
 
     std::string out;
-    CHECK(pistoris::exportTeaToJson(tea, false, pistoris::NativeTextMode::kUtf8, out) == ARX_OK);
+    CHECK(pistoris::assignJsonOutput(pistoris::exportTeaToJson(tea, false, pistoris::NativeTextMode::kUtf8), out) ==
+          ARX_OK);
 
     pistoris::tea::Data imported;
     CHECK(pistoris::importJsonToTea(out, pistoris::NativeTextMode::kUtf8, &imported) == ARX_OK);
@@ -436,7 +488,8 @@ TEST_SUITE("json") {
     source.keyframes.push_back(std::move(keyframe));
 
     std::string encoded;
-    REQUIRE(pistoris::exportTeaToJson(source, false, pistoris::NativeTextMode::kUtf8, encoded) == ARX_OK);
+    REQUIRE(pistoris::assignJsonOutput(pistoris::exportTeaToJson(source, false, pistoris::NativeTextMode::kUtf8),
+                                       encoded) == ARX_OK);
     nlohmann::json json = nlohmann::json::parse(encoded);
     json.erase("$schema");
     pistoris::tea::Data imported;

@@ -636,7 +636,7 @@ def main() -> int:
             "[CLI_RESOURCE_NOT_FOUND]",
             "--ftl-reference",
             tmp / "missing-reference.ftl",
-            "--snap-bone-origins",
+            "--snap-bone-positions",
             MODEL_FTL,
             tmp / "missing-reference.glb",
         )
@@ -763,7 +763,7 @@ def main() -> int:
         invalid_native_output = invalid_icon_directory / "native.ftl"
         expect_success_contains(
             cli,
-            "Invalid Model inventory icon was skipped",
+            "Model inventory icon was skipped:",
             "--skip-texture-export",
             invalid_icon_input,
             invalid_native_output,
@@ -772,7 +772,7 @@ def main() -> int:
             raise AssertionError("invalid automatically discovered icon must be omitted")
         expect_success_contains(
             cli,
-            "Invalid Model inventory icon was skipped",
+            "Model inventory icon was skipped:",
             invalid_icon_input,
             invalid_icon_directory / "automatic.glb",
         )
@@ -1182,7 +1182,7 @@ def main() -> int:
             cli,
             1,
             "[CLI_MISSING_DEPENDENCY]",
-            "--snap-bone-origins",
+            "--snap-bone-positions",
             MODEL_GLB,
             out_glb,
         )
@@ -1199,7 +1199,7 @@ def main() -> int:
             cli,
             "--ftl-reference",
             MODEL_FTL,
-            "--snap-bone-origins",
+            "--snap-bone-positions",
             "--copy-bone-selections",
             "--copy-action-selections",
             "--skip-texture-export",

@@ -23,6 +23,10 @@ CODE_PREFIXES = (
     "ARX_OBJ_",
     "ARX_GLB_",
     "ARX_JSON_",
+    "ARX_CIN_",
+    "ARX_CINEMATIC_",
+    "ARX_ANIMATION_",
+    "ARX_AMBIANCE_",
 )
 
 ASSERTION_MACROS = (
@@ -101,8 +105,8 @@ def asserted_codes(source: str) -> set[str]:
         result.update(re.findall(r"\bARX_[A-Z0-9_]+\b", source[open_paren + 1 : cursor - 1]))
     return result
 
-header = pathlib.Path("include/arx_pistoris/base/status.h").read_text()
-strerror = pathlib.Path("src/api/strerror.cpp").read_text()
+header = pathlib.Path("libs/core/include/arx_pistoris/base/status.h").read_text()
+strerror = pathlib.Path("libs/core/src/api/strerror.cpp").read_text()
 covered = set()
 for test_path in pathlib.Path("tests").rglob("*.cpp"):
     try:

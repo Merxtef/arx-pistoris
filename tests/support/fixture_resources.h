@@ -123,13 +123,12 @@ std::optional<HydrationResult> hydrateTextures(Asset& asset, const std::filesyst
     return std::nullopt;
   }
   std::vector<bool> loaded(asset.textureCount(), false);
-  std::vector<ArxTextureView> views(asset.textureCount());
-  if (!views.empty()) {
-    const ArxReturnCode status = asset.copyTextureViews(0, views.size(), views.data());
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+  {
+    const auto textures = asset.textures();
+    for (std::size_t index = 0; index < textures.size(); ++index) {
+      loaded[index] = textures[index].encoded_image.size != 0;
+    }
   }
-  for (std::size_t index = 0; index < views.size(); ++index) loaded[index] = views[index].encoded_image.size != 0;
 
   for (std::size_t texture = 0; texture < source_paths.size(); ++texture) {
     if (loaded[texture] || source_paths[texture].empty()) continue;
@@ -139,9 +138,9 @@ std::optional<HydrationResult> hydrateTextures(Asset& asset, const std::filesyst
     const ArxReturnCode validation = pistoris::binary::validateEncodedImage(bytes);
     CHECK(validation == ARX_OK);
     if (validation != ARX_OK) return std::nullopt;
-    const ArxReturnCode status = asset.setTextureImage(texture, {bytes.data(), bytes.size()});
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+    const auto status = asset.setTextureImage(texture, {bytes.data(), bytes.size()});
+    CHECK(status.code() == ARX_OK);
+    if (!status) return std::nullopt;
     loaded[texture] = true;
     ++result.hydrated;
   }
@@ -155,13 +154,12 @@ std::optional<HydrationResult> hydrateSounds(Asset& asset, const std::filesystem
                                              SoundSourceLayout layout = SoundSourceLayout::kLoose) {
   HydrationResult result;
   std::vector<bool> loaded(asset.soundCount(), false);
-  std::vector<ArxSoundView> views(asset.soundCount());
-  if (!views.empty()) {
-    const ArxReturnCode status = asset.copySoundViews(0, views.size(), views.data());
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+  {
+    const auto sounds = asset.sounds();
+    for (std::size_t index = 0; index < sounds.size(); ++index) {
+      loaded[index] = sounds[index].encoded_audio.size != 0;
+    }
   }
-  for (std::size_t index = 0; index < views.size(); ++index) loaded[index] = views[index].encoded_audio.size != 0;
 
   for (const pistoris::SoundSourceReference& reference : references) {
     if (reference.sound >= asset.soundCount()) {
@@ -175,9 +173,9 @@ std::optional<HydrationResult> hydrateSounds(Asset& asset, const std::filesystem
     const ArxReturnCode validation = pistoris::binary::validateEncodedAudio(bytes);
     CHECK(validation == ARX_OK);
     if (validation != ARX_OK) return std::nullopt;
-    const ArxReturnCode status = asset.setSoundData(reference.sound, {bytes.data(), bytes.size()});
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+    const auto status = asset.setSoundData(reference.sound, {bytes.data(), bytes.size()});
+    CHECK(status.code() == ARX_OK);
+    if (!status) return std::nullopt;
     loaded[reference.sound] = true;
     ++result.hydrated;
   }
@@ -186,7 +184,7 @@ std::optional<HydrationResult> hydrateSounds(Asset& asset, const std::filesystem
 }
 
 inline std::optional<HydrationResult> hydrateAnimationSounds(
-    std::span<std::unique_ptr<pistoris::Animation>> animations, const std::filesystem::path& owner,
+    std::span<pistoris::Animation> animations, const std::filesystem::path& owner,
     std::span<const pistoris::AnimationSoundSourceReference> references,
     SoundSourceLayout layout = SoundSourceLayout::kLoose) {
   HydrationResult result;
@@ -195,20 +193,13 @@ inline std::optional<HydrationResult> hydrateAnimationSounds(
       CHECK(source.animation_index < animations.size());
       return std::nullopt;
     }
-    if (animations[source.animation_index] == nullptr) {
-      CHECK(animations[source.animation_index] != nullptr);
-      return std::nullopt;
-    }
-    pistoris::Animation& animation = *animations[source.animation_index];
+    pistoris::Animation& animation = animations[source.animation_index];
     if (source.reference.sound >= animation.soundCount()) {
       CHECK(source.reference.sound < animation.soundCount());
       return std::nullopt;
     }
 
-    ArxSoundView sound{};
-    const ArxReturnCode copy_status = animation.copySoundViews(source.reference.sound, 1, &sound);
-    CHECK(copy_status == ARX_OK);
-    if (copy_status != ARX_OK) return std::nullopt;
+    const ArxSoundView sound = animation.sounds()[source.reference.sound];
     if (sound.encoded_audio.size != 0) continue;
 
     const std::filesystem::path path = soundFile(owner, source.reference.path, layout);
@@ -217,9 +208,9 @@ inline std::optional<HydrationResult> hydrateAnimationSounds(
     const ArxReturnCode validation = pistoris::binary::validateEncodedAudio(bytes);
     CHECK(validation == ARX_OK);
     if (validation != ARX_OK) return std::nullopt;
-    const ArxReturnCode set_status = animation.setSoundData(source.reference.sound, {bytes.data(), bytes.size()});
-    CHECK(set_status == ARX_OK);
-    if (set_status != ARX_OK) return std::nullopt;
+    const auto set_status = animation.setSoundData(source.reference.sound, {bytes.data(), bytes.size()});
+    CHECK(set_status.code() == ARX_OK);
+    if (!set_status) return std::nullopt;
     ++result.hydrated;
   }
   return result;
@@ -324,23 +315,21 @@ std::optional<HydrationResult> hydrateTexturesFromFiles(Asset& asset, std::span<
     return std::nullopt;
   }
   std::vector<bool> loaded(asset.textureCount(), false);
-  std::vector<ArxTextureView> views(asset.textureCount());
-  if (!views.empty()) {
-    const ArxReturnCode status = asset.copyTextureViews(0, views.size(), views.data());
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+  {
+    const auto textures = asset.textures();
+    for (std::size_t index = 0; index < textures.size(); ++index) {
+      loaded[index] = textures[index].encoded_image.size != 0;
+    }
   }
-  for (std::size_t index = 0; index < views.size(); ++index) loaded[index] = views[index].encoded_image.size != 0;
 
   for (std::size_t texture = 0; texture < source_paths.size(); ++texture) {
     if (loaded[texture] || source_paths[texture].empty()) continue;
     const auto found =
         std::ranges::find_if(files, [&](const File& file) { return texturePathsMatch(source_paths[texture], file); });
     if (found == files.end()) continue;
-    const ArxReturnCode status =
-        asset.setTextureImage(texture, {found->encoded_image.data(), found->encoded_image.size()});
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+    const auto status = asset.setTextureImage(texture, {found->encoded_image.data(), found->encoded_image.size()});
+    CHECK(status.code() == ARX_OK);
+    if (!status) return std::nullopt;
     loaded[texture] = true;
     ++result.hydrated;
   }
@@ -354,13 +343,12 @@ std::optional<HydrationResult> hydrateSoundsFromFiles(Asset& asset,
                                                       SoundSourceLayout layout = SoundSourceLayout::kLoose) {
   HydrationResult result;
   std::vector<bool> loaded(asset.soundCount(), false);
-  std::vector<ArxSoundView> views(asset.soundCount());
-  if (!views.empty()) {
-    const ArxReturnCode status = asset.copySoundViews(0, views.size(), views.data());
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+  {
+    const auto sounds = asset.sounds();
+    for (std::size_t index = 0; index < sounds.size(); ++index) {
+      loaded[index] = sounds[index].encoded_audio.size != 0;
+    }
   }
-  for (std::size_t index = 0; index < views.size(); ++index) loaded[index] = views[index].encoded_audio.size != 0;
 
   for (const pistoris::SoundSourceReference& reference : references) {
     if (reference.sound >= asset.soundCount()) {
@@ -374,10 +362,9 @@ std::optional<HydrationResult> hydrateSoundsFromFiles(Asset& asset,
       return resourceKey(file.path) == resourceKey(reference.path);
     });
     if (found == files.end()) continue;
-    const ArxReturnCode status =
-        asset.setSoundData(reference.sound, {found->encoded_audio.data(), found->encoded_audio.size()});
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
+    const auto status = asset.setSoundData(reference.sound, {found->encoded_audio.data(), found->encoded_audio.size()});
+    CHECK(status.code() == ARX_OK);
+    if (!status) return std::nullopt;
     loaded[reference.sound] = true;
     ++result.hydrated;
   }
@@ -393,9 +380,10 @@ struct ObjFixtureInput {
 inline std::optional<ObjFixtureInput> readObjFixture(const std::filesystem::path& path) {
   ObjFixtureInput input;
   input.obj = readText(path);
-  const ArxReturnCode status = pistoris::objMaterialLibraryPaths(input.obj, input.library_paths);
-  CHECK(status == ARX_OK);
-  if (status != ARX_OK) return std::nullopt;
+  auto paths = pistoris::objMaterialLibraryPaths(input.obj);
+  CHECK(paths);
+  if (!paths) return std::nullopt;
+  input.library_paths = std::move(*paths);
   input.library_texts.reserve(input.library_paths.size());
   for (const std::string& library_path : input.library_paths) {
     const std::filesystem::path file = resourceFile(path.parent_path(), library_path);

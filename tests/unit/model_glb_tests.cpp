@@ -8,8 +8,10 @@
 #include "arx_pistoris/base/flags.h"
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/result.hpp"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
+#include "arx_pistoris/glb/location.hpp"
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/model/bake.hpp"
 #include "arx_pistoris/model/types.h"
@@ -48,12 +50,201 @@ namespace {
 std::string_view view(ArxStringView value) { return {value.data, value.size}; }
 ArxStringView view(std::string_view value) { return {value.data(), value.size()}; }
 
+template <class View, class Value>
+ArxReturnCode copyView(View source, std::size_t offset, std::size_t count, Value* out) {
+  if (offset > source.size() || count > source.size() - offset) return ARX_INDEX_OUT_OF_RANGE;
+  if (count != 0 && out == nullptr) return ARX_INVALID_DATA_POINTER;
+  for (std::size_t index = 0; index < count; ++index) out[index] = source[offset + index];
+  return ARX_OK;
+}
+
+ArxReturnCode importNative(pistoris::Model& out, const pistoris::ftl::Data& native) {
+  auto result = pistoris::Model::importNative(native);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode importGlb(pistoris::Model& out, std::span<const std::uint8_t> encoded) {
+  auto result = pistoris::Model::importGlb(encoded);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode importGlb(pistoris::Model& out, std::span<const std::uint8_t> encoded,
+                        const pistoris::Model::GlbImportOptions& options) {
+  auto result = pistoris::Model::importGlb(encoded, options);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+void assignAnimations(std::vector<std::unique_ptr<pistoris::Animation>>& out,
+                      std::vector<pistoris::Animation>&& animations) {
+  std::vector<std::unique_ptr<pistoris::Animation>> assigned;
+  assigned.reserve(animations.size());
+  for (pistoris::Animation& animation : animations) {
+    assigned.push_back(std::make_unique<pistoris::Animation>(std::move(animation)));
+  }
+  out = std::move(assigned);
+}
+
+ArxReturnCode importGlb(pistoris::Model& out, std::vector<std::unique_ptr<pistoris::Animation>>& animations,
+                        std::span<const std::uint8_t> encoded, ArxAnimationConversionReport* report = nullptr) {
+  auto result = pistoris::Model::importGlbWithAnimations(encoded, report);
+  if (!result) return result.code();
+  out = std::move(result->model);
+  assignAnimations(animations, std::move(result->animations));
+  return ARX_OK;
+}
+
+ArxReturnCode importGlb(pistoris::Model& out, std::vector<std::unique_ptr<pistoris::Animation>>& animations,
+                        std::span<const std::uint8_t> encoded, const pistoris::Model::GlbImportOptions& options,
+                        ArxAnimationConversionReport* report = nullptr) {
+  auto result = pistoris::Model::importGlbWithAnimations(encoded, options, report);
+  if (!result) return result.code();
+  out = std::move(result->model);
+  assignAnimations(animations, std::move(result->animations));
+  return ARX_OK;
+}
+
+ArxReturnCode exportGlb(const pistoris::Model& model, std::vector<std::uint8_t>& out) {
+  auto result = model.exportGlb();
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode exportGlb(const pistoris::Model& model, std::vector<std::uint8_t>& out,
+                        const pistoris::Model::GlbExportOptions& options) {
+  auto result = model.exportGlb(options);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode exportGlb(const pistoris::Model& model, std::vector<std::uint8_t>& out,
+                        std::span<const pistoris::Animation* const> animations,
+                        ArxAnimationConversionReport* report = nullptr) {
+  auto result = model.exportGlb(animations, report);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode exportGlb(const pistoris::Model& model, std::vector<std::uint8_t>& out,
+                        std::span<const pistoris::Animation* const> animations,
+                        const pistoris::Model::GlbExportOptions& options,
+                        ArxAnimationConversionReport* report = nullptr) {
+  auto result = model.exportGlb(animations, options, report);
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode copyVertices(const pistoris::Model& model, std::size_t offset, std::size_t count, ArxModelVertex* out) {
+  return copyView(model.vertices(), offset, count, out);
+}
+
+ArxReturnCode copyFaces(const pistoris::Model& model, std::size_t offset, std::size_t count, ArxModelFace* out) {
+  return copyView(model.faces(), offset, count, out);
+}
+
+ArxReturnCode copyTextureViews(const pistoris::Model& model, std::size_t offset, std::size_t count,
+                               ArxTextureView* out) {
+  return copyView(model.textures(), offset, count, out);
+}
+
+ArxReturnCode copyBones(const pistoris::Model& model, std::size_t offset, std::size_t count, ArxModelBone* out) {
+  return copyView(model.bones(), offset, count, out);
+}
+
+ArxReturnCode copyActionPoints(const pistoris::Model& model, std::size_t offset, std::size_t count,
+                               ArxModelActionPoint* out) {
+  return copyView(model.actionPoints(), offset, count, out);
+}
+
+ArxReturnCode copySelectionIds(const pistoris::Model& model, std::size_t offset, std::size_t count,
+                               pistoris::SelectionId* out) {
+  return copyView(model.selectionIds(), offset, count, out);
+}
+
+ArxReturnCode copySelectionBones(const pistoris::Model& model, pistoris::SelectionId id, std::size_t offset,
+                                 std::size_t count, pistoris::BoneIndex* out) {
+  auto result = model.selectionBones(id);
+  return result ? copyView(*result, offset, count, out) : result.code();
+}
+
+ArxReturnCode copyKeyframes(const pistoris::Animation& animation, std::size_t offset, std::size_t count,
+                            ArxAnimationKeyframe* out) {
+  return copyView(animation.keyframes(), offset, count, out);
+}
+
+ArxReturnCode copySoundViews(const pistoris::Animation& animation, pistoris::SoundIndex offset, std::size_t count,
+                             ArxSoundView* out) {
+  return copyView(animation.sounds(), offset, count, out);
+}
+
+ArxReturnCode copyGroupTransforms(const pistoris::Animation& animation, std::size_t keyframe, std::size_t offset,
+                                  std::size_t count, ArxAnimationGroupTransform* out) {
+  auto result = animation.groupTransforms(keyframe);
+  return result ? copyView(*result, offset, count, out) : result.code();
+}
+
+template <class Value, class Location>
+ArxReturnCode assignResult(pistoris::Result<Value, Location> result, Value& out) {
+  if (!result) return result.code();
+  out = std::move(*result);
+  return ARX_OK;
+}
+
+ArxReturnCode addVertex(pistoris::Model& model, const ArxModelVertex& vertex, pistoris::VertexIndex& out) {
+  return assignResult(model.addVertex(vertex), out);
+}
+
+ArxReturnCode addSelection(pistoris::Model& model, const ArxModelSelection& selection, pistoris::SelectionId& out) {
+  return assignResult(model.addSelection(selection), out);
+}
+
+ArxReturnCode addTexture(pistoris::Model& model, const ArxTextureView& texture, pistoris::TextureIndex& out) {
+  return assignResult(model.addTexture(texture), out);
+}
+
+ArxReturnCode addBone(pistoris::Model& model, const ArxModelBone& bone, pistoris::BoneIndex& out) {
+  return assignResult(model.addBone(bone), out);
+}
+
+ArxReturnCode addActionPoint(pistoris::Model& model, const ArxModelActionPoint& point,
+                             pistoris::ActionPointIndex& out) {
+  return assignResult(model.addActionPoint(point), out);
+}
+
+ArxReturnCode bakeNativeBundle(const pistoris::Model& model, const pistoris::NativeModelBakeOptions& options,
+                               pistoris::NativeModelBundle& out) {
+  return assignResult(model.bakeNativeBundle(options), out);
+}
+
+ArxReturnCode getSelection(const pistoris::Model& model, pistoris::SelectionId id, ArxModelSelection& out) {
+  return assignResult(model.selection(id), out);
+}
+
+ArxReturnCode selectionBoneCount(const pistoris::Model& model, pistoris::SelectionId id, std::size_t& out) {
+  auto result = model.selectionBones(id);
+  if (!result) return result.code();
+  out = result->size();
+  return ARX_OK;
+}
+
+ArxReturnCode selectionIncludesOrigin(const pistoris::Model& model, pistoris::SelectionId id, bool& out) {
+  return assignResult(model.selectionIncludesOrigin(id), out);
+}
+
 pistoris::SoundIndex addSound(pistoris::Animation& animation, std::string_view path) {
-  pistoris::SoundIndex result = pistoris::kNoSound;
   const ArxSoundView sound{view(path), {}};
-  const ArxReturnCode rc = animation.addSound(sound, result);
-  REQUIRE(rc == ARX_OK);
-  return result;
+  auto result = animation.addSound(sound);
+  REQUIRE(result);
+  return *result;
 }
 
 nlohmann::json parseGlbJson(std::span<const std::uint8_t> source) {
@@ -78,8 +269,8 @@ std::size_t glbNodeIndexWithPrefix(const nlohmann::json& gltf, std::string_view 
 }
 
 void configureMotionAnimation(pistoris::Animation& animation) {
-  REQUIRE(animation.setName("walk") == ARX_OK);
-  REQUIRE(animation.setResourcePath("anim:npc:walk__fast") == ARX_OK);
+  REQUIRE(animation.setName("walk"));
+  REQUIRE(animation.setResourcePath("anim:npc:walk__fast"));
   const pistoris::SoundIndex step_sound = addSound(animation, "sfx/step__hard.wav");
   std::array<ArxAnimationGroupTransform, 2> first_transforms{};
   std::array<ArxAnimationGroupTransform, 2> second_transforms{};
@@ -95,17 +286,17 @@ void configureMotionAnimation(pistoris::Animation& animation) {
        second_transforms.data(),
        second_transforms.size()},
   }};
-  REQUIRE(animation.replaceKeyframes(10, inputs.data(), inputs.size()) == ARX_OK);
+  REQUIRE(animation.replaceKeyframes(10, inputs.data(), inputs.size()));
 }
 
 std::vector<std::uint8_t> makeMotionModelGlb(pistoris::Model& model, float arx_units_per_glb_unit = 10.0f,
                                              ArxAnimationConversionReport* report = nullptr) {
-  REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+  REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
   pistoris::Animation animation;
   configureMotionAnimation(animation);
   const std::array<const pistoris::Animation*, 1> animations = {&animation};
   std::vector<std::uint8_t> result;
-  REQUIRE(model.exportGlb(result, animations, {.arx_units_per_glb_unit = arx_units_per_glb_unit}, report) == ARX_OK);
+  REQUIRE(exportGlb(model, result, animations, {.arx_units_per_glb_unit = arx_units_per_glb_unit}, report) == ARX_OK);
   return result;
 }
 
@@ -137,11 +328,9 @@ struct ModelGlbLogCapture {
 };
 
 std::vector<pistoris::VertexIndex> selectionVertices(const pistoris::Model& model, pistoris::SelectionId id) {
-  std::size_t count = 0;
-  REQUIRE(model.selectionVertexCount(id, count) == ARX_OK);
-  std::vector<pistoris::VertexIndex> result(count);
-  REQUIRE(model.copySelectionVertices(id, 0, count, result.data()) == ARX_OK);
-  return result;
+  auto result = model.selectionVertices(id);
+  REQUIRE(result);
+  return {result->begin(), result->end()};
 }
 
 bool hasNode(const cgltf_data& data, std::string_view name) {
@@ -764,29 +953,29 @@ TEST_SUITE("Model GLB") {
     pistoris::Model lhs;
     pistoris::Model rhs;
     pistoris::VertexIndex index = pistoris::kInvalidVertexIndex;
-    REQUIRE(lhs.addVertex({{0.0f, 1.0f, 0.0f}}, index) == ARX_OK);
-    REQUIRE(lhs.addVertex({{0.0005f, 0.0f, 0.0f}}, index) == ARX_OK);
-    REQUIRE(rhs.addVertex({{0.0f, 0.0f, 0.0f}}, index) == ARX_OK);
-    REQUIRE(rhs.addVertex({{0.0005f, 1.0f, 0.0f}}, index) == ARX_OK);
+    REQUIRE(addVertex(lhs, {{0.0f, 1.0f, 0.0f}}, index) == ARX_OK);
+    REQUIRE(addVertex(lhs, {{0.0005f, 0.0f, 0.0f}}, index) == ARX_OK);
+    REQUIRE(addVertex(rhs, {{0.0f, 0.0f, 0.0f}}, index) == ARX_OK);
+    REQUIRE(addVertex(rhs, {{0.0005f, 1.0f, 0.0f}}, index) == ARX_OK);
 
     test_support::checkModelsEquivalent(lhs, rhs, {.comparison_epsilon = 0.001f});
   }
 
   TEST_CASE("Roundtrips Model semantics without extras") {
     pistoris::Model source;
-    REQUIRE(pistoris::Model::importNative(source, makeSemanticModelFtl()) == ARX_OK);
-    REQUIRE(source.setOrigin({1}) == ARX_OK);
+    REQUIRE(importNative(source, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(source.setOrigin({1}).code() == ARX_OK);
     ArxModelSelection empty_selection{};
     empty_selection.name = {"empty", 5};
     pistoris::SelectionId empty_selection_id = pistoris::kInvalidSelectionId;
-    REQUIRE(source.addSelection(empty_selection, empty_selection_id) == ARX_OK);
+    REQUIRE(addSelection(source, empty_selection, empty_selection_id) == ARX_OK);
     ArxTextureView unused_texture{};
     unused_texture.path = {"graph/obj3d/textures/unused", 27};
     pistoris::TextureIndex unused_texture_index = pistoris::kNoTexture;
-    REQUIRE(source.addTexture(unused_texture, unused_texture_index) == ARX_OK);
+    REQUIRE(addTexture(source, unused_texture, unused_texture_index) == ARX_OK);
 
     std::vector<std::uint8_t> encoded;
-    REQUIRE(source.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(source, encoded) == ARX_OK);
     REQUIRE(!encoded.empty());
 
     pistoris::glb::Asset asset;
@@ -839,8 +1028,8 @@ TEST_SUITE("Model GLB") {
     CHECK(has_attribute("_EMPTY"));
 
     pistoris::Model imported;
-    REQUIRE(pistoris::Model::importGlb(imported, encoded) == ARX_OK);
-    REQUIRE(imported.validate() == ARX_OK);
+    REQUIRE(importGlb(imported, encoded) == ARX_OK);
+    REQUIRE(imported.validate().code() == ARX_OK);
     CHECK(imported.vertexCount() == 3);
     CHECK(imported.faceCount() == 1);
     CHECK(imported.boneCount() == 2);
@@ -849,7 +1038,7 @@ TEST_SUITE("Model GLB") {
     CHECK(imported.origin().bone == 1);
 
     std::array<ArxModelBone, 2> bones{};
-    REQUIRE(imported.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+    REQUIRE(copyBones(imported, 0, bones.size(), bones.data()) == ARX_OK);
     CHECK((view(bones[0].name) == "root"));
     CHECK(bones[0].blob_shadow_size == doctest::Approx(2.0f));
     CHECK((view(bones[1].name) == "chest"));
@@ -857,69 +1046,69 @@ TEST_SUITE("Model GLB") {
     CHECK(bones[1].blob_shadow_size == doctest::Approx(1.0f));
 
     std::array<ArxModelActionPoint, 1> actions{};
-    REQUIRE(imported.copyActionPoints(0, 1, actions.data()) == ARX_OK);
+    REQUIRE(copyActionPoints(imported, 0, 1, actions.data()) == ARX_OK);
     CHECK((view(actions[0].name) == "view_attach"));
     CHECK(actions[0].bone == 1);
 
     std::array<pistoris::SelectionId, 6> ids{};
-    REQUIRE(imported.copySelectionIds(0, ids.size(), ids.data()) == ARX_OK);
+    REQUIRE(copySelectionIds(imported, 0, ids.size(), ids.data()) == ARX_OK);
     ArxModelSelection selection{};
-    REQUIRE(imported.selection(ids[3], selection) == ARX_OK);
+    REQUIRE(getSelection(imported, ids[3], selection) == ARX_OK);
     CHECK((view(selection.name) == "cut_head"));
     CHECK(selection.has_leading_vertex == 1);
     CHECK(selection.leading_bone == 1);
     CHECK(selectionVertices(imported, ids[0]) == std::vector<pistoris::VertexIndex>{0});
     CHECK(selectionVertices(imported, ids[1]) == std::vector<pistoris::VertexIndex>{1});
     std::size_t bone_count = 0;
-    REQUIRE(imported.selectionBoneCount(ids[0], bone_count) == ARX_OK);
+    REQUIRE(selectionBoneCount(imported, ids[0], bone_count) == ARX_OK);
     REQUIRE(bone_count == 1);
     pistoris::BoneIndex selected_bone = pistoris::kInvalidBoneIndex;
-    REQUIRE(imported.copySelectionBones(ids[0], 0, 1, &selected_bone) == ARX_OK);
+    REQUIRE(copySelectionBones(imported, ids[0], 0, 1, &selected_bone) == ARX_OK);
     CHECK(selected_bone == 0);
     bool includes_origin = false;
-    REQUIRE(imported.selectionIncludesOrigin(ids[0], includes_origin) == ARX_OK);
+    REQUIRE(selectionIncludesOrigin(imported, ids[0], includes_origin) == ARX_OK);
     CHECK(includes_origin);
   }
 
   TEST_CASE("Roundtrips multiple skeleton roots through native FTL and GLB") {
     pistoris::Model source;
-    REQUIRE(pistoris::Model::importNative(source, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(source, makeSemanticModelFtl()) == ARX_OK);
     ArxModelBone second_root{};
-    REQUIRE(source.copyBones(1, 1, &second_root) == ARX_OK);
+    REQUIRE(copyBones(source, 1, 1, &second_root) == ARX_OK);
     const std::string second_root_name(view(second_root.name));
     second_root.name = {second_root_name.data(), second_root_name.size()};
     second_root.parent = pistoris::kInvalidBoneIndex;
-    REQUIRE(source.setBone(1, second_root) == ARX_OK);
+    REQUIRE(source.setBone(1, second_root).code() == ARX_OK);
     const std::string branch_name = "branch";
     ArxModelBone branch{{branch_name.data(), branch_name.size()}, {7.0f, 8.0f, 9.0f}, 1, 0.0f};
     pistoris::BoneIndex branch_index = pistoris::kInvalidBoneIndex;
-    REQUIRE(source.addBone(branch, branch_index) == ARX_OK);
+    REQUIRE(addBone(source, branch, branch_index) == ARX_OK);
     REQUIRE(branch_index == 2);
-    REQUIRE(source.validate() == ARX_OK);
+    REQUIRE(source.validate().code() == ARX_OK);
 
     pistoris::NativeModelBundle native;
-    REQUIRE(source.bakeNativeBundle({.include_texture_files = false}, native) == ARX_OK);
+    REQUIRE(bakeNativeBundle(source, {.include_texture_files = false}, native) == ARX_OK);
     pistoris::Model native_roundtrip;
-    REQUIRE(pistoris::Model::importNative(native_roundtrip, native.ftl) == ARX_OK);
+    REQUIRE(importNative(native_roundtrip, native.ftl) == ARX_OK);
     std::array<ArxModelBone, 3> bones{};
-    REQUIRE(native_roundtrip.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+    REQUIRE(copyBones(native_roundtrip, 0, bones.size(), bones.data()) == ARX_OK);
     CHECK(bones[0].parent == pistoris::kInvalidBoneIndex);
     CHECK(bones[1].parent == pistoris::kInvalidBoneIndex);
     CHECK(bones[2].parent == 1);
 
     pistoris::Animation animation;
-    REQUIRE(animation.setName("forest") == ARX_OK);
-    REQUIRE(animation.setResourcePath("anim:npc:forest") == ARX_OK);
+    REQUIRE(animation.setName("forest").code() == ARX_OK);
+    REQUIRE(animation.setResourcePath("anim:npc:forest").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 3> transforms{};
     transforms[0].translation = {1.0f, 2.0f, 3.0f};
     transforms[1].translation = {4.0f, 5.0f, 6.0f};
     transforms[2].translation = {7.0f, 8.0f, 9.0f};
     const ArxAnimationKeyframeInput keyframe{{0, {}, {}, 0, pistoris::kNoSound}, transforms.data(), transforms.size()};
-    REQUIRE(animation.replaceKeyframes(1, &keyframe, 1) == ARX_OK);
+    REQUIRE(animation.replaceKeyframes(1, &keyframe, 1).code() == ARX_OK);
     const std::array<const pistoris::Animation*, 1> animations = {&animation};
 
     std::vector<std::uint8_t> encoded;
-    REQUIRE(source.exportGlb(encoded, animations) == ARX_OK);
+    REQUIRE(exportGlb(source, encoded, animations) == ARX_OK);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
     const cgltf_data& glb = *asset.data();
@@ -939,16 +1128,16 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model glb_roundtrip;
     std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
-    REQUIRE(pistoris::Model::importGlb(glb_roundtrip, imported_animations, encoded) == ARX_OK);
-    REQUIRE(glb_roundtrip.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+    REQUIRE(importGlb(glb_roundtrip, imported_animations, encoded) == ARX_OK);
+    REQUIRE(copyBones(glb_roundtrip, 0, bones.size(), bones.data()) == ARX_OK);
     CHECK(bones[0].parent == pistoris::kInvalidBoneIndex);
     CHECK(bones[1].parent == pistoris::kInvalidBoneIndex);
     CHECK(bones[2].parent == 1);
     REQUIRE(imported_animations.size() == 1);
     REQUIRE(imported_animations[0]->groupCount() == 3);
     std::array<ArxAnimationGroupTransform, 3> imported_transforms{};
-    REQUIRE(imported_animations[0]->copyGroupTransforms(0, 0, imported_transforms.size(), imported_transforms.data()) ==
-            ARX_OK);
+    REQUIRE(copyGroupTransforms(
+                *imported_animations[0], 0, 0, imported_transforms.size(), imported_transforms.data()) == ARX_OK);
     CHECK(imported_transforms[0].translation.x == doctest::Approx(1.0f));
     CHECK(imported_transforms[1].translation.x == doctest::Approx(4.0f));
     CHECK(imported_transforms[2].translation.x == doctest::Approx(7.0f));
@@ -956,25 +1145,25 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("GLB name repair preserves duplicate action names and existing suffixed names") {
     pistoris::Model source;
-    REQUIRE(pistoris::Model::importNative(source, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(source, makeSemanticModelFtl()) == ARX_OK);
 
     const std::string third_bone_name = "third";
     ArxModelBone third_bone{};
     third_bone.name = {third_bone_name.data(), third_bone_name.size()};
     third_bone.parent = 0;
     pistoris::BoneIndex third_bone_index = pistoris::kInvalidBoneIndex;
-    REQUIRE(source.addBone(third_bone, third_bone_index) == ARX_OK);
+    REQUIRE(addBone(source, third_bone, third_bone_index) == ARX_OK);
     const std::array<std::string, 2> extra_action_names = {"view_attach", "view_attach"};
     for (const std::string& name : extra_action_names) {
       ArxModelActionPoint point{};
       point.name = {name.data(), name.size()};
       point.bone = 0;
       pistoris::ActionPointIndex point_index = pistoris::kInvalidActionPointIndex;
-      REQUIRE(source.addActionPoint(point, point_index) == ARX_OK);
+      REQUIRE(addActionPoint(source, point, point_index) == ARX_OK);
     }
 
     std::vector<std::uint8_t> encoded;
-    REQUIRE(source.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(source, encoded) == ARX_OK);
     std::uint32_t json_size = 0;
     std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
     nlohmann::json gltf = nlohmann::json::parse(encoded.begin() + 20, encoded.begin() + 20 + json_size);
@@ -1012,25 +1201,25 @@ TEST_SUITE("Model GLB") {
     attributes["_a-_1"] = selection_values[2];
 
     pistoris::Model imported;
-    REQUIRE(pistoris::Model::importGlb(imported, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported, replaceGlbJson(encoded, gltf)) == ARX_OK);
 
     std::array<ArxModelBone, 3> bones{};
-    REQUIRE(imported.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+    REQUIRE(copyBones(imported, 0, bones.size(), bones.data()) == ARX_OK);
     CHECK((view(bones[0].name) == "a"));
     CHECK((view(bones[1].name) == "a_2"));
     CHECK((view(bones[2].name) == "a_1"));
     std::array<ArxModelActionPoint, 3> actions{};
-    REQUIRE(imported.copyActionPoints(0, actions.size(), actions.data()) == ARX_OK);
+    REQUIRE(copyActionPoints(imported, 0, actions.size(), actions.data()) == ARX_OK);
     CHECK((view(actions[0].name) == "a"));
     CHECK((view(actions[1].name) == "a"));
     CHECK((view(actions[2].name) == "a_1"));
 
     std::vector<pistoris::SelectionId> selection_ids(imported.selectionCount());
-    REQUIRE(imported.copySelectionIds(0, selection_ids.size(), selection_ids.data()) == ARX_OK);
+    REQUIRE(copySelectionIds(imported, 0, selection_ids.size(), selection_ids.data()) == ARX_OK);
     std::set<std::string> selection_names;
     for (pistoris::SelectionId id : selection_ids) {
       ArxModelSelection selection{};
-      REQUIRE(imported.selection(id, selection) == ARX_OK);
+      REQUIRE(getSelection(imported, id, selection) == ARX_OK);
       selection_names.emplace(view(selection.name));
     }
     CHECK(selection_names.contains("a-"));
@@ -1040,10 +1229,10 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("Rejects structural delimiters in selection attributes") {
     pistoris::Model source;
-    REQUIRE(pistoris::Model::importNative(source, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(source, makeSemanticModelFtl()) == ARX_OK);
 
     std::vector<std::uint8_t> encoded;
-    REQUIRE(source.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(source, encoded) == ARX_OK);
     std::uint32_t json_size = 0;
     std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
     nlohmann::json gltf = nlohmann::json::parse(encoded.begin() + 20, encoded.begin() + 20 + json_size);
@@ -1053,26 +1242,26 @@ TEST_SUITE("Model GLB") {
     attributes.erase("_HEAD");
 
     pistoris::Model imported;
-    CHECK(pistoris::Model::importGlb(imported, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_SELECTION);
+    CHECK(importGlb(imported, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_SELECTION);
   }
 
   TEST_CASE("Accepts an optional single semantic origin and validates units") {
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, {}) != ARX_OK);
+    CHECK(importGlb(model, {}) != ARX_OK);
     pistoris::Model::GlbImportOptions import_options;
     import_options.arx_units_per_glb_unit = 0.0f;
-    CHECK(pistoris::Model::importGlb(model, std::array<std::uint8_t, 1>{0}, import_options) == ARX_INVALID_OPTIONS);
+    CHECK(importGlb(model, std::array<std::uint8_t, 1>{0}, import_options) == ARX_INVALID_OPTIONS);
 
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
     pistoris::Model::GlbExportOptions export_options;
     export_options.arx_units_per_glb_unit = 1001.0f;
     std::vector<std::uint8_t> encoded;
-    CHECK(model.exportGlb(encoded, export_options) == ARX_INVALID_OPTIONS);
+    CHECK(exportGlb(model, encoded, export_options) == ARX_INVALID_OPTIONS);
     const std::size_t faces = model.faceCount();
-    CHECK(pistoris::Model::importGlb(model, {}) != ARX_OK);
+    CHECK(importGlb(model, {}) != ARX_OK);
     CHECK(model.faceCount() == faces);
 
-    REQUIRE(model.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded) == ARX_OK);
     std::uint32_t json_size = 0;
     std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
     nlohmann::json gltf = nlohmann::json::parse(encoded.begin() + 20, encoded.begin() + 20 + json_size);
@@ -1081,24 +1270,24 @@ TEST_SUITE("Model GLB") {
       if (gltf["nodes"][index].value("name", std::string{}) == "arx_model_origin__origin") model_root = index;
     REQUIRE(model_root < gltf["nodes"].size());
     gltf["nodes"][model_root]["name"] = "model";
-    REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(model.faceCount() == faces);
 
     gltf["nodes"][model_root]["name"] = "arx_model_origin";
     {
       ModelGlbLogCapture logs;
-      REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      REQUIRE(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
       CHECK(logs.contains("arx_model_origin' has no final label"));
     }
 
     gltf["nodes"][model_root]["name"] = "arx_model_origin__origin__extra";
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_HIERARCHY);
+    CHECK(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_HIERARCHY);
 
     const std::size_t duplicate = gltf["nodes"].size();
     gltf["nodes"].push_back({{"name", "arx_model_origin__duplicate"}});
     gltf["scenes"][0]["nodes"].push_back(duplicate);
     gltf["nodes"][model_root]["name"] = "arx_model_origin__origin";
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_HIERARCHY);
+    CHECK(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_HIERARCHY);
   }
 
   TEST_CASE("Failed Model GLB conversions preserve Animation reports") {
@@ -1107,14 +1296,14 @@ TEST_SUITE("Model GLB") {
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
     const std::vector<std::uint8_t> invalid;
 
-    CHECK(pistoris::Model::importGlb(model, animations, invalid, &report) != ARX_OK);
+    CHECK(importGlb(model, animations, invalid, &report) != ARX_OK);
     CHECK(report.converted == 4);
     CHECK(report.skipped == 5);
 
     report = {6, 7};
     std::vector<std::uint8_t> encoded;
     const std::span<const pistoris::Animation* const> no_animations;
-    CHECK(model.exportGlb(encoded, no_animations, &report) != ARX_OK);
+    CHECK(exportGlb(model, encoded, no_animations, &report) != ARX_OK);
     CHECK(report.converted == 6);
     CHECK(report.skipped == 7);
   }
@@ -1130,17 +1319,15 @@ TEST_SUITE("Model GLB") {
 
     ModelGlbLogCapture logs;
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
     CHECK(model.faceCount() == 1);
     CHECK(logs.contains("1 mesh node(s) outside the model origin; ignored"));
   }
 
   TEST_CASE("Resolves bone hierarchy after all joint ordinals are known") {
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kPrimary, true)) ==
-          ARX_GLB_BAD_MODEL_SKELETON);
-    CHECK(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kPrimary, false, true)) ==
-          ARX_GLB_BAD_MODEL_SKINNING);
+    CHECK(importGlb(model, makeSkinnedModelGlb(SkinFixture::kPrimary, true)) == ARX_GLB_BAD_MODEL_SKELETON);
+    CHECK(importGlb(model, makeSkinnedModelGlb(SkinFixture::kPrimary, false, true)) == ARX_GLB_BAD_MODEL_SKINNING);
   }
 
   TEST_CASE("Rejects bone ordinals beyond the intermediate limit") {
@@ -1148,24 +1335,33 @@ TEST_SUITE("Model GLB") {
     std::uint32_t json_size = 0;
     std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
     nlohmann::json gltf = nlohmann::json::parse(encoded.begin() + 20, encoded.begin() + 20 + json_size);
-    for (nlohmann::json& node : gltf["nodes"])
-      if (node.value("name", std::string{}) == "1__child") node["name"] = "1024__child";
+    const std::size_t child = static_cast<std::size_t>(
+        std::ranges::find_if(
+            gltf["nodes"], [](const nlohmann::json& node) { return node.value("name", std::string{}) == "1__child"; }) -
+        gltf["nodes"].begin());
+    REQUIRE(child < gltf["nodes"].size());
+    gltf["nodes"][child]["name"] = "1024__child";
 
-    pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_MODEL_TOO_MANY_BONES);
+    const pistoris::GlbResult<pistoris::Model> result = pistoris::Model::importGlb(replaceGlbJson(encoded, gltf));
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_MODEL_TOO_MANY_BONES);
+    REQUIRE(result.error() != nullptr);
+    REQUIRE(result.error()->location().has_value());
+    CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+    CHECK(result.error()->location()->index == child);
+    CHECK(result.error()->location()->label == "1024__child");
+    CHECK_FALSE(result.error()->detail().empty());
   }
 
   TEST_CASE("Reads every consecutive skin attribute set") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kTwoSets)) == ARX_OK);
+    REQUIRE(importGlb(model, makeSkinnedModelGlb(SkinFixture::kTwoSets)) == ARX_OK);
     std::array<ArxModelVertex, 3> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     for (const ArxModelVertex& vertex : vertices) CHECK(vertex.bone == 1);
 
-    CHECK(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kMissingPrimary)) ==
-          ARX_GLB_BAD_MODEL_SKINNING);
-    CHECK(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kUnpairedSecondary)) ==
-          ARX_GLB_BAD_MODEL_SKINNING);
+    CHECK(importGlb(model, makeSkinnedModelGlb(SkinFixture::kMissingPrimary)) == ARX_GLB_BAD_MODEL_SKINNING);
+    CHECK(importGlb(model, makeSkinnedModelGlb(SkinFixture::kUnpairedSecondary)) == ARX_GLB_BAD_MODEL_SKINNING);
   }
 
   TEST_CASE("Ignores meshes attached to terminal semantic nodes") {
@@ -1174,44 +1370,100 @@ TEST_SUITE("Model GLB") {
          {"arx_action__preview__action_0", "arx_bone__root", "arx_selection_probe__cut_head__preview"}) {
       CAPTURE(name);
       pistoris::Model model;
-      REQUIRE(pistoris::Model::importGlb(model, attachMeshToTerminalNode(base, name)) == ARX_OK);
+      REQUIRE(importGlb(model, attachMeshToTerminalNode(base, name)) == ARX_OK);
       CHECK(model.faceCount() == 1);
     }
     pistoris::Model model;
     ModelGlbLogCapture logs;
-    REQUIRE(pistoris::Model::importGlb(model, attachMeshToTerminalNode(base, "arx_action__preview")) == ARX_OK);
+    REQUIRE(importGlb(model, attachMeshToTerminalNode(base, "arx_action__preview")) == ARX_OK);
     CHECK(logs.contains("arx_action__preview' has no final label"));
+  }
+
+  TEST_CASE("Reports exact bone-helper and semantic-child failures") {
+    const auto parse = [](std::span<const std::uint8_t> encoded) {
+      std::uint32_t json_size = 0;
+      std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
+      return nlohmann::json::parse(encoded.begin() + 20, encoded.begin() + 20 + json_size);
+    };
+    const auto model_root = [](const nlohmann::json& gltf) {
+      return static_cast<std::size_t>(std::ranges::find_if(gltf["nodes"],
+                                                           [](const nlohmann::json& node) {
+                                                             return node.value("name", std::string{}) ==
+                                                                    "arx_model_origin__origin";
+                                                           }) -
+                                      gltf["nodes"].begin());
+    };
+
+    SUBCASE("bone helper") {
+      const std::vector<std::uint8_t> encoded = makeSkinnedModelGlb(SkinFixture::kPrimary);
+      nlohmann::json gltf = parse(encoded);
+      const std::size_t root = model_root(gltf);
+      REQUIRE(root < gltf["nodes"].size());
+      const std::size_t helper = gltf["nodes"].size();
+      gltf["nodes"].push_back({{"name", "arx_bone__root__extra"}});
+      gltf["nodes"][root]["children"].push_back(helper);
+
+      const pistoris::GlbResult<pistoris::Model> result = pistoris::Model::importGlb(replaceGlbJson(encoded, gltf));
+      REQUIRE_FALSE(result);
+      CHECK(result.code() == ARX_GLB_BAD_MODEL_BONE_HELPER);
+      REQUIRE(result.error() != nullptr);
+      REQUIRE(result.error()->location().has_value());
+      CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+      CHECK(result.error()->location()->index == helper);
+      CHECK(result.error()->location()->label == "arx_bone__root__extra");
+      CHECK_FALSE(result.error()->detail().empty());
+    }
+
+    SUBCASE("semantic child") {
+      const std::vector<std::uint8_t> encoded = makeSkinnedModelGlb(SkinFixture::kPrimary);
+      nlohmann::json gltf = parse(encoded);
+      const std::size_t root = model_root(gltf);
+      REQUIRE(root < gltf["nodes"].size());
+      const std::size_t helper = gltf["nodes"].size();
+      const std::size_t setting = helper + 1U;
+      gltf["nodes"].push_back({{"name", "arx_bone__root"}, {"children", {setting}}});
+      gltf["nodes"].push_back({{"name", "SETTINGS__BLOB_SHADOW_bad__settings"}});
+      gltf["nodes"][root]["children"].push_back(helper);
+
+      const pistoris::GlbResult<pistoris::Model> result = pistoris::Model::importGlb(replaceGlbJson(encoded, gltf));
+      REQUIRE_FALSE(result);
+      CHECK(result.code() == ARX_GLB_BAD_MODEL_BONE_HELPER);
+      REQUIRE(result.error() != nullptr);
+      REQUIRE(result.error()->location().has_value());
+      CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+      CHECK(result.error()->location()->index == setting);
+      CHECK(result.error()->location()->label == "SETTINGS__BLOB_SHADOW_bad__settings");
+      CHECK_FALSE(result.error()->detail().empty());
+    }
   }
 
   TEST_CASE("Keeps distinct glTF image paths and shares identical external images") {
     pistoris::Model model;
     {
       ModelGlbLogCapture logs;
-      REQUIRE(pistoris::Model::importGlb(model, makeTexturedModelGlb("Folder/Foo.PNG", "folder/bar.png")) == ARX_OK);
+      REQUIRE(importGlb(model, makeTexturedModelGlb("Folder/Foo.PNG", "folder/bar.png")) == ARX_OK);
       std::array<ArxTextureView, 2> textures{};
-      REQUIRE(model.copyTextureViews(0, textures.size(), textures.data()) == ARX_OK);
+      REQUIRE(copyTextureViews(model, 0, textures.size(), textures.data()) == ARX_OK);
       CHECK((view(textures[0].path) == "folder/foo"));
       CHECK_FALSE(logs.contains("texture path 'Folder/Foo' normalized"));
     }
 
-    REQUIRE(pistoris::Model::importGlb(model, makeTexturedModelGlb("folder1/foo.png", "folder2/foo.png")) == ARX_OK);
+    REQUIRE(importGlb(model, makeTexturedModelGlb("folder1/foo.png", "folder2/foo.png")) == ARX_OK);
     REQUIRE(model.textureCount() == 2);
     std::array<ArxTextureView, 2> textures{};
-    REQUIRE(model.copyTextureViews(0, textures.size(), textures.data()) == ARX_OK);
+    REQUIRE(copyTextureViews(model, 0, textures.size(), textures.data()) == ARX_OK);
     CHECK((view(textures[0].path) == "folder1/foo"));
     CHECK((view(textures[1].path) == "folder2/foo"));
 
-    REQUIRE(pistoris::Model::importGlb(model, makeTexturedModelGlb("folder/foo.png", "folder/foo.png")) == ARX_OK);
+    REQUIRE(importGlb(model, makeTexturedModelGlb("folder/foo.png", "folder/foo.png")) == ARX_OK);
     REQUIRE(model.textureCount() == 1);
-    REQUIRE(model.copyTextureViews(0, 1, textures.data()) == ARX_OK);
+    REQUIRE(copyTextureViews(model, 0, 1, textures.data()) == ARX_OK);
     CHECK((view(textures[0].path) == "folder/foo"));
 
-    REQUIRE(pistoris::Model::importGlb(model, makeTexturedModelGlb("folder/foo.png", "folder/foo.png", true)) ==
-            ARX_OK);
+    REQUIRE(importGlb(model, makeTexturedModelGlb("folder/foo.png", "folder/foo.png", true)) == ARX_OK);
     CHECK(model.textureCount() == 1);
 
-    CHECK(pistoris::Model::importGlb(model, makeTexturedModelGlb("../outside.png", "folder/bar.png")) ==
-          ARX_GLB_BAD_MODEL_MATERIAL);
+    CHECK(importGlb(model, makeTexturedModelGlb("../outside.png", "folder/bar.png")) == ARX_GLB_BAD_MODEL_MATERIAL);
   }
 
   TEST_CASE("BLEND with base alpha 1 does not infer TRANS") {
@@ -1222,10 +1474,10 @@ TEST_SUITE("Model GLB") {
 
     ModelGlbLogCapture logs;
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(model.faceCount() == 2);
     std::array<ArxModelFace, 2> faces{};
-    REQUIRE(model.copyFaces(0, faces.size(), faces.data()) == ARX_OK);
+    REQUIRE(copyFaces(model, 0, faces.size(), faces.data()) == ARX_OK);
     CHECK((faces[0].flags & pistoris::kFaceBitTrans) == 0);
     CHECK(logs.contains(
         "BLEND with base alpha 1 imported without TRANS; texture alpha, if present, remains native cutout"));
@@ -1260,9 +1512,9 @@ TEST_SUITE("Model GLB") {
     pistoris::Model source;
     const ArxModelMeshInput mesh = {
         vertices.data(), vertices.size(), faces.data(), faces.size(), textures.data(), textures.size()};
-    REQUIRE(source.replaceMesh(mesh) == ARX_OK);
+    REQUIRE(source.replaceMesh(mesh).code() == ARX_OK);
     std::vector<std::uint8_t> encoded;
-    REQUIRE(source.exportGlb(encoded) == ARX_OK);
+    REQUIRE(exportGlb(source, encoded) == ARX_OK);
 
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
@@ -1281,43 +1533,43 @@ TEST_SUITE("Model GLB") {
     CHECK(material_names == std::set<std::string_view>{"item.pie", "item.pie_1"});
 
     pistoris::Model imported;
-    REQUIRE(pistoris::Model::importGlb(imported, encoded) == ARX_OK);
+    REQUIRE(importGlb(imported, encoded) == ARX_OK);
     CHECK(imported.vertexCount() == 4);
     CHECK(imported.faceCount() == 2);
     std::array<ArxTextureView, 2> imported_textures{};
-    REQUIRE(imported.copyTextureViews(0, imported_textures.size(), imported_textures.data()) == ARX_OK);
+    REQUIRE(copyTextureViews(imported, 0, imported_textures.size(), imported_textures.data()) == ARX_OK);
     CHECK(view(imported_textures[0].path) == "folder1/item.pie");
     CHECK(view(imported_textures[1].path) == "folder2/item.pie");
   }
 
   TEST_CASE("Splits shared positions with different bone and selection semantics") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, makeSharedSemanticModelGlb()) == ARX_OK);
+    REQUIRE(importGlb(model, makeSharedSemanticModelGlb()) == ARX_OK);
     CHECK(model.vertexCount() == 9);
     CHECK(model.faceCount() == 3);
 
     std::array<ArxModelVertex, 9> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     for (std::size_t index = 0; index < 3; ++index) CHECK(vertices[index].bone == 0);
     for (std::size_t index = 3; index < 6; ++index) CHECK(vertices[index].bone == 1);
     for (std::size_t index = 6; index < 9; ++index) CHECK(vertices[index].bone == 0);
 
     REQUIRE(model.selectionCount() == 1);
     std::array<pistoris::SelectionId, 1> selections{};
-    REQUIRE(model.copySelectionIds(0, selections.size(), selections.data()) == ARX_OK);
+    REQUIRE(copySelectionIds(model, 0, selections.size(), selections.data()) == ARX_OK);
     CHECK(selectionVertices(model, selections[0]) == std::vector<pistoris::VertexIndex>{0, 1, 2, 3, 4, 5});
   }
 
   TEST_CASE("Imports separate projections for skins sharing one skeleton") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, makeMultiSkinModelGlb()) == ARX_OK);
+    REQUIRE(importGlb(model, makeMultiSkinModelGlb()) == ARX_OK);
     CHECK(model.vertexCount() == 6);
     CHECK(model.faceCount() == 2);
     CHECK(model.boneCount() == 2);
 
-    REQUIRE(pistoris::Model::importGlb(model, makeMultiSkinModelGlb(true)) == ARX_OK);
+    REQUIRE(importGlb(model, makeMultiSkinModelGlb(true)) == ARX_OK);
     std::array<ArxModelVertex, 6> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     CHECK(vertices[3].position.x == doctest::Approx(10.0f));
     CHECK(vertices[4].position.x == doctest::Approx(20.0f));
   }
@@ -1326,18 +1578,18 @@ TEST_SUITE("Model GLB") {
     const auto check = [](const TransformedSkinFixture& fixture) {
       pistoris::Model model;
       std::vector<std::unique_ptr<pistoris::Animation>> animations;
-      REQUIRE(pistoris::Model::importGlb(model, animations, makeTransformedSkinAnimationGlb(fixture)) == ARX_OK);
+      REQUIRE(importGlb(model, animations, makeTransformedSkinAnimationGlb(fixture)) == ARX_OK);
 
       REQUIRE(model.vertexCount() == 6);
       std::array<ArxModelVertex, 6> vertices{};
-      REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+      REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
       CHECK(vertices[1].position.x == doctest::Approx(10.0f));
       CHECK(vertices[4].position.x == doctest::Approx(20.0f * fixture.content_scale[0]));
       CHECK(vertices[4].bone == pistoris::kInvalidBoneIndex);
 
       REQUIRE(model.boneCount() == 2);
       std::array<ArxModelBone, 2> bones{};
-      REQUIRE(model.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+      REQUIRE(copyBones(model, 0, bones.size(), bones.data()) == ARX_OK);
       CHECK(bones[0].position.y == doctest::Approx(-10.0f * fixture.content_scale[1]));
       CHECK(bones[1].position.y == doctest::Approx(-20.0f * fixture.content_scale[1]));
 
@@ -1346,7 +1598,7 @@ TEST_SUITE("Model GLB") {
       REQUIRE(animations[0]->groupCount() == 2);
       for (std::size_t keyframe = 0; keyframe < animations[0]->keyframeCount(); ++keyframe) {
         std::array<ArxAnimationGroupTransform, 2> transforms{};
-        REQUIRE(animations[0]->copyGroupTransforms(keyframe, 0, transforms.size(), transforms.data()) == ARX_OK);
+        REQUIRE(copyGroupTransforms(*animations[0], keyframe, 0, transforms.size(), transforms.data()) == ARX_OK);
         for (const ArxAnimationGroupTransform& transform : transforms) {
           CHECK(transform.translation.x == doctest::Approx(0.0f).epsilon(1.0e-4));
           CHECK(transform.translation.y == doctest::Approx(0.0f).epsilon(1.0e-4));
@@ -1354,7 +1606,7 @@ TEST_SUITE("Model GLB") {
         }
       }
       std::array<ArxAnimationGroupTransform, 2> animated{};
-      REQUIRE(animations[0]->copyGroupTransforms(1, 0, animated.size(), animated.data()) == ARX_OK);
+      REQUIRE(copyGroupTransforms(*animations[0], 1, 0, animated.size(), animated.data()) == ARX_OK);
       CHECK(std::abs(animated[1].rotation.w) == doctest::Approx(0.70710678f));
       CHECK(std::abs(animated[1].rotation.z) == doctest::Approx(0.70710678f));
     };
@@ -1370,12 +1622,11 @@ TEST_SUITE("Model GLB") {
                                                   OrdinaryMeshPlacement::kChildBoneNode}) {
       CAPTURE(static_cast<int>(placement));
       pistoris::Model model;
-      REQUIRE(pistoris::Model::importGlb(
-                  model, makeTransformedSkinAnimationGlb({.ordinary_mesh_placement = placement})) == ARX_OK);
+      REQUIRE(importGlb(model, makeTransformedSkinAnimationGlb({.ordinary_mesh_placement = placement})) == ARX_OK);
 
       REQUIRE(model.vertexCount() == 6);
       std::array<ArxModelVertex, 6> vertices{};
-      REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+      REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
       for (std::size_t index = 0; index < 3; ++index) CHECK(vertices[index].bone == 0);
       for (std::size_t index = 3; index < vertices.size(); ++index) CHECK(vertices[index].bone == 1);
       CHECK(vertices[4].position.x == doctest::Approx(20.0f));
@@ -1386,19 +1637,19 @@ TEST_SUITE("Model GLB") {
   TEST_CASE("Samples LINEAR rotation channels with spherical interpolation") {
     pistoris::Model model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(
-                model, animations, makeTransformedSkinAnimationGlb({.asymmetric_rotation_sampling = true})) == ARX_OK);
+    REQUIRE(importGlb(model, animations, makeTransformedSkinAnimationGlb({.asymmetric_rotation_sampling = true})) ==
+            ARX_OK);
     REQUIRE(animations.size() == 1);
     REQUIRE(animations[0]->keyframeCount() == 3);
 
     std::array<ArxAnimationKeyframe, 3> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[0].frame == 0);
     CHECK(keyframes[1].frame == 2);
     CHECK(keyframes[2].frame == 8);
 
     std::array<ArxAnimationGroupTransform, 2> transforms{};
-    REQUIRE(animations[0]->copyGroupTransforms(1, 0, transforms.size(), transforms.data()) == ARX_OK);
+    REQUIRE(copyGroupTransforms(*animations[0], 1, 0, transforms.size(), transforms.data()) == ARX_OK);
     CHECK(std::abs(transforms[1].rotation.w) == doctest::Approx(0.9659258f).epsilon(1.0e-5));
     CHECK(std::abs(transforms[1].rotation.x) == doctest::Approx(0.2588190f).epsilon(1.0e-5));
     CHECK(transforms[1].rotation.y == doctest::Approx(0.0f).epsilon(1.0e-5));
@@ -1407,20 +1658,19 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("Ignores skinned mesh-node transforms") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, makeTransformedSkinAnimationGlb({.mesh_scale = {2.0f, 1.0f, 0.5f}})) ==
-            ARX_OK);
+    REQUIRE(importGlb(model, makeTransformedSkinAnimationGlb({.mesh_scale = {2.0f, 1.0f, 0.5f}})) == ARX_OK);
     std::array<ArxModelVertex, 6> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     CHECK(vertices[1].position.x == doctest::Approx(10.0f));
   }
 
   TEST_CASE("Leaves zero-weight skinned vertices unbound in skin space") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(
-                model, makeTransformedSkinAnimationGlb({.mesh_scale = {2.0f, 1.0f, 0.5f}, .unbound_vertex = true})) ==
-            ARX_OK);
+    REQUIRE(
+        importGlb(model, makeTransformedSkinAnimationGlb({.mesh_scale = {2.0f, 1.0f, 0.5f}, .unbound_vertex = true})) ==
+        ARX_OK);
     std::array<ArxModelVertex, 6> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     CHECK(vertices[1].position.x == doctest::Approx(10.0f));
     CHECK(vertices[1].bone == pistoris::kInvalidBoneIndex);
   }
@@ -1428,18 +1678,18 @@ TEST_SUITE("Model GLB") {
   TEST_CASE("Uses identity inverse binds when the skin omits them") {
     pistoris::Model model;
     const ArxQuat quarter_turn = {0.70710678f, 0.0f, 0.0f, 0.70710678f};
-    REQUIRE(pistoris::Model::importGlb(
-                model, makeTransformedSkinAnimationGlb({.root_rotation = quarter_turn, .inverse_binds = false})) ==
-            ARX_OK);
+    REQUIRE(
+        importGlb(model, makeTransformedSkinAnimationGlb({.root_rotation = quarter_turn, .inverse_binds = false})) ==
+        ARX_OK);
     std::array<ArxModelVertex, 6> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     CHECK(vertices[1].position.x == doctest::Approx(0.0f).epsilon(1.0e-5));
     CHECK(vertices[1].position.y == doctest::Approx(-20.0f));
     CHECK(vertices[2].position.x == doctest::Approx(-10.0f));
     CHECK(vertices[2].position.y == doctest::Approx(-10.0f));
 
     std::array<ArxModelBone, 2> bones{};
-    REQUIRE(model.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+    REQUIRE(copyBones(model, 0, bones.size(), bones.data()) == ARX_OK);
     CHECK(bones[0].position.y == doctest::Approx(-10.0f));
     CHECK(bones[1].position.x == doctest::Approx(-10.0f));
     CHECK(bones[1].position.y == doctest::Approx(-10.0f));
@@ -1460,10 +1710,9 @@ TEST_SUITE("Model GLB") {
     pistoris::Model omitted_model;
     std::vector<std::unique_ptr<pistoris::Animation>> explicit_animations;
     std::vector<std::unique_ptr<pistoris::Animation>> omitted_animations;
-    REQUIRE(pistoris::Model::importGlb(
-                explicit_model, explicit_animations, makeTransformedSkinAnimationGlb(explicit_fixture)) == ARX_OK);
-    REQUIRE(pistoris::Model::importGlb(
-                omitted_model, omitted_animations, makeTransformedSkinAnimationGlb(omitted_fixture)) == ARX_OK);
+    REQUIRE(importGlb(explicit_model, explicit_animations, makeTransformedSkinAnimationGlb(explicit_fixture)) ==
+            ARX_OK);
+    REQUIRE(importGlb(omitted_model, omitted_animations, makeTransformedSkinAnimationGlb(omitted_fixture)) == ARX_OK);
     test_support::checkModelsEquivalent(explicit_model, omitted_model);
     REQUIRE(explicit_animations.size() == 1);
     REQUIRE(omitted_animations.size() == 1);
@@ -1485,12 +1734,12 @@ TEST_SUITE("Model GLB") {
     gltf["nodes"][origin_index]["matrix"] = {
         1.0f, 0.0f, 0.0f, 5.0e-5f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.00005f};
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
 
     gltf = source;
     gltf["nodes"][origin_index]["matrix"] = {
         1.0f, 0.0f, 0.0f, 2.0e-4f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_FORMAT);
+    CHECK(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_FORMAT);
   }
 
   TEST_CASE("Validates skin pairing and inverse bind accessors") {
@@ -1505,17 +1754,15 @@ TEST_SUITE("Model GLB") {
     REQUIRE(skinned_node != gltf["nodes"].end());
     skinned_node->erase("skin");
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_SKINNING);
+    CHECK(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_SKINNING);
 
     gltf = source;
     gltf["meshes"][0]["primitives"][0]["attributes"].erase("JOINTS_0");
     gltf["meshes"][0]["primitives"][0]["attributes"].erase("WEIGHTS_0");
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_SKINNING);
+    CHECK(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_GLB_BAD_MODEL_SKINNING);
 
-    REQUIRE(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kPrimary, false, false, true)) ==
-            ARX_OK);
-    CHECK(pistoris::Model::importGlb(model, replaceInverseBindComponent(encoded, 0, 3, 0.25f)) ==
-          ARX_GLB_BAD_MODEL_SKINNING);
+    REQUIRE(importGlb(model, makeSkinnedModelGlb(SkinFixture::kPrimary, false, false, true)) == ARX_OK);
+    CHECK(importGlb(model, replaceInverseBindComponent(encoded, 0, 3, 0.25f)) == ARX_GLB_BAD_MODEL_SKINNING);
   }
 
   TEST_CASE("Accepts multiple ordered skeleton roots") {
@@ -1545,17 +1792,24 @@ TEST_SUITE("Model GLB") {
     gltf["skins"][0]["skeleton"] = origin;
 
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(model, replaceGlbJson(encoded, gltf)) == ARX_OK);
     std::array<ArxModelBone, 2> bones{};
-    REQUIRE(model.copyBones(0, bones.size(), bones.data()) == ARX_OK);
+    REQUIRE(copyBones(model, 0, bones.size(), bones.data()) == ARX_OK);
     CHECK(bones[0].parent == pistoris::kInvalidBoneIndex);
     CHECK(bones[1].parent == pistoris::kInvalidBoneIndex);
   }
 
   TEST_CASE("Rejects morph targets") {
-    pistoris::Model model;
     const std::vector<std::uint8_t> glb = makeSkinnedModelGlb(SkinFixture::kPrimary);
-    CHECK(pistoris::Model::importGlb(model, addMorphTarget(glb)) == ARX_GLB_UNSUPPORTED_FEATURE);
+    const pistoris::GlbResult<pistoris::Model> result = pistoris::Model::importGlb(addMorphTarget(glb));
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_GLB_UNSUPPORTED_FEATURE);
+    REQUIRE(result.error() != nullptr);
+    REQUIRE(result.error()->location().has_value());
+    CHECK(result.error()->location()->element == pistoris::GlbElement::kPrimitive);
+    CHECK(result.error()->location()->index == 0);
+    CHECK(result.error()->location()->subindex == 0);
+    CHECK_FALSE(result.error()->detail().empty());
   }
 
   TEST_CASE("Rejects required extensions") {
@@ -1567,33 +1821,30 @@ TEST_SUITE("Model GLB") {
     gltf["extensionsRequired"] = {"ARX_test_extension"};
 
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(source, gltf)) == ARX_GLB_UNSUPPORTED_FEATURE);
+    CHECK(importGlb(model, replaceGlbJson(source, gltf)) == ARX_GLB_UNSUPPORTED_FEATURE);
   }
 
   TEST_CASE("Rejects non-uniform effective bind transforms") {
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, makeSkinnedModelGlb(SkinFixture::kNonUniformBind)) ==
-          ARX_GLB_MODEL_NON_UNIFORM_SCALE);
-    CHECK(pistoris::Model::importGlb(
-              model, makeTransformedSkinAnimationGlb({.content_scale = {2.0f, 1.0f, 1.0f}, .inverse_binds = false})) ==
+    CHECK(importGlb(model, makeSkinnedModelGlb(SkinFixture::kNonUniformBind)) == ARX_GLB_MODEL_NON_UNIFORM_SCALE);
+    CHECK(importGlb(model,
+                    makeTransformedSkinAnimationGlb({.content_scale = {2.0f, 1.0f, 1.0f}, .inverse_binds = false})) ==
           ARX_GLB_MODEL_NON_UNIFORM_SCALE);
   }
 
   TEST_CASE("Rejects reflected skeletal transforms") {
     pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, makeTransformedSkinAnimationGlb({.content_scale = {-1.0f, 1.0f, 1.0f}})) ==
+    CHECK(importGlb(model, makeTransformedSkinAnimationGlb({.content_scale = {-1.0f, 1.0f, 1.0f}})) ==
           ARX_GLB_MODEL_NON_UNIFORM_SCALE);
-    CHECK(pistoris::Model::importGlb(
-              model, replaceInverseBindComponent(makeSkinnedModelGlb(SkinFixture::kPrimary), 0, 0, -1.0f)) ==
+    CHECK(importGlb(model, replaceInverseBindComponent(makeSkinnedModelGlb(SkinFixture::kPrimary), 0, 0, -1.0f)) ==
           ARX_GLB_MODEL_NON_UNIFORM_SCALE);
   }
 
   TEST_CASE("Accepts reflected unskinned mesh transforms") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importGlb(
-                model, makeTransformedSkinAnimationGlb({.ordinary_scale = {-1.0f, 1.0f, 1.0f}})) == ARX_OK);
+    REQUIRE(importGlb(model, makeTransformedSkinAnimationGlb({.ordinary_scale = {-1.0f, 1.0f, 1.0f}})) == ARX_OK);
     std::array<ArxModelVertex, 6> vertices{};
-    REQUIRE(model.copyVertices(0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
     CHECK(std::ranges::any_of(
         vertices, [](const ArxModelVertex& vertex) { return vertex.position.x == doctest::Approx(-20.0f); }));
   }
@@ -1607,8 +1858,16 @@ TEST_SUITE("Model GLB") {
     const nlohmann::json weights = attributes["WEIGHTS_0"];
     for (std::size_t index = 0; index <= 64U; ++index) attributes["_SELECTION" + std::to_string(index)] = weights;
 
-    pistoris::Model model;
-    CHECK(pistoris::Model::importGlb(model, replaceGlbJson(source, gltf)) == ARX_MODEL_TOO_MANY_SELECTIONS);
+    const pistoris::GlbResult<pistoris::Model> result = pistoris::Model::importGlb(replaceGlbJson(source, gltf));
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_MODEL_TOO_MANY_SELECTIONS);
+    REQUIRE(result.error() != nullptr);
+    REQUIRE(result.error()->location().has_value());
+    CHECK(result.error()->location()->element == pistoris::GlbElement::kPrimitive);
+    CHECK(result.error()->location()->index == 0);
+    CHECK(result.error()->location()->subindex == 0);
+    CHECK_FALSE(result.error()->location()->property.empty());
+    CHECK_FALSE(result.error()->detail().empty());
   }
 
   TEST_CASE("Round-trips Animation sidecars without synthetic duration keys") {
@@ -1652,7 +1911,7 @@ TEST_SUITE("Model GLB") {
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
     ArxAnimationConversionReport import_report{};
-    REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, encoded, &import_report) == ARX_OK);
+    REQUIRE(importGlb(imported_model, imported_animations, encoded, &import_report) == ARX_OK);
     REQUIRE(imported_animations.size() == 1);
     CHECK(import_report.converted == 1);
     CHECK(import_report.skipped == 0);
@@ -1663,18 +1922,18 @@ TEST_SUITE("Model GLB") {
     CHECK(imported.keyframeCount() == 2);
     CHECK(imported.groupCount() == 2);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(imported.copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(imported, 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].frame == 6);
     CHECK(keyframes[1].footstep == 1);
     REQUIRE(keyframes[1].sound != pistoris::kNoSound);
     ArxSoundView imported_sound{};
-    REQUIRE(imported.copySoundViews(keyframes[1].sound, 1, &imported_sound) == ARX_OK);
+    REQUIRE(copySoundViews(imported, keyframes[1].sound, 1, &imported_sound) == ARX_OK);
     CHECK(view(imported_sound.path) == "sfx/step__hard.wav");
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_rotation.w == doctest::Approx(0.70710678f));
     CHECK(keyframes[1].root_rotation.z == doctest::Approx(0.70710678f));
     std::array<ArxAnimationGroupTransform, 2> imported_transforms{};
-    REQUIRE(imported.copyGroupTransforms(1, 0, imported_transforms.size(), imported_transforms.data()) == ARX_OK);
+    REQUIRE(copyGroupTransforms(imported, 1, 0, imported_transforms.size(), imported_transforms.data()) == ARX_OK);
     CHECK(imported_transforms[0].translation.x == doctest::Approx(4.0f));
     CHECK(imported_transforms[0].scale.y == doctest::Approx(3.0f));
     CHECK(imported_transforms[1].translation.y == doctest::Approx(8.0f));
@@ -1693,10 +1952,10 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, no_origin)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, no_origin)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(0.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(0.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(0.0f));
@@ -1716,10 +1975,10 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
@@ -1736,10 +1995,10 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
@@ -1764,10 +2023,10 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
@@ -1794,10 +2053,10 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
@@ -1821,10 +2080,10 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(6.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(8.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(10.0f));
@@ -1835,7 +2094,7 @@ TEST_SUITE("Model GLB") {
     const std::vector<std::uint8_t> encoded = makeMotionModelGlb(model);
     pistoris::Model reference_model;
     std::vector<std::unique_ptr<pistoris::Animation>> reference_animations;
-    REQUIRE(pistoris::Model::importGlb(reference_model, reference_animations, encoded) == ARX_OK);
+    REQUIRE(importGlb(reference_model, reference_animations, encoded) == ARX_OK);
     nlohmann::json gltf = parseGlbJson(encoded);
     const std::size_t carrier = glbNodeIndex(gltf, "skeleton");
     REQUIRE(carrier < gltf["nodes"].size());
@@ -1843,14 +2102,14 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(animations.size() == 1);
 
     std::vector<ArxModelVertex> source_vertices(reference_model.vertexCount());
     std::vector<ArxModelVertex> imported_vertices(imported_model.vertexCount());
     REQUIRE(imported_vertices.size() == source_vertices.size());
-    REQUIRE(reference_model.copyVertices(0, source_vertices.size(), source_vertices.data()) == ARX_OK);
-    REQUIRE(imported_model.copyVertices(0, imported_vertices.size(), imported_vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(reference_model, 0, source_vertices.size(), source_vertices.data()) == ARX_OK);
+    REQUIRE(copyVertices(imported_model, 0, imported_vertices.size(), imported_vertices.data()) == ARX_OK);
     for (std::size_t index = 0; index < source_vertices.size(); ++index) {
       CHECK(imported_vertices[index].position.x == doctest::Approx(source_vertices[index].position.x * 2.0f));
       CHECK(imported_vertices[index].position.y == doctest::Approx(source_vertices[index].position.y * 2.0f));
@@ -1860,8 +2119,8 @@ TEST_SUITE("Model GLB") {
     std::vector<ArxModelBone> source_bones(reference_model.boneCount());
     std::vector<ArxModelBone> imported_bones(imported_model.boneCount());
     REQUIRE(imported_bones.size() == source_bones.size());
-    REQUIRE(reference_model.copyBones(0, source_bones.size(), source_bones.data()) == ARX_OK);
-    REQUIRE(imported_model.copyBones(0, imported_bones.size(), imported_bones.data()) == ARX_OK);
+    REQUIRE(copyBones(reference_model, 0, source_bones.size(), source_bones.data()) == ARX_OK);
+    REQUIRE(copyBones(imported_model, 0, imported_bones.size(), imported_bones.data()) == ARX_OK);
     for (std::size_t index = 0; index < source_bones.size(); ++index) {
       CHECK(imported_bones[index].position.x == doctest::Approx(source_bones[index].position.x * 2.0f));
       CHECK(imported_bones[index].position.y == doctest::Approx(source_bones[index].position.y * 2.0f));
@@ -1869,12 +2128,12 @@ TEST_SUITE("Model GLB") {
     }
 
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
     std::array<ArxAnimationGroupTransform, 2> transforms{};
-    REQUIRE(animations[0]->copyGroupTransforms(1, 0, transforms.size(), transforms.data()) == ARX_OK);
+    REQUIRE(copyGroupTransforms(*animations[0], 1, 0, transforms.size(), transforms.data()) == ARX_OK);
     CHECK(transforms[0].translation.x == doctest::Approx(8.0f));
     CHECK(transforms[0].translation.y == doctest::Approx(10.0f));
     CHECK(transforms[0].translation.z == doctest::Approx(12.0f));
@@ -1900,7 +2159,7 @@ TEST_SUITE("Model GLB") {
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
     ArxAnimationConversionReport report{};
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
     CHECK(animations.empty());
     CHECK(report.converted == 0);
     CHECK(report.skipped == 1);
@@ -1912,11 +2171,10 @@ TEST_SUITE("Model GLB") {
     const std::vector<std::uint8_t> encoded = makeMotionModelGlb(model, kUnits);
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, encoded, {.arx_units_per_glb_unit = kUnits}) ==
-            ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, encoded, {.arx_units_per_glb_unit = kUnits}) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
@@ -1924,20 +2182,20 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("Uses the semantic origin as an unrigged motion carrier") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
     model.clearSkeleton();
     pistoris::Animation animation;
     configureMotionAnimation(animation);
     const std::array<const pistoris::Animation*, 1> source_animations = {&animation};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, source_animations) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, source_animations) == ARX_OK);
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, encoded) == ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, encoded) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[1].root_translation.x == doctest::Approx(3.0f));
     CHECK(keyframes[1].root_translation.y == doctest::Approx(4.0f));
     CHECK(keyframes[1].root_translation.z == doctest::Approx(5.0f));
@@ -1948,11 +2206,10 @@ TEST_SUITE("Model GLB") {
     const std::vector<std::uint8_t> encoded = makeMotionModelGlb(model);
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> animations;
-    REQUIRE(pistoris::Model::importGlb(imported_model, animations, scaleFirstAnimationRotation(encoded, 2.0f)) ==
-            ARX_OK);
+    REQUIRE(importGlb(imported_model, animations, scaleFirstAnimationRotation(encoded, 2.0f)) == ARX_OK);
     REQUIRE(animations.size() == 1);
     std::array<ArxAnimationKeyframe, 2> keyframes{};
-    REQUIRE(animations[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+    REQUIRE(copyKeyframes(*animations[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
     CHECK(keyframes[0].root_rotation.w == doctest::Approx(1.0f));
     CHECK(keyframes[1].root_rotation.w == doctest::Approx(0.70710678f));
     CHECK(keyframes[1].root_rotation.z == doctest::Approx(0.70710678f));
@@ -1977,12 +2234,11 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model intermediary_model;
     std::vector<std::unique_ptr<pistoris::Animation>> intermediary_animations;
-    REQUIRE(pistoris::Model::importGlb(intermediary_model, intermediary_animations, replaceGlbJson(encoded, gltf)) ==
-            ARX_OK);
+    REQUIRE(importGlb(intermediary_model, intermediary_animations, replaceGlbJson(encoded, gltf)) == ARX_OK);
     REQUIRE(intermediary_animations.size() == 1);
     std::array<ArxAnimationGroupTransform, 2> imported_transforms{};
-    REQUIRE(intermediary_animations[0]->copyGroupTransforms(
-                1, 0, imported_transforms.size(), imported_transforms.data()) == ARX_OK);
+    REQUIRE(copyGroupTransforms(
+                *intermediary_animations[0], 1, 0, imported_transforms.size(), imported_transforms.data()) == ARX_OK);
     CHECK(imported_transforms[1].translation.x == doctest::Approx(7.0f));
     CHECK(imported_transforms[1].translation.y == doctest::Approx(9.0f));
     CHECK(imported_transforms[1].translation.z == doctest::Approx(9.0f));
@@ -1990,21 +2246,21 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("Imports Animation timing helpers and shifts negative source time") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
 
     pistoris::Animation animation;
-    REQUIRE(animation.setName("timing") == ARX_OK);
+    REQUIRE(animation.setName("timing").code() == ARX_OK);
     const pistoris::SoundIndex end_sound = addSound(animation, "sfx/end.wav");
     const std::array<ArxAnimationGroupTransform, 2> transforms{};
     const std::array<ArxAnimationKeyframeInput, 2> inputs = {{
         {{0, {}, {}, 0, pistoris::kNoSound}, transforms.data(), transforms.size()},
         {{6, {12.0f, 0.0f, 0.0f}, {}, 1, end_sound}, transforms.data(), transforms.size()},
     }};
-    REQUIRE(animation.replaceKeyframes(7, inputs.data(), inputs.size()) == ARX_OK);
+    REQUIRE(animation.replaceKeyframes(7, inputs.data(), inputs.size()).code() == ARX_OK);
 
     const std::array<const pistoris::Animation*, 1> animations = {&animation};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, animations) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, animations) == ARX_OK);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
     CHECK(hasNode(*asset.data(), "SETTINGS__EXTRA_FRAME__STEPS_6__settings"));
@@ -2025,7 +2281,7 @@ TEST_SUITE("Model GLB") {
     {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, encoded) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, encoded) == ARX_OK);
       REQUIRE(imported.size() == 1);
       CHECK(imported[0]->frameLength() == 7);
     }
@@ -2035,7 +2291,7 @@ TEST_SUITE("Model GLB") {
       ModelGlbLogCapture logs;
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, unlabeled) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, unlabeled) == ARX_OK);
       CHECK(logs.contains("SETTINGS__EXTRA_FRAME__STEPS_6' has no final label"));
     }
 
@@ -2043,7 +2299,7 @@ TEST_SUITE("Model GLB") {
       const std::vector<std::uint8_t> without_options = replaceAnimationSettings(encoded, std::string(settings));
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, without_options) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, without_options) == ARX_OK);
     }
 
     {
@@ -2057,10 +2313,10 @@ TEST_SUITE("Model GLB") {
 
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, replaceGlbJson(encoded, rotated)) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, replaceGlbJson(encoded, rotated)) == ARX_OK);
       REQUIRE(imported.size() == 1);
       std::array<ArxAnimationKeyframe, 2> rotated_keyframes{};
-      REQUIRE(imported[0]->copyKeyframes(0, rotated_keyframes.size(), rotated_keyframes.data()) == ARX_OK);
+      REQUIRE(copyKeyframes(*imported[0], 0, rotated_keyframes.size(), rotated_keyframes.data()) == ARX_OK);
       CHECK(rotated_keyframes[1].root_translation.x == doctest::Approx(12.0f));
       CHECK(rotated_keyframes[1].root_translation.y == doctest::Approx(0.0f));
       CHECK(rotated_keyframes[1].root_translation.z == doctest::Approx(0.0f));
@@ -2073,7 +2329,7 @@ TEST_SUITE("Model GLB") {
       gltf["animations"][0]["name"] = "timing.invalid";
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, replaceGlbJson(encoded, gltf)) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, replaceGlbJson(encoded, gltf)) == ARX_OK);
       REQUIRE(imported.size() == 1);
       CHECK(imported[0]->name() == "timing-invalid");
     }
@@ -2083,12 +2339,12 @@ TEST_SUITE("Model GLB") {
           replaceAnimationSettings(encoded, "SETTINGS__FRAME_LENGTH_3__STEPS_6__settings");
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, shortened) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, shortened) == ARX_OK);
       REQUIRE(imported.size() == 1);
       CHECK(imported[0]->frameLength() == 3);
       REQUIRE(imported[0]->keyframeCount() == 2);
       std::array<ArxAnimationKeyframe, 2> keyframes{};
-      REQUIRE(imported[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+      REQUIRE(copyKeyframes(*imported[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
       CHECK(keyframes[0].frame == 0);
       CHECK(keyframes[1].frame == 3);
       CHECK(keyframes[1].root_translation.x == doctest::Approx(6.0f));
@@ -2101,12 +2357,12 @@ TEST_SUITE("Model GLB") {
       ModelGlbLogCapture logs;
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, shifted) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, shifted) == ARX_OK);
       REQUIRE(imported.size() == 1);
       CHECK(imported[0]->frameLength() == 13);
       REQUIRE(imported[0]->keyframeCount() == 3);
       std::array<ArxAnimationKeyframe, 3> keyframes{};
-      REQUIRE(imported[0]->copyKeyframes(0, keyframes.size(), keyframes.data()) == ARX_OK);
+      REQUIRE(copyKeyframes(*imported[0], 0, keyframes.size(), keyframes.data()) == ARX_OK);
       CHECK(keyframes[0].frame == 0);
       CHECK(keyframes[1].frame == 6);
       CHECK(keyframes[2].frame == 12);
@@ -2114,7 +2370,7 @@ TEST_SUITE("Model GLB") {
       CHECK(keyframes[1].footstep == 1);
       REQUIRE(keyframes[1].sound != pistoris::kNoSound);
       ArxSoundView imported_sound{};
-      REQUIRE(imported[0]->copySoundViews(keyframes[1].sound, 1, &imported_sound) == ARX_OK);
+      REQUIRE(copySoundViews(*imported[0], keyframes[1].sound, 1, &imported_sound) == ARX_OK);
       CHECK(view(imported_sound.path) == "sfx/end.wav");
       CHECK(logs.contains("timeline repaired"));
       CHECK(logs.contains("shifted by"));
@@ -2125,7 +2381,7 @@ TEST_SUITE("Model GLB") {
       ModelGlbLogCapture logs;
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported;
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported, rounded) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported, rounded) == ARX_OK);
       REQUIRE(imported.size() == 1);
       CHECK(logs.contains("timestamp(s) rounded to 24 Hz"));
     }
@@ -2133,27 +2389,27 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("Accepts mismatched Animation group counts and skips invalid sidecars") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
 
     pistoris::Animation invalid;
     pistoris::Animation shorter;
     pistoris::Animation longer;
     pistoris::Animation collapsed_times;
     pistoris::Animation degenerate_rotation;
-    REQUIRE(shorter.setName("shorter") == ARX_OK);
+    REQUIRE(shorter.setName("shorter").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 1> shorter_transforms{};
     shorter_transforms[0].translation.x = 1.0f;
     const ArxAnimationKeyframeInput shorter_input{
         {0, {}, {}, 0, pistoris::kNoSound}, shorter_transforms.data(), shorter_transforms.size()};
-    REQUIRE(shorter.replaceKeyframes(0, &shorter_input, 1) == ARX_OK);
-    REQUIRE(longer.setName("longer") == ARX_OK);
+    REQUIRE(shorter.replaceKeyframes(0, &shorter_input, 1).code() == ARX_OK);
+    REQUIRE(longer.setName("longer").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 3> longer_transforms{};
     longer_transforms[1].translation.x = 2.0f;
     longer_transforms[2].rotation = {0.0f, 0.0f, 0.0f, 0.0f};
     const ArxAnimationKeyframeInput longer_input{
         {0, {}, {}, 0, pistoris::kNoSound}, longer_transforms.data(), longer_transforms.size()};
-    REQUIRE(longer.replaceKeyframes(0, &longer_input, 1) == ARX_OK);
-    REQUIRE(collapsed_times.setName("collapsed_times") == ARX_OK);
+    REQUIRE(longer.replaceKeyframes(0, &longer_input, 1).code() == ARX_OK);
+    REQUIRE(collapsed_times.setName("collapsed_times").code() == ARX_OK);
     const std::array<ArxAnimationGroupTransform, 2> compatible_transforms{};
     const std::array<ArxAnimationKeyframeInput, 2> collapsed_inputs = {{
         {{static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()) - 1U, {}, {}, 0, pistoris::kNoSound},
@@ -2163,22 +2419,24 @@ TEST_SUITE("Model GLB") {
          compatible_transforms.data(),
          compatible_transforms.size()},
     }};
-    REQUIRE(collapsed_times.replaceKeyframes(static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()),
-                                             collapsed_inputs.data(),
-                                             collapsed_inputs.size()) == ARX_OK);
-    REQUIRE(degenerate_rotation.setName("degenerate_rotation") == ARX_OK);
+    REQUIRE(collapsed_times
+                .replaceKeyframes(static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max()),
+                                  collapsed_inputs.data(),
+                                  collapsed_inputs.size())
+                .code() == ARX_OK);
+    REQUIRE(degenerate_rotation.setName("degenerate_rotation").code() == ARX_OK);
     ArxAnimationKeyframe degenerate_keyframe{};
     degenerate_keyframe.root_rotation = {0.0f, 0.0f, 0.0f, 0.0f};
     const ArxAnimationKeyframeInput degenerate_input{
         degenerate_keyframe, compatible_transforms.data(), compatible_transforms.size()};
-    REQUIRE(degenerate_rotation.replaceKeyframes(0, &degenerate_input, 1) == ARX_OK);
+    REQUIRE(degenerate_rotation.replaceKeyframes(0, &degenerate_input, 1).code() == ARX_OK);
     const std::array<const pistoris::Animation*, 5> animations = {
         &invalid, &shorter, &longer, &collapsed_times, &degenerate_rotation};
 
     ModelGlbLogCapture logs;
     ArxAnimationConversionReport report{};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, animations, &report) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, animations, &report) == ARX_OK);
     CHECK(report.converted == 2);
     CHECK(report.skipped == 3);
     CHECK(logs.contains("1 trailing group(s) discarded"));
@@ -2188,7 +2446,7 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> imported;
-    REQUIRE(pistoris::Model::importGlb(imported_model, imported, encoded) == ARX_OK);
+    REQUIRE(importGlb(imported_model, imported, encoded) == ARX_OK);
     REQUIRE(imported.size() == 2);
     CHECK(imported[0]->groupCount() == 1);
     CHECK(imported[1]->groupCount() == 2);
@@ -2196,13 +2454,13 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("GLB Animation group metadata preserves explicit state and inferred motion") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
     ArxModelBone branch{};
     const std::string branch_name = "branch";
     branch.name = view(branch_name);
     branch.parent = 1;
     pistoris::BoneIndex branch_index = pistoris::kInvalidBoneIndex;
-    REQUIRE(model.addBone(branch, branch_index) == ARX_OK);
+    REQUIRE(addBone(model, branch, branch_index) == ARX_OK);
     REQUIRE(branch_index == 2);
     pistoris::BoneIndex parent = branch_index;
     while (model.boneCount() < 39U) {
@@ -2213,20 +2471,20 @@ TEST_SUITE("Model GLB") {
       bone.position = {ordinal * 123.4567f, ordinal * -78.9012f, ordinal * 0.3333f};
       bone.parent = parent;
       pistoris::BoneIndex added = pistoris::kInvalidBoneIndex;
-      REQUIRE(model.addBone(bone, added) == ARX_OK);
+      REQUIRE(addBone(model, bone, added) == ARX_OK);
       parent = added;
     }
 
     pistoris::Animation trimmed;
-    REQUIRE(trimmed.setName("trimmed") == ARX_OK);
+    REQUIRE(trimmed.setName("trimmed").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 3> trimmed_transforms{};
     trimmed_transforms[0].translation.x = 1.0f;
     const ArxAnimationKeyframeInput trimmed_input{
         {0, {}, {}, 0, pistoris::kNoSound}, trimmed_transforms.data(), trimmed_transforms.size()};
-    REQUIRE(trimmed.replaceKeyframes(0, &trimmed_input, 1) == ARX_OK);
+    REQUIRE(trimmed.replaceKeyframes(0, &trimmed_input, 1).code() == ARX_OK);
 
     pistoris::Animation internal_gap;
-    REQUIRE(internal_gap.setName("internal-gap") == ARX_OK);
+    REQUIRE(internal_gap.setName("internal-gap").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 3> gap_first_transforms{};
     std::array<ArxAnimationGroupTransform, 3> gap_second_transforms{};
     gap_first_transforms[0].translation.x = 5.0e-5f;
@@ -2240,28 +2498,28 @@ TEST_SUITE("Model GLB") {
         {{0, {}, {}, 0, pistoris::kNoSound}, gap_first_transforms.data(), gap_first_transforms.size()},
         {{1, {}, {}, 0, pistoris::kNoSound}, gap_second_transforms.data(), gap_second_transforms.size()},
     }};
-    REQUIRE(internal_gap.replaceKeyframes(1, gap_inputs.data(), gap_inputs.size()) == ARX_OK);
+    REQUIRE(internal_gap.replaceKeyframes(1, gap_inputs.data(), gap_inputs.size()).code() == ARX_OK);
 
     pistoris::Animation neutral;
-    REQUIRE(neutral.setName("neutral") == ARX_OK);
+    REQUIRE(neutral.setName("neutral").code() == ARX_OK);
     const std::array<ArxAnimationGroupTransform, 3> neutral_transforms{};
     const ArxAnimationKeyframeInput neutral_input{
         {0, {}, {}, 0, pistoris::kNoSound}, neutral_transforms.data(), neutral_transforms.size()};
-    REQUIRE(neutral.replaceKeyframes(0, &neutral_input, 1) == ARX_OK);
+    REQUIRE(neutral.replaceKeyframes(0, &neutral_input, 1).code() == ARX_OK);
 
     pistoris::Animation negative_identity;
-    REQUIRE(negative_identity.setName("negative-identity") == ARX_OK);
+    REQUIRE(negative_identity.setName("negative-identity").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 3> negative_identity_transforms{};
     negative_identity_transforms[2].rotation.w = -1.0f;
     const ArxAnimationKeyframeInput negative_identity_input{
         {0, {}, {}, 0, pistoris::kNoSound}, negative_identity_transforms.data(), negative_identity_transforms.size()};
-    REQUIRE(negative_identity.replaceKeyframes(0, &negative_identity_input, 1) == ARX_OK);
-    REQUIRE(negative_identity.claimGroup(2) == ARX_OK);
+    REQUIRE(negative_identity.replaceKeyframes(0, &negative_identity_input, 1).code() == ARX_OK);
+    REQUIRE(negative_identity.claimGroup(2).code() == ARX_OK);
 
     const std::array<const pistoris::Animation*, 4> animations = {
         &trimmed, &internal_gap, &neutral, &negative_identity};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, animations) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, animations) == ARX_OK);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
     CHECK(hasNode(*asset.data(), "GROUPS__VOID_1-38__groups"));
@@ -2271,7 +2529,7 @@ TEST_SUITE("Model GLB") {
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> imported;
-    REQUIRE(pistoris::Model::importGlb(imported_model, imported, encoded) == ARX_OK);
+    REQUIRE(importGlb(imported_model, imported, encoded) == ARX_OK);
     REQUIRE(imported.size() == 4);
     CHECK(imported[0]->groupCount() == 1);
     CHECK(imported[1]->groupCount() == 3);
@@ -2279,21 +2537,23 @@ TEST_SUITE("Model GLB") {
     CHECK(imported[3]->groupCount() == 3);
     std::array<ArxAnimationGroupTransform, 3> imported_first{};
     std::array<ArxAnimationGroupTransform, 3> imported_second{};
-    REQUIRE(imported[1]->copyGroupTransforms(0, 0, imported_first.size(), imported_first.data()) == ARX_OK);
-    REQUIRE(imported[1]->copyGroupTransforms(1, 0, imported_second.size(), imported_second.data()) == ARX_OK);
+    REQUIRE(copyGroupTransforms(*imported[1], 0, 0, imported_first.size(), imported_first.data()) == ARX_OK);
+    REQUIRE(copyGroupTransforms(*imported[1], 1, 0, imported_second.size(), imported_second.data()) == ARX_OK);
     CHECK(imported_first[0].translation.x == doctest::Approx(5.0e-5f));
     CHECK(imported_first[1].translation.y == doctest::Approx(5.0e-5f));
     CHECK(imported_first[1].scale.z == doctest::Approx(1.00005f));
     CHECK(imported_second[1].translation.y == doctest::Approx(-5.0e-5f));
     CHECK(imported_second[1].scale.z == doctest::Approx(0.99995f));
-    bool state = false;
-    REQUIRE(imported[1]->isGroupClaimed(1, state) == ARX_OK);
-    CHECK(state);
-    REQUIRE(imported[3]->isGroupClaimed(2, state) == ARX_OK);
-    CHECK(state);
+    const auto internal_gap_claimed = imported[1]->isGroupClaimed(1);
+    REQUIRE(internal_gap_claimed);
+    CHECK(*internal_gap_claimed);
+    const auto negative_identity_claimed = imported[3]->isGroupClaimed(2);
+    REQUIRE(negative_identity_claimed);
+    CHECK(*negative_identity_claimed);
 
-    pistoris::tea::Data baked_gap;
-    REQUIRE(imported[1]->bakeNative(baked_gap) == ARX_OK);
+    const auto baked_gap_result = imported[1]->bakeNative();
+    REQUIRE(baked_gap_result);
+    const pistoris::tea::Data& baked_gap = *baked_gap_result;
     REQUIRE(baked_gap.keyframes.size() == 2);
     for (const pistoris::tea::Keyframe& keyframe : baked_gap.keyframes) {
       REQUIRE(keyframe.groups.size() == 3);
@@ -2318,8 +2578,7 @@ TEST_SUITE("Model GLB") {
     with_trailing_void["nodes"][trimmed_helper]["children"].push_back(trailing_void);
     pistoris::Model explicit_void_model;
     std::vector<std::unique_ptr<pistoris::Animation>> explicit_void;
-    REQUIRE(pistoris::Model::importGlb(
-                explicit_void_model, explicit_void, replaceGlbJson(encoded, with_trailing_void)) == ARX_OK);
+    REQUIRE(importGlb(explicit_void_model, explicit_void, replaceGlbJson(encoded, with_trailing_void)) == ARX_OK);
     REQUIRE(explicit_void.size() == 4);
     CHECK(explicit_void[0]->groupCount() == 1);
 
@@ -2328,7 +2587,7 @@ TEST_SUITE("Model GLB") {
       if (node.value("name", std::string{}).starts_with("GROUPS__")) node["name"] = "groups";
     pistoris::Model inferred_model;
     std::vector<std::unique_ptr<pistoris::Animation>> inferred;
-    REQUIRE(pistoris::Model::importGlb(inferred_model, inferred, replaceGlbJson(encoded, without_groups)) == ARX_OK);
+    REQUIRE(importGlb(inferred_model, inferred, replaceGlbJson(encoded, without_groups)) == ARX_OK);
     REQUIRE(inferred.size() == 4);
     CHECK(inferred[0]->groupCount() == 1);
     CHECK(inferred[1]->groupCount() == 3);
@@ -2338,48 +2597,48 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("GLB Animation projection claims rotations that normalize to identity") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
 
     pistoris::Animation animation;
-    REQUIRE(animation.setName("normalized-identity") == ARX_OK);
+    REQUIRE(animation.setName("normalized-identity").code() == ARX_OK);
     std::array<ArxAnimationGroupTransform, 2> transforms{};
     transforms[1].rotation.w = 2.0f;
     const ArxAnimationKeyframeInput input{{0, {}, {}, 0, pistoris::kNoSound}, transforms.data(), transforms.size()};
-    REQUIRE(animation.replaceKeyframes(0, &input, 1) == ARX_OK);
+    REQUIRE(animation.replaceKeyframes(0, &input, 1).code() == ARX_OK);
 
     const std::array<const pistoris::Animation*, 1> animations = {&animation};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, animations) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, animations) == ARX_OK);
     pistoris::glb::Asset asset;
     REQUIRE(pistoris::glb::parse(encoded, asset) == ARX_OK);
     CHECK(hasNode(*asset.data(), "GROUPS__VOID_0__CLAIM_1__groups"));
 
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> imported;
-    REQUIRE(pistoris::Model::importGlb(imported_model, imported, encoded) == ARX_OK);
+    REQUIRE(importGlb(imported_model, imported, encoded) == ARX_OK);
     REQUIRE(imported.size() == 1);
     CHECK(imported.front()->groupCount() == 2);
-    bool claimed = false;
-    REQUIRE(imported.front()->isGroupClaimed(1, claimed) == ARX_OK);
-    CHECK(claimed);
+    const auto claimed = imported.front()->isGroupClaimed(1);
+    REQUIRE(claimed);
+    CHECK(*claimed);
     ArxAnimationGroupTransform transform{};
-    REQUIRE(imported.front()->copyGroupTransforms(0, 1, 1, &transform) == ARX_OK);
+    REQUIRE(copyGroupTransforms(*imported.front(), 0, 1, 1, &transform) == ARX_OK);
     CHECK(transform.rotation.w == doctest::Approx(1.0f));
   }
 
   TEST_CASE("Skips only the Animation when its sound path cannot be repaired") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
 
     pistoris::Animation animation;
-    REQUIRE(animation.setName("walk") == ARX_OK);
+    REQUIRE(animation.setName("walk").code() == ARX_OK);
     const pistoris::SoundIndex sound = addSound(animation, "sfx/step.wav");
     const std::array<ArxAnimationGroupTransform, 2> transforms{};
     const ArxAnimationKeyframeInput input{{0, {}, {}, 0, sound}, transforms.data(), transforms.size()};
-    REQUIRE(animation.replaceKeyframes(0, &input, 1) == ARX_OK);
+    REQUIRE(animation.replaceKeyframes(0, &input, 1).code() == ARX_OK);
     const std::array<const pistoris::Animation*, 1> animations = {&animation};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, animations) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, animations) == ARX_OK);
 
     std::uint32_t json_size = 0;
     std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
@@ -2391,8 +2650,7 @@ TEST_SUITE("Model GLB") {
     pistoris::Model imported_model;
     std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
     ArxAnimationConversionReport report{};
-    REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-            ARX_OK);
+    REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
     CHECK(imported_animations.empty());
     CHECK(report.converted == 0);
     CHECK(report.skipped == 1);
@@ -2401,18 +2659,18 @@ TEST_SUITE("Model GLB") {
 
   TEST_CASE("Skips malformed Animation helpers and channels with focused diagnostics") {
     pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
+    REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
 
     pistoris::Animation animation;
-    REQUIRE(animation.setName("walk") == ARX_OK);
-    REQUIRE(animation.setResourcePath("anim:npc:walk") == ARX_OK);
+    REQUIRE(animation.setName("walk").code() == ARX_OK);
+    REQUIRE(animation.setResourcePath("anim:npc:walk").code() == ARX_OK);
     const std::array<ArxAnimationGroupTransform, 2> transforms{};
     const ArxAnimationKeyframeInput input{
         {0, {}, {0.9238795f, 0.0f, 0.0f, 0.3826834f}, 0, pistoris::kNoSound}, transforms.data(), transforms.size()};
-    REQUIRE(animation.replaceKeyframes(0, &input, 1) == ARX_OK);
+    REQUIRE(animation.replaceKeyframes(0, &input, 1).code() == ARX_OK);
     const std::array<const pistoris::Animation*, 1> animations = {&animation};
     std::vector<std::uint8_t> encoded;
-    REQUIRE(model.exportGlb(encoded, animations) == ARX_OK);
+    REQUIRE(exportGlb(model, encoded, animations) == ARX_OK);
 
     std::uint32_t json_size = 0;
     std::memcpy(&json_size, encoded.data() + 12U, sizeof(json_size));
@@ -2431,8 +2689,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.converted == 0);
       CHECK(report.skipped == 1);
@@ -2449,8 +2706,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.converted == 0);
       CHECK(report.skipped == 1);
@@ -2466,8 +2722,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.converted == 0);
       CHECK(report.skipped == 1);
@@ -2484,8 +2739,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.skipped == 1);
       CHECK(logs.containsCode(ARX_GLB_BAD_ANIMATION_HELPER));
@@ -2503,8 +2757,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.converted == 0);
       CHECK(report.skipped == 1);
@@ -2516,8 +2769,8 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(
-                  imported_model, imported_animations, scaleFirstAnimationRotation(encoded, 0.0f), &report) == ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, scaleFirstAnimationRotation(encoded, 0.0f), &report) ==
+              ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.converted == 0);
       CHECK(report.skipped == 1);
@@ -2529,10 +2782,10 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model,
-                                         imported_animations,
-                                         replaceFirstAnimationTime(encoded, std::numeric_limits<float>::quiet_NaN()),
-                                         &report) == ARX_OK);
+      REQUIRE(importGlb(imported_model,
+                        imported_animations,
+                        replaceFirstAnimationTime(encoded, std::numeric_limits<float>::quiet_NaN()),
+                        &report) == ARX_OK);
       CHECK(imported_animations.empty());
       CHECK(report.converted == 0);
       CHECK(report.skipped == 1);
@@ -2558,8 +2811,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.size() == 1);
       CHECK(report.converted == 1);
       CHECK(report.skipped == 0);
@@ -2574,8 +2826,7 @@ TEST_SUITE("Model GLB") {
       pistoris::Model imported_model;
       std::vector<std::unique_ptr<pistoris::Animation>> imported_animations;
       ArxAnimationConversionReport report{};
-      REQUIRE(pistoris::Model::importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) ==
-              ARX_OK);
+      REQUIRE(importGlb(imported_model, imported_animations, replaceGlbJson(encoded, gltf), &report) == ARX_OK);
       CHECK(imported_animations.size() == 1);
       CHECK(report.converted == 1);
       CHECK(report.skipped == 0);

@@ -1,0 +1,12 @@
+pistoris\._core\.__prefix__:
+    \from collections.abc import Iterator, Sequence
+
+pistoris\._core\.native\.fts\.__prefix__:
+    \from collections.abc import Sequence
+
+pistoris\._core\.PistorisError:
+    class PistorisError(RuntimeError):
+        code: int
+        message: str
+        detail: str
+        location: ErrorLocation | None

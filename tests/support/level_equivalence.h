@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -35,14 +36,12 @@ struct LevelEquivalenceOptions {
 
 namespace level_equivalence_detail {
 
-template <class Item, class Copy>
-std::optional<std::vector<Item>> copyItems(std::size_t count, Copy copy) {
-  std::vector<Item> result(count);
-  if (count != 0) {
-    const ArxReturnCode status = copy(result.data());
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) return std::nullopt;
-  }
+template <std::ranges::input_range Range>
+auto materialize(Range&& range) {
+  using Item = std::ranges::range_value_t<Range>;
+  std::vector<Item> result;
+  if constexpr (std::ranges::sized_range<Range>) result.reserve(std::ranges::size(range));
+  for (Item item : range) result.push_back(std::move(item));
   return result;
 }
 
@@ -69,15 +68,12 @@ inline std::string_view texturePath(ArxTextureIndex texture, std::span<const Arx
 
 inline bool cornerEquivalent(const ArxLevelCorner& lhs, const ArxLevelCorner& rhs,
                              std::span<const ArxLevelVertex> lhs_vertices, std::span<const ArxLevelVertex> rhs_vertices,
-                             float epsilon, bool lhs_has_color, bool rhs_has_color) {
+                             float epsilon) {
   if (lhs.vertex >= lhs_vertices.size() || rhs.vertex >= rhs_vertices.size()) return false;
-  constexpr ArxColor3 kDefaultColor = {0.5f, 0.5f, 0.5f};
-  const ArxColor3 lhs_color = lhs_has_color ? lhs.color : kDefaultColor;
-  const ArxColor3 rhs_color = rhs_has_color ? rhs.color : kDefaultColor;
   return equivalence::vectorEquivalent(lhs_vertices[lhs.vertex].position, rhs_vertices[rhs.vertex].position, epsilon) &&
          equivalence::vectorEquivalent(lhs.normal, rhs.normal, epsilon) &&
          equivalence::floatEquivalent(lhs.u, rhs.u, epsilon) && equivalence::floatEquivalent(lhs.v, rhs.v, epsilon) &&
-         equivalence::colorEquivalent(lhs_color, rhs_color, epsilon);
+         equivalence::colorEquivalent(lhs.color, rhs.color, epsilon);
 }
 
 inline bool faceEquivalent(const ArxLevelFace& lhs, const ArxLevelFace& rhs,
@@ -92,13 +88,8 @@ inline bool faceEquivalent(const ArxLevelFace& lhs, const ArxLevelFace& rhs,
   for (std::size_t offset = 0; offset < 3; ++offset) {
     bool equivalent = true;
     for (std::size_t corner = 0; corner < 3; ++corner) {
-      if (!cornerEquivalent(lhs.corners[corner],
-                            rhs.corners[(corner + offset) % 3],
-                            lhs_vertices,
-                            rhs_vertices,
-                            epsilon,
-                            lhs.has_corner_colors != 0,
-                            rhs.has_corner_colors != 0)) {
+      if (!cornerEquivalent(
+              lhs.corners[corner], rhs.corners[(corner + offset) % 3], lhs_vertices, rhs_vertices, epsilon)) {
         equivalent = false;
         break;
       }
@@ -177,13 +168,11 @@ inline bool fogEquivalent(const ArxLevelFog& lhs, const ArxLevelFog& rhs, float 
 
 inline std::vector<ArxVector2> zonePerimeter(const pistoris::Level& level, pistoris::ZoneIndex index,
                                              std::size_t count) {
-  std::vector<ArxVector2> result(count);
-  if (count != 0) {
-    const ArxReturnCode status = level.copyZonePerimeter(index, 0, count, result.data());
-    CHECK(status == ARX_OK);
-    if (status != ARX_OK) result.clear();
-  }
-  return result;
+  const auto perimeter = level.zonePerimeter(index);
+  CHECK(perimeter);
+  if (!perimeter) return {};
+  CHECK(perimeter->size() == count);
+  return materialize(*perimeter);
 }
 
 inline bool cyclicPerimeterEquivalent(std::span<const ArxVector2> lhs, std::span<const ArxVector2> rhs, float epsilon) {
@@ -246,33 +235,14 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
 
   CHECK(lhs.resourcePath() == rhs.resourcePath());
 
-  const auto lhs_vertices_result = detail::copyItems<ArxLevelVertex>(
-      lhs.vertexCount(), [&](ArxLevelVertex* out) { return lhs.copyVertices(0, lhs.vertexCount(), out); });
-  const auto rhs_vertices_result = detail::copyItems<ArxLevelVertex>(
-      rhs.vertexCount(), [&](ArxLevelVertex* out) { return rhs.copyVertices(0, rhs.vertexCount(), out); });
-  const auto lhs_faces_result = detail::copyItems<ArxLevelFace>(
-      lhs.faceCount(), [&](ArxLevelFace* out) { return lhs.copyFaces(0, lhs.faceCount(), out); });
-  const auto rhs_faces_result = detail::copyItems<ArxLevelFace>(
-      rhs.faceCount(), [&](ArxLevelFace* out) { return rhs.copyFaces(0, rhs.faceCount(), out); });
-  const auto lhs_textures_result = detail::copyItems<ArxTextureView>(
-      lhs.textureCount(), [&](ArxTextureView* out) { return lhs.copyTextureViews(0, lhs.textureCount(), out); });
-  const auto rhs_textures_result = detail::copyItems<ArxTextureView>(
-      rhs.textureCount(), [&](ArxTextureView* out) { return rhs.copyTextureViews(0, rhs.textureCount(), out); });
-  const auto lhs_rooms_result = detail::copyItems<ArxLevelRoom>(
-      lhs.roomCount(), [&](ArxLevelRoom* out) { return lhs.copyRooms(0, lhs.roomCount(), out); });
-  const auto rhs_rooms_result = detail::copyItems<ArxLevelRoom>(
-      rhs.roomCount(), [&](ArxLevelRoom* out) { return rhs.copyRooms(0, rhs.roomCount(), out); });
-  if (!lhs_vertices_result || !rhs_vertices_result || !lhs_faces_result || !rhs_faces_result || !lhs_textures_result ||
-      !rhs_textures_result || !lhs_rooms_result || !rhs_rooms_result)
-    return;
-  const std::vector<ArxLevelVertex>& lhs_vertices = *lhs_vertices_result;
-  const std::vector<ArxLevelVertex>& rhs_vertices = *rhs_vertices_result;
-  const std::vector<ArxLevelFace>& lhs_faces = *lhs_faces_result;
-  const std::vector<ArxLevelFace>& rhs_faces = *rhs_faces_result;
-  const std::vector<ArxTextureView>& lhs_textures = *lhs_textures_result;
-  const std::vector<ArxTextureView>& rhs_textures = *rhs_textures_result;
-  const std::vector<ArxLevelRoom>& lhs_rooms = *lhs_rooms_result;
-  const std::vector<ArxLevelRoom>& rhs_rooms = *rhs_rooms_result;
+  const std::vector<ArxLevelVertex> lhs_vertices = detail::materialize(lhs.vertices());
+  const std::vector<ArxLevelVertex> rhs_vertices = detail::materialize(rhs.vertices());
+  const std::vector<ArxLevelFace> lhs_faces = detail::materialize(lhs.faces());
+  const std::vector<ArxLevelFace> rhs_faces = detail::materialize(rhs.faces());
+  const std::vector<ArxTextureView> lhs_textures = detail::materialize(lhs.textures());
+  const std::vector<ArxTextureView> rhs_textures = detail::materialize(rhs.textures());
+  const std::vector<ArxLevelRoom> lhs_rooms = detail::materialize(lhs.rooms());
+  const std::vector<ArxLevelRoom> rhs_rooms = detail::materialize(rhs.rooms());
 
   bool vertex_indices_valid = true;
   for (const ArxLevelFace& face : lhs_faces)
@@ -343,13 +313,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
       [](const ArxLevelRoom& room) { return equivalence::stringView(room.name); },
       [](const ArxLevelRoom&, const ArxLevelRoom&) { return true; });
 
-  auto lhs_portals_result = detail::copyItems<ArxLevelPortal>(
-      lhs.portalCount(), [&](ArxLevelPortal* out) { return lhs.copyPortals(0, lhs.portalCount(), out); });
-  auto rhs_portals_result = detail::copyItems<ArxLevelPortal>(
-      rhs.portalCount(), [&](ArxLevelPortal* out) { return rhs.copyPortals(0, rhs.portalCount(), out); });
-  if (!lhs_portals_result || !rhs_portals_result) return;
-  std::vector<ArxLevelPortal> lhs_portals = std::move(*lhs_portals_result);
-  std::vector<ArxLevelPortal> rhs_portals = std::move(*rhs_portals_result);
+  std::vector<ArxLevelPortal> lhs_portals = detail::materialize(lhs.portals());
+  std::vector<ArxLevelPortal> rhs_portals = detail::materialize(rhs.portals());
   if (options.domain == LevelEquivalenceDomain::kGlb) {
     std::erase_if(lhs_portals, [&](const ArxLevelPortal& portal) {
       return !active_rooms.contains(detail::roomName(portal.room_1, lhs_rooms)) ||
@@ -370,15 +335,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
       });
 
   if (options.domain == LevelEquivalenceDomain::kNativeBundle) {
-    const auto lhs_distances_result = detail::copyItems<ArxLevelRoomDistance>(
-        lhs.roomDistanceCount(),
-        [&](ArxLevelRoomDistance* out) { return lhs.copyRoomDistances(0, lhs.roomDistanceCount(), out); });
-    const auto rhs_distances_result = detail::copyItems<ArxLevelRoomDistance>(
-        rhs.roomDistanceCount(),
-        [&](ArxLevelRoomDistance* out) { return rhs.copyRoomDistances(0, rhs.roomDistanceCount(), out); });
-    if (!lhs_distances_result || !rhs_distances_result) return;
-    const std::vector<ArxLevelRoomDistance>& lhs_distances = *lhs_distances_result;
-    const std::vector<ArxLevelRoomDistance>& rhs_distances = *rhs_distances_result;
+    const std::vector<ArxLevelRoomDistance> lhs_distances = detail::materialize(lhs.roomDistances());
+    const std::vector<ArxLevelRoomDistance> rhs_distances = detail::materialize(rhs.roomDistances());
     CHECK(lhs_distances.size() == rhs_distances.size());
     std::vector<bool> matched(rhs_distances.size(), false);
     for (const ArxLevelRoomDistance& left : lhs_distances) {
@@ -397,13 +355,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
     }
   }
 
-  const auto lhs_anchors_result = detail::copyItems<ArxLevelAnchor>(
-      lhs.anchorCount(), [&](ArxLevelAnchor* out) { return lhs.copyAnchors(0, lhs.anchorCount(), out); });
-  const auto rhs_anchors_result = detail::copyItems<ArxLevelAnchor>(
-      rhs.anchorCount(), [&](ArxLevelAnchor* out) { return rhs.copyAnchors(0, rhs.anchorCount(), out); });
-  if (!lhs_anchors_result || !rhs_anchors_result) return;
-  const std::vector<ArxLevelAnchor>& lhs_anchors = *lhs_anchors_result;
-  const std::vector<ArxLevelAnchor>& rhs_anchors = *rhs_anchors_result;
+  const std::vector<ArxLevelAnchor> lhs_anchors = detail::materialize(lhs.anchors());
+  const std::vector<ArxLevelAnchor> rhs_anchors = detail::materialize(rhs.anchors());
   detail::checkNamedItems<ArxLevelAnchor>(
       "anchors",
       lhs_anchors,
@@ -414,15 +367,10 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
                equivalence::floatEquivalent(left.radius, right.radius, epsilon) &&
                equivalence::floatEquivalent(left.height, right.height, epsilon) && left.flags == right.flags;
       });
-  const auto lhs_connections_result = detail::copyItems<ArxLevelAnchorConnection>(
-      lhs.anchorConnectionCount(),
-      [&](ArxLevelAnchorConnection* out) { return lhs.copyAnchorConnections(0, lhs.anchorConnectionCount(), out); });
-  const auto rhs_connections_result = detail::copyItems<ArxLevelAnchorConnection>(
-      rhs.anchorConnectionCount(),
-      [&](ArxLevelAnchorConnection* out) { return rhs.copyAnchorConnections(0, rhs.anchorConnectionCount(), out); });
-  if (!lhs_connections_result || !rhs_connections_result) return;
-  const auto lhs_connections = detail::namedConnections(*lhs_connections_result, lhs_anchors);
-  const auto rhs_connections = detail::namedConnections(*rhs_connections_result, rhs_anchors);
+  const std::vector<ArxLevelAnchorConnection> lhs_connection_items = detail::materialize(lhs.anchorConnections());
+  const std::vector<ArxLevelAnchorConnection> rhs_connection_items = detail::materialize(rhs.anchorConnections());
+  const auto lhs_connections = detail::namedConnections(lhs_connection_items, lhs_anchors);
+  const auto rhs_connections = detail::namedConnections(rhs_connection_items, rhs_anchors);
   if (!lhs_connections || !rhs_connections) return;
   CHECK(*lhs_connections == *rhs_connections);
 
@@ -430,23 +378,10 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
   const ArxLevelNavSurfaceInfo rhs_nav = rhs.navSurfaceInfo();
   CHECK(lhs_nav.has_surface == rhs_nav.has_surface);
   if (lhs_nav.has_surface != 0 && rhs_nav.has_surface != 0) {
-    const auto lhs_nav_vertices_result = detail::copyItems<ArxLevelVertex>(
-        lhs_nav.vertex_count,
-        [&](ArxLevelVertex* out) { return lhs.copyNavSurfaceVertices(0, lhs_nav.vertex_count, out); });
-    const auto rhs_nav_vertices_result = detail::copyItems<ArxLevelVertex>(
-        rhs_nav.vertex_count,
-        [&](ArxLevelVertex* out) { return rhs.copyNavSurfaceVertices(0, rhs_nav.vertex_count, out); });
-    const auto lhs_triangles_result = detail::copyItems<ArxLevelNavSurfaceTriangle>(
-        lhs_nav.triangle_count,
-        [&](ArxLevelNavSurfaceTriangle* out) { return lhs.copyNavSurfaceTriangles(0, lhs_nav.triangle_count, out); });
-    const auto rhs_triangles_result = detail::copyItems<ArxLevelNavSurfaceTriangle>(
-        rhs_nav.triangle_count,
-        [&](ArxLevelNavSurfaceTriangle* out) { return rhs.copyNavSurfaceTriangles(0, rhs_nav.triangle_count, out); });
-    if (!lhs_nav_vertices_result || !rhs_nav_vertices_result || !lhs_triangles_result || !rhs_triangles_result) return;
-    const std::vector<ArxLevelVertex>& lhs_nav_vertices = *lhs_nav_vertices_result;
-    const std::vector<ArxLevelVertex>& rhs_nav_vertices = *rhs_nav_vertices_result;
-    const std::vector<ArxLevelNavSurfaceTriangle>& lhs_triangles = *lhs_triangles_result;
-    const std::vector<ArxLevelNavSurfaceTriangle>& rhs_triangles = *rhs_triangles_result;
+    const std::vector<ArxLevelVertex> lhs_nav_vertices = detail::materialize(lhs.navSurfaceVertices());
+    const std::vector<ArxLevelVertex> rhs_nav_vertices = detail::materialize(rhs.navSurfaceVertices());
+    const std::vector<ArxLevelNavSurfaceTriangle> lhs_triangles = detail::materialize(lhs.navSurfaceTriangles());
+    const std::vector<ArxLevelNavSurfaceTriangle> rhs_triangles = detail::materialize(rhs.navSurfaceTriangles());
     bool nav_indices_valid = true;
     for (const ArxLevelNavSurfaceTriangle& triangle : lhs_triangles) {
       for (ArxVertexIndex vertex : triangle.vertices) {
@@ -496,13 +431,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
         epsilon));
   }
 
-  const auto lhs_lights_result = detail::copyItems<ArxLevelLight>(
-      lhs.lightCount(), [&](ArxLevelLight* out) { return lhs.copyLights(0, lhs.lightCount(), out); });
-  const auto rhs_lights_result = detail::copyItems<ArxLevelLight>(
-      rhs.lightCount(), [&](ArxLevelLight* out) { return rhs.copyLights(0, rhs.lightCount(), out); });
-  if (!lhs_lights_result || !rhs_lights_result) return;
-  const std::vector<ArxLevelLight>& lhs_lights = *lhs_lights_result;
-  const std::vector<ArxLevelLight>& rhs_lights = *rhs_lights_result;
+  const std::vector<ArxLevelLight> lhs_lights = detail::materialize(lhs.lights());
+  const std::vector<ArxLevelLight> rhs_lights = detail::materialize(rhs.lights());
   detail::checkNamedItems<ArxLevelLight>(
       "lights",
       lhs_lights,
@@ -520,13 +450,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
     CHECK(equivalence::rotationEquivalent(lhs_spawn.rotation, rhs_spawn.rotation, epsilon));
   }
 
-  const auto lhs_entities_result = detail::copyItems<ArxLevelEntity>(
-      lhs.entityCount(), [&](ArxLevelEntity* out) { return lhs.copyEntities(0, lhs.entityCount(), out); });
-  const auto rhs_entities_result = detail::copyItems<ArxLevelEntity>(
-      rhs.entityCount(), [&](ArxLevelEntity* out) { return rhs.copyEntities(0, rhs.entityCount(), out); });
-  if (!lhs_entities_result || !rhs_entities_result) return;
-  const std::vector<ArxLevelEntity>& lhs_entities = *lhs_entities_result;
-  const std::vector<ArxLevelEntity>& rhs_entities = *rhs_entities_result;
+  const std::vector<ArxLevelEntity> lhs_entities = detail::materialize(lhs.entities());
+  const std::vector<ArxLevelEntity> rhs_entities = detail::materialize(rhs.entities());
   CHECK(lhs_entities.size() == rhs_entities.size());
   std::unordered_map<std::string_view, const ArxLevelEntity*> rhs_entity_by_name;
   for (const ArxLevelEntity& entity : rhs_entities) {
@@ -555,13 +480,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
     }
   }
 
-  const auto lhs_fogs_result = detail::copyItems<ArxLevelFog>(
-      lhs.fogCount(), [&](ArxLevelFog* out) { return lhs.copyFogs(0, lhs.fogCount(), out); });
-  const auto rhs_fogs_result = detail::copyItems<ArxLevelFog>(
-      rhs.fogCount(), [&](ArxLevelFog* out) { return rhs.copyFogs(0, rhs.fogCount(), out); });
-  if (!lhs_fogs_result || !rhs_fogs_result) return;
-  const std::vector<ArxLevelFog>& lhs_fogs = *lhs_fogs_result;
-  const std::vector<ArxLevelFog>& rhs_fogs = *rhs_fogs_result;
+  const std::vector<ArxLevelFog> lhs_fogs = detail::materialize(lhs.fogs());
+  const std::vector<ArxLevelFog> rhs_fogs = detail::materialize(rhs.fogs());
   detail::checkNamedItems<ArxLevelFog>(
       "fogs",
       lhs_fogs,
@@ -569,13 +489,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
       [](const ArxLevelFog& fog) { return equivalence::stringView(fog.name); },
       [&](const ArxLevelFog& left, const ArxLevelFog& right) { return detail::fogEquivalent(left, right, epsilon); });
 
-  const auto lhs_zones_result = detail::copyItems<ArxLevelZone>(
-      lhs.zoneCount(), [&](ArxLevelZone* out) { return lhs.copyZones(0, lhs.zoneCount(), out); });
-  const auto rhs_zones_result = detail::copyItems<ArxLevelZone>(
-      rhs.zoneCount(), [&](ArxLevelZone* out) { return rhs.copyZones(0, rhs.zoneCount(), out); });
-  if (!lhs_zones_result || !rhs_zones_result) return;
-  const std::vector<ArxLevelZone>& lhs_zones = *lhs_zones_result;
-  const std::vector<ArxLevelZone>& rhs_zones = *rhs_zones_result;
+  const std::vector<ArxLevelZone> lhs_zones = detail::materialize(lhs.zones());
+  const std::vector<ArxLevelZone> rhs_zones = detail::materialize(rhs.zones());
   CHECK(lhs_zones.size() == rhs_zones.size());
   std::unordered_map<std::string_view, pistoris::ZoneIndex> rhs_zone_by_name;
   for (pistoris::ZoneIndex index = 0; index < rhs_zones.size(); ++index) {
@@ -606,13 +521,8 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
     CHECK(detail::cyclicPerimeterEquivalent(left_perimeter, right_perimeter, epsilon));
   }
 
-  const auto lhs_paths_result = detail::copyItems<ArxLevelPath>(
-      lhs.pathCount(), [&](ArxLevelPath* out) { return lhs.copyPaths(0, lhs.pathCount(), out); });
-  const auto rhs_paths_result = detail::copyItems<ArxLevelPath>(
-      rhs.pathCount(), [&](ArxLevelPath* out) { return rhs.copyPaths(0, rhs.pathCount(), out); });
-  if (!lhs_paths_result || !rhs_paths_result) return;
-  const std::vector<ArxLevelPath>& lhs_paths = *lhs_paths_result;
-  const std::vector<ArxLevelPath>& rhs_paths = *rhs_paths_result;
+  const std::vector<ArxLevelPath> lhs_paths = detail::materialize(lhs.paths());
+  const std::vector<ArxLevelPath> rhs_paths = detail::materialize(rhs.paths());
   CHECK(lhs_paths.size() == rhs_paths.size());
   std::unordered_map<std::string_view, pistoris::PathIndex> rhs_path_by_name;
   for (pistoris::PathIndex index = 0; index < rhs_paths.size(); ++index) {
@@ -626,14 +536,13 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
     const ArxLevelPath& right = rhs_paths[found->second];
     CHECK(equivalence::vectorEquivalent(left.position, right.position, epsilon));
     CHECK(left.node_count == right.node_count);
-    const auto lhs_nodes_result = detail::copyItems<ArxLevelPathNode>(
-        left.node_count, [&](ArxLevelPathNode* out) { return lhs.copyPathNodes(index, 0, left.node_count, out); });
-    const auto rhs_nodes_result = detail::copyItems<ArxLevelPathNode>(right.node_count, [&](ArxLevelPathNode* out) {
-      return rhs.copyPathNodes(found->second, 0, right.node_count, out);
-    });
+    const auto lhs_nodes_result = lhs.pathNodes(index);
+    const auto rhs_nodes_result = rhs.pathNodes(found->second);
+    CHECK(lhs_nodes_result);
+    CHECK(rhs_nodes_result);
     if (!lhs_nodes_result || !rhs_nodes_result) return;
-    const std::vector<ArxLevelPathNode>& lhs_nodes = *lhs_nodes_result;
-    const std::vector<ArxLevelPathNode>& rhs_nodes = *rhs_nodes_result;
+    const std::vector<ArxLevelPathNode> lhs_nodes = detail::materialize(*lhs_nodes_result);
+    const std::vector<ArxLevelPathNode> rhs_nodes = detail::materialize(*rhs_nodes_result);
     for (std::size_t node = 0; node < std::min(lhs_nodes.size(), rhs_nodes.size()); ++node) {
       CHECK(
           equivalence::vectorEquivalent(lhs_nodes[node].relative_position, rhs_nodes[node].relative_position, epsilon));

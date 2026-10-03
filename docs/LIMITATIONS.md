@@ -23,6 +23,15 @@ Data absent from the compatibility schema cannot roundtrip through JSON.
 Prefer native carriers or the matching GLB authoring format when the JSON
 ecosystem is not required.
 
+Legacy FTS source checks are build provenance rather than runtime Level data.
+Binary readers validate their framing and discard the records. When compatible
+JSON contains `uniqueHeaders`, readers validate and discard the field. Binary
+writers emit no source checks, and JSON exports an empty `uniqueHeaders` array.
+
+FTS binary data does not carry a meaningful level identity. The compatible
+JSON adapter therefore accepts `levelIdx` separately on export and returns it
+alongside the FTS carrier on import.
+
 ## Level Native Conversion
 
 ### FTS remains the required Level carrier
@@ -361,6 +370,14 @@ plane at the image's natural proportions, so GLB geometry is not preserved as
 roundtrip state. Cinematic has no compatible JSON form or OBJ authoring
 projection.
 
+### Blur depends on playback history
+
+The native `BLUR` effect requests a blend with previously rendered Cinematic
+frames. Current Arx Libertatis playback does not reliably populate that history
+buffer, so authored blur may have little or no visible effect. Pistoris
+preserves and exposes the flag because it is meaningful native data, but cannot
+make the runtime effect reliable.
+
 ## Model and OBJ
 
 OBJ represents static Model geometry, materials, and positional action points.
@@ -389,7 +406,7 @@ cannot reconstruct the repeated underscores.
 
 ## Model Reference Operations
 
-Game-side model-part replacement compares bone-origin positions exactly. Model
+Game-side model-part replacement compares bone positions exactly. Model
 authoring can change those positions even when the resulting skeleton remains
 otherwise coherent.
 
@@ -397,12 +414,12 @@ Pair a compatible base FTL with one or more requested operations:
 
 ```text
 --ftl-reference <PATH>
---snap-bone-origins
+--snap-bone-positions
 --copy-bone-selections
 --copy-action-selections
 ```
 
-Snapping and bone-origin selection copying require equal bone counts and parent
+Snapping and bone selection copying require equal bone counts and parent
 topology. Action-point selection copying does not require matching skeletons.
 Bone-name mismatches warn but do not prevent the operation. Selection copy
 matches names already present in the target Model; it does not create
@@ -412,7 +429,7 @@ occurrence order; unmatched target action-point memberships clear, while
 selection memberships on unmatched reference action points are omitted with a
 warning.
 
-`--infer-bone-selections` replaces bone-origin selection memberships using a
+`--infer-bone-selections` replaces bone selection memberships using a
 90% threshold over geometry owned directly by each bone. It is an authoring
 helper rather than authoritative recovery and cannot be combined with
 `--copy-bone-selections`.

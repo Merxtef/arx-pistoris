@@ -3,12 +3,49 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/status.h"
+
+#include "animation/internal.h"
 #include "modules/animation.h"
+#include "modules/sounds.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <vector>
+
+TEST_CASE("Animation module errors map to focused return codes") {
+  using pistoris::animation_detail::errorCode;
+  using pistoris::animation_detail::soundErrorCode;
+
+  CHECK(errorCode(pistoris::animation::Error::kNone) == ARX_OK);
+  CHECK(errorCode(pistoris::animation::Error::kBadName) == ARX_ANIMATION_BAD_NAME);
+  CHECK(errorCode(pistoris::animation::Error::kNoKeyframes) == ARX_ANIMATION_NO_KEYFRAMES);
+  CHECK(errorCode(pistoris::animation::Error::kTooManyKeyframes) == ARX_ANIMATION_TOO_MANY_KEYFRAMES);
+  CHECK(errorCode(pistoris::animation::Error::kTooManyGroups) == ARX_ANIMATION_TOO_MANY_GROUPS);
+  CHECK(errorCode(pistoris::animation::Error::kBadFrameLength) == ARX_ANIMATION_BAD_FRAME_LENGTH);
+  CHECK(errorCode(pistoris::animation::Error::kBadFrame) == ARX_ANIMATION_BAD_FRAME);
+  CHECK(errorCode(pistoris::animation::Error::kBadRootTransform) == ARX_ANIMATION_BAD_ROOT_TRANSFORM);
+  CHECK(errorCode(pistoris::animation::Error::kBadGroupTransform) == ARX_ANIMATION_BAD_GROUP_TRANSFORM);
+  CHECK(errorCode(pistoris::animation::Error::kBadSound) == ARX_ANIMATION_BAD_KEYFRAME_SOUND);
+  CHECK(errorCode(pistoris::animation::Error::kBadTransformCount) == ARX_ANIMATION_BAD_TRANSFORM_COUNT);
+  CHECK(errorCode(pistoris::animation::Error::kBadGroupClaim) == ARX_ANIMATION_BAD_GROUP_CLAIM);
+  CHECK(errorCode(pistoris::animation::Error::kBadIndex) == ARX_INDEX_OUT_OF_RANGE);
+
+  CHECK(soundErrorCode(pistoris::sounds::Error::kNone) == ARX_OK);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kInvalidOptions) == ARX_INVALID_OPTIONS);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kTooManySounds) == ARX_ANIMATION_TOO_MANY_SOUNDS);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kBadPath) == ARX_ANIMATION_BAD_SOUND_PATH);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kBadAudio) == ARX_ANIMATION_BAD_SOUND_DATA);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kUnsupportedChannels) == ARX_ANIMATION_UNSUPPORTED_SOUND_CHANNELS);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kAudioTooLarge) == ARX_ANIMATION_SOUND_TOO_LARGE);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kDuplicatePath) == ARX_ANIMATION_DUPLICATE_SOUND_PATH);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kBadKind) == ARX_INTERNAL_ERROR);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kBadLanguage) == ARX_INTERNAL_ERROR);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kDuplicateEncoding) == ARX_INTERNAL_ERROR);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kBadIndex) == ARX_INDEX_OUT_OF_RANGE);
+  CHECK(soundErrorCode(pistoris::sounds::Error::kOutOfMemory) == ARX_BAD_ALLOC);
+}
 
 TEST_CASE("Animation validates dense transforms and frame bounds") {
   pistoris::AnimationData data;
@@ -84,6 +121,14 @@ TEST_CASE("Animation operations preserve dense transform alignment transactional
   CHECK(data.group_transforms.empty());
   CHECK(data.group_count == 0);
   CHECK(data.frame_length == 0);
+}
+
+TEST_CASE("Animation validates names and timeline capacity without allocating storage") {
+  CHECK(pistoris::animation::validateName({}) == pistoris::animation::Error::kBadName);
+  CHECK(pistoris::animation::validateTimelineShape(0, pistoris::animation::kMaxKeyframes + 1U, 0) ==
+        pistoris::animation::Error::kTooManyKeyframes);
+  CHECK(pistoris::animation::validateTimelineShape(0, 1, pistoris::animation::kMaxGroups + 1U) ==
+        pistoris::animation::Error::kTooManyGroups);
 }
 
 TEST_CASE("Animation replacement candidates can be rejected before publishing") {

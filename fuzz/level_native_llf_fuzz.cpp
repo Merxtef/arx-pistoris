@@ -13,7 +13,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   const ArxDlf* fixed_dlf = arx_fuzz::fixtureLevelDlf();
 
   ArxLlf* raw_llf = nullptr;
-  const ArxReturnCode rc = arx_pistoris_llf_read(data, size, &raw_llf);
+  const ArxReturnCode rc = arx_pistoris_llf_read(data, size, &raw_llf, nullptr);
   arx_fuzz::LlfHandle llf(raw_llf);
   if (rc != ARX_OK) {
     if (llf.get()) std::abort();

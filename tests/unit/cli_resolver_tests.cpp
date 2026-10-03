@@ -6,15 +6,15 @@
 #include "arx_pistoris/base/math.h"
 #include "arx_pistoris/level.hpp"
 
-#include "../../cli/modules/implication.h"
-#include "../../cli/pipeline/execution_context.h"
-#include "../../cli/pipeline/parsed.h"
-#include "../../cli/routes/conversion_path.h"
-#include "../../cli/routes/descriptor.h"
-#include "../../cli/routes/level/options.h"
-#include "../../cli/routes/level/state.h"
 #include "formats/format.h"
+#include "modules/implication.h"
 #include "modules/module.h"
+#include "pipeline/execution_context.h"
+#include "pipeline/parsed.h"
+#include "routes/conversion_path.h"
+#include "routes/descriptor.h"
+#include "routes/level/options.h"
+#include "routes/level/state.h"
 
 #include <array>
 #include <cstdlib>

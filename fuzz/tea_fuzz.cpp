@@ -10,7 +10,7 @@
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   arx_fuzz::silenceLogs();
   ArxTea* raw_tea = nullptr;
-  const ArxReturnCode rc = arx_pistoris_tea_read(data, size, &raw_tea);
+  const ArxReturnCode rc = arx_pistoris_tea_read(data, size, &raw_tea, nullptr);
   arx_fuzz::TeaHandle tea(raw_tea);
   if (rc != ARX_OK) {
     if (tea.get()) std::abort();

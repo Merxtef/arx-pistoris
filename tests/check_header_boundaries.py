@@ -20,6 +20,7 @@ UMBRELLA_EXPORTS = {
         "arx_pistoris/base/abi.h",
         "arx_pistoris/base/audio.h",
         "arx_pistoris/base/buffer.h",
+        "arx_pistoris/base/error.h",
         "arx_pistoris/base/flags.h",
         "arx_pistoris/base/image.h",
         "arx_pistoris/base/indices.h",
@@ -27,8 +28,10 @@ UMBRELLA_EXPORTS = {
         "arx_pistoris/base/status.h",
         "arx_pistoris/base/string_view.h",
         "arx_pistoris/binary.h",
+        "arx_pistoris/cinematic.h",
         "arx_pistoris/glb.h",
         "arx_pistoris/level.h",
+        "arx_pistoris/level/images.h",
         "arx_pistoris/model.h",
         "arx_pistoris/native.h",
         "arx_pistoris/paths.h",
@@ -39,19 +42,27 @@ UMBRELLA_EXPORTS = {
     },
     "arx_pistoris/pistoris.hpp": {
         "arx_pistoris/ambiance.hpp",
+        "arx_pistoris/ambiance/bake.hpp",
         "arx_pistoris/animation.hpp",
         "arx_pistoris/animation/bake.hpp",
         "arx_pistoris/base/audio.h",
         "arx_pistoris/base/flags.h",
         "arx_pistoris/base/image.h",
+        "arx_pistoris/base/image.hpp",
         "arx_pistoris/base/indices.h",
         "arx_pistoris/base/math.hpp",
         "arx_pistoris/base/status.h",
         "arx_pistoris/base/string_view.h",
         "arx_pistoris/binary.hpp",
+        "arx_pistoris/cinematic.hpp",
+        "arx_pistoris/cinematic/bake.hpp",
+        "arx_pistoris/cinematic/glb.hpp",
+        "arx_pistoris/cinematic/sound.hpp",
+        "arx_pistoris/error.hpp",
         "arx_pistoris/glb.hpp",
         "arx_pistoris/level.hpp",
         "arx_pistoris/level/bake.hpp",
+        "arx_pistoris/level/images.hpp",
         "arx_pistoris/model.hpp",
         "arx_pistoris/model/bake.hpp",
         "arx_pistoris/model/glb.hpp",
@@ -79,32 +90,36 @@ def includes(path: pathlib.Path) -> list[tuple[int, str]]:
 
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parents[1]
+    core = root / "libs" / "core"
+    public_include = core / "include"
     violations: list[str] = []
 
-    for source_root in (root / "src", root / "cli", root / "include" / "arx_pistoris"):
+    for source_root in (core / "src", root / "apps" / "cli" / "src", public_include / "arx_pistoris"):
         for path in source_root.rglob("*"):
             if path.suffix.lower() not in SOURCE_SUFFIXES:
                 continue
             relative = path.relative_to(root)
             public_name = None
-            if relative.parts[0] == "include":
-                public_name = relative.relative_to("include").as_posix()
+            if path.is_relative_to(public_include):
+                public_name = path.relative_to(public_include).as_posix()
             if public_name in UMBRELLA_HEADERS:
                 continue
             for line_number, included in includes(path):
                 included = included.lower()
                 if included in UMBRELLA_HEADERS:
                     violations.append(f"{relative}:{line_number}: focused code must not include umbrella {included}")
-                if relative.as_posix().startswith("include/arx_pistoris/base/") and included.startswith(
+                if public_name and public_name.startswith("arx_pistoris/base/") and included.startswith(
                     "arx_pistoris/"
                 ) and not included.startswith("arx_pistoris/base/"):
                     violations.append(f"{relative}:{line_number}: base header depends on non-base header {included}")
 
     for umbrella, expected in UMBRELLA_EXPORTS.items():
-        path = root / "include" / umbrella
+        path = public_include / umbrella
         actual = {included for _, included in includes(path)}
         for missing in sorted(expected - actual):
             violations.append(f"{path.relative_to(root)}: missing umbrella export {missing}")
+        for untracked in sorted(actual - expected):
+            violations.append(f"{path.relative_to(root)}: untracked umbrella export {untracked}")
 
     for violation in violations:
         print(violation)

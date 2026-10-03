@@ -133,6 +133,14 @@ fuzz-build:
     cmake --preset fuzz
     cmake --build --preset fuzz
 
+# Build and test the installed Python wheel in an isolated environment
+python-check:
+    python scripts/ci/python-check.py
+
+# Build current Python bindings and open an isolated development interpreter
+python:
+    python scripts/dev/python-shell.py
+
 # Build, install, and verify the release CLI package
 [unix]
 package-smoke:
@@ -163,6 +171,7 @@ pre-release:
     cmake --preset fuzz
     cmake --build --preset fuzz
     ctest --test-dir build-fuzz --output-on-failure -L fuzz-smoke
+    just python-check
     just package-smoke
 
 # Run test binaries directly: just run-tests [suite] [target]

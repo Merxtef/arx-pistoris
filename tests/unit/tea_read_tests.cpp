@@ -4,6 +4,7 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/base/status.h"
+#include "arx_pistoris/native/location.hpp"
 #include "arx_pistoris/native/tea.hpp"
 
 #include "helpers.h"
@@ -12,14 +13,35 @@
 
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 static ArxReturnCode load(const std::vector<uint8_t>& buf, pistoris::tea::Data& d) {
   pistoris::ReadCursor c(buf.data(), buf.size());
-  return pistoris::loadTea(&d, c);
+  auto result = pistoris::loadTea(c);
+  if (result) d = std::move(*result);
+  return result.code();
 }
 
 TEST_SUITE("tea") {
+  TEST_CASE("Version failures retain the version field offset") {
+    auto buf = makeMinimalTea();
+    const std::uint32_t version = 0;
+    std::memcpy(buf.data() + kTeaVersionOff, &version, sizeof(version));
+    pistoris::ReadCursor cursor(buf.data(), buf.size());
+
+    const auto result = pistoris::loadTea(cursor);
+
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error());
+    REQUIRE(result.error()->location());
+    const pistoris::TeaBinaryLocation& location = *result.error()->location();
+    CHECK(location.element == pistoris::TeaElement::kHeader);
+    CHECK(location.field == "version");
+    CHECK(location.byte_offset == kTeaVersionOff);
+    CHECK(location.requested_bytes == 0);
+  }
+
   // --- Bad identifier / version ---
 
   TEST_CASE("TeaTruncatedIdentity") {

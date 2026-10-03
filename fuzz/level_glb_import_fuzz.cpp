@@ -16,7 +16,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   ArxLevel* raw_level = nullptr;
   ArxTextureSourcePaths* raw_sources = nullptr;
   const ArxReturnCode rc =
-      arx_pistoris_level_import_glb(glb.data(), glb.size(), nullptr, &raw_level, nullptr, &raw_sources);
+      arx_pistoris_level_import_glb(glb.data(), glb.size(), nullptr, &raw_level, nullptr, &raw_sources, nullptr);
   arx_fuzz::LevelHandle level(raw_level);
   arx_fuzz::TextureSourcePathsHandle sources(raw_sources);
   if (rc != ARX_OK) {
@@ -24,9 +24,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     return 0;
   }
   if (!level.get() || !sources.get()) std::abort();
-  if (arx_pistoris_level_validate(level.get()) != ARX_OK) std::abort();
+  if (arx_pistoris_level_validate(level.get(), nullptr) != ARX_OK) std::abort();
   std::size_t texture_count = 0;
-  if (arx_pistoris_level_texture_count(level.get(), &texture_count) != ARX_OK) std::abort();
+  if (arx_pistoris_level_texture_count(level.get(), &texture_count, nullptr) != ARX_OK) std::abort();
   arx_fuzz::validateTextureSourcePaths(sources.get(), texture_count);
   return 0;
 }

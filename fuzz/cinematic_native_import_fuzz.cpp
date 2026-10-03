@@ -11,7 +11,7 @@
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size) {
   arx_fuzz::silenceLogs();
   ArxCin* raw_native = nullptr;
-  const ArxReturnCode native_rc = arx_pistoris_cin_read(data, size, &raw_native);
+  const ArxReturnCode native_rc = arx_pistoris_cin_read(data, size, &raw_native, nullptr);
   arx_fuzz::CinHandle native(raw_native);
   if (native_rc != ARX_OK) {
     if (native.get()) std::abort();
@@ -23,7 +23,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   ArxTextureSourcePaths* raw_illustration_sources = nullptr;
   ArxCinematicSoundSourceReferences* raw_sound_sources = nullptr;
   const ArxReturnCode rc = arx_pistoris_cinematic_import_native(
-      native.get(), &raw_cinematic, &raw_illustration_sources, &raw_sound_sources, ARX_NATIVE_TEXT_AUTO);
+      native.get(), &raw_cinematic, &raw_illustration_sources, &raw_sound_sources, ARX_NATIVE_TEXT_AUTO, nullptr);
   arx_fuzz::CinematicHandle cinematic(raw_cinematic);
   arx_fuzz::TextureSourcePathsHandle illustration_sources(raw_illustration_sources);
   arx_fuzz::CinematicSoundSourceReferencesHandle sound_sources(raw_sound_sources);
@@ -32,9 +32,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     return 0;
   }
   if (!cinematic.get() || !illustration_sources.get() || !sound_sources.get()) std::abort();
-  if (arx_pistoris_cinematic_validate(cinematic.get()) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_validate(cinematic.get(), nullptr) != ARX_OK) std::abort();
   std::size_t texture_count = 0;
-  if (arx_pistoris_cinematic_texture_count(cinematic.get(), &texture_count) != ARX_OK) std::abort();
+  if (arx_pistoris_cinematic_texture_count(cinematic.get(), &texture_count, nullptr) != ARX_OK) std::abort();
   arx_fuzz::validateTextureSourcePaths(illustration_sources.get(), texture_count);
   arx_fuzz::validateCinematicSoundSourceReferences(sound_sources.get(), cinematic.get());
   return 0;

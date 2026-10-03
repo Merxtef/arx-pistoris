@@ -86,6 +86,12 @@ TEST_SUITE("cpp_api") {
     CHECK(c_weld.metric == static_cast<ArxLevelWeldMetric>(cpp_weld.metric));
     CHECK(c_weld.degenerate_faces == static_cast<ArxLevelDegenerateFacePolicy>(cpp_weld.degenerate_faces));
 
+    const ArxModelVertexWeldOptions c_model_weld = ARX_MODEL_VERTEX_WELD_OPTIONS_INIT;
+    const pistoris::Model::VertexWeldOptions cpp_model_weld;
+    CHECK(c_model_weld.radius == cpp_model_weld.radius);
+    CHECK(c_model_weld.metric == static_cast<ArxModelWeldMetric>(cpp_model_weld.metric));
+    CHECK(c_model_weld.degenerate_faces == static_cast<ArxModelDegenerateFacePolicy>(cpp_model_weld.degenerate_faces));
+
     const ArxLevelPortalSnapOptions c_portal_snap = ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT;
     const pistoris::Level::PortalSnapOptions cpp_portal_snap;
     CHECK(c_portal_snap.radius == cpp_portal_snap.radius);
@@ -158,29 +164,33 @@ TEST_SUITE("cpp_api") {
     CHECK(c_level_export.arx_offset.y == cpp_level_export.arx_offset.y);
     CHECK(c_level_export.arx_offset.z == cpp_level_export.arx_offset.z);
 
-    const ArxLevelGameMinimapRenderOptions c_game_minimap = ARX_LEVEL_GAME_MINIMAP_RENDER_OPTIONS_INIT;
-    const pistoris::Level::GameMinimapRenderOptions cpp_game_minimap;
-    CHECK(c_game_minimap.projection_offset.x == cpp_game_minimap.projection_offset.x);
-    CHECK(c_game_minimap.projection_offset.y == cpp_game_minimap.projection_offset.y);
-    CHECK(c_game_minimap.fill_color.r == cpp_game_minimap.fill_color.r);
-    CHECK(c_game_minimap.fill_color.g == cpp_game_minimap.fill_color.g);
-    CHECK(c_game_minimap.fill_color.b == cpp_game_minimap.fill_color.b);
-    CHECK(c_game_minimap.border_color.r == cpp_game_minimap.border_color.r);
-    CHECK(c_game_minimap.border_color.g == cpp_game_minimap.border_color.g);
-    CHECK(c_game_minimap.border_color.b == cpp_game_minimap.border_color.b);
+    const ArxLevelMinimapRenderOptions c_minimap_render = ARX_LEVEL_MINIMAP_RENDER_OPTIONS_INIT;
+    const pistoris::Level::MinimapRenderOptions cpp_minimap_render;
+    CHECK(c_minimap_render.mode == static_cast<ArxLevelMinimapRenderMode>(cpp_minimap_render.mode));
+    CHECK((c_minimap_render.has_projection_offset != 0) == cpp_minimap_render.projection_offset.has_value());
+    CHECK(c_minimap_render.fill_color.r == cpp_minimap_render.fill_color.r);
+    CHECK(c_minimap_render.fill_color.g == cpp_minimap_render.fill_color.g);
+    CHECK(c_minimap_render.fill_color.b == cpp_minimap_render.fill_color.b);
+    CHECK((c_minimap_render.has_border_color != 0) == cpp_minimap_render.border_color.has_value());
+    CHECK(c_minimap_render.format == static_cast<ArxImageFormat>(cpp_minimap_render.format));
 
-    const ArxLevelGameMinimapReprojectionOptions c_game_reprojection = ARX_LEVEL_GAME_MINIMAP_REPROJECTION_OPTIONS_INIT;
-    const pistoris::level_images::GameMinimapReprojectionOptions cpp_game_reprojection;
-    CHECK(c_game_reprojection.source_projection_offset.x == cpp_game_reprojection.source_projection_offset.x);
-    CHECK(c_game_reprojection.source_projection_offset.y == cpp_game_reprojection.source_projection_offset.y);
-    CHECK(c_game_reprojection.target_projection_offset.x == cpp_game_reprojection.target_projection_offset.x);
-    CHECK(c_game_reprojection.target_projection_offset.y == cpp_game_reprojection.target_projection_offset.y);
-    CHECK(c_game_reprojection.fill_color.r == cpp_game_reprojection.fill_color.r);
-    CHECK(c_game_reprojection.fill_color.g == cpp_game_reprojection.fill_color.g);
-    CHECK(c_game_reprojection.fill_color.b == cpp_game_reprojection.fill_color.b);
-    CHECK(c_game_reprojection.border_color.r == cpp_game_reprojection.border_color.r);
-    CHECK(c_game_reprojection.border_color.g == cpp_game_reprojection.border_color.g);
-    CHECK(c_game_reprojection.border_color.b == cpp_game_reprojection.border_color.b);
+    const ArxLevelMinimapReprojectionOptions c_reprojection = ARX_LEVEL_MINIMAP_REPROJECTION_OPTIONS_INIT;
+    const pistoris::level_images::MinimapReprojectionOptions cpp_reprojection;
+    CHECK(c_reprojection.mode == static_cast<ArxLevelMinimapRenderMode>(cpp_reprojection.mode));
+    CHECK(c_reprojection.source_projection_offset.x == cpp_reprojection.source_projection_offset.x);
+    CHECK(c_reprojection.source_projection_offset.y == cpp_reprojection.source_projection_offset.y);
+    CHECK(c_reprojection.target_projection_offset.x == cpp_reprojection.target_projection_offset.x);
+    CHECK(c_reprojection.target_projection_offset.y == cpp_reprojection.target_projection_offset.y);
+    CHECK(c_reprojection.fill_color.r == cpp_reprojection.fill_color.r);
+    CHECK(c_reprojection.fill_color.g == cpp_reprojection.fill_color.g);
+    CHECK(c_reprojection.fill_color.b == cpp_reprojection.fill_color.b);
+    CHECK((c_reprojection.has_border_color != 0) == cpp_reprojection.border_color.has_value());
+    CHECK(c_reprojection.format == static_cast<ArxImageFormat>(cpp_reprojection.format));
+
+    const ArxLevelLoadingScreenRenderOptions c_loading = ARX_LEVEL_LOADING_SCREEN_RENDER_OPTIONS_INIT;
+    const pistoris::Level::LoadingScreenRenderOptions cpp_loading;
+    CHECK(c_loading.layout == static_cast<ArxLevelLoadingScreenLayout>(cpp_loading.layout));
+    CHECK(c_loading.format == static_cast<ArxImageFormat>(cpp_loading.format));
 
     const ArxLevelMinimapGenerationOptions c_minimap = ARX_LEVEL_MINIMAP_GENERATION_OPTIONS_INIT;
     const pistoris::Level::MinimapGenerationOptions cpp_minimap;
@@ -233,21 +243,23 @@ TEST_SUITE("cpp_api") {
 
     const ArxModelReferenceOptions c_reference = ARX_MODEL_REFERENCE_OPTIONS_INIT;
     const pistoris::Model::ReferenceOptions cpp_reference;
-    CHECK((c_reference.snap_bone_origins != 0) == cpp_reference.snap_bone_origins);
-    CHECK((c_reference.copy_bone_origin_selections != 0) == cpp_reference.copy_bone_origin_selections);
+    CHECK((c_reference.snap_bone_positions != 0) == cpp_reference.snap_bone_positions);
+    CHECK((c_reference.copy_bone_selection_memberships != 0) == cpp_reference.copy_bone_selection_memberships);
     CHECK((c_reference.copy_action_point_selections != 0) == cpp_reference.copy_action_point_selections);
 
     const ArxModelInventoryIconSetOptions c_icon_set = ARX_MODEL_INVENTORY_ICON_SET_OPTIONS_INIT;
     const pistoris::Model::InventoryIconSetOptions cpp_icon_set;
-    CHECK(c_icon_set.width_slots == cpp_icon_set.width_slots);
-    CHECK(c_icon_set.height_slots == cpp_icon_set.height_slots);
+    CHECK(c_icon_set.width_slots == cpp_icon_set.width_slots.value_or(0));
+    CHECK(c_icon_set.height_slots == cpp_icon_set.height_slots.value_or(0));
 
     const ArxModelInventoryIconRenderOptions c_icon_render = ARX_MODEL_INVENTORY_ICON_RENDER_OPTIONS_INIT;
     const pistoris::Model::InventoryIconRenderOptions cpp_icon_render;
-    CHECK(c_icon_render.width_slots == cpp_icon_render.width_slots);
-    CHECK(c_icon_render.height_slots == cpp_icon_render.height_slots);
+    CHECK(c_icon_render.width_slots == cpp_icon_render.width_slots.value_or(0));
+    CHECK(c_icon_render.height_slots == cpp_icon_render.height_slots.value_or(0));
     CHECK(c_icon_render.layout == ARX_MODEL_INVENTORY_ICON_LAYOUT_CENTER);
     CHECK(c_icon_render.layout == static_cast<ArxModelInventoryIconLayout>(cpp_icon_render.layout));
+    CHECK(c_icon_render.format == ARX_IMAGE_FORMAT_PNG);
+    CHECK(c_icon_render.format == static_cast<ArxImageFormat>(cpp_icon_render.format));
 
     const ArxObjExportOptions c_obj = ARX_OBJ_EXPORT_OPTIONS_INIT;
     const pistoris::ObjExportOptions cpp_obj;

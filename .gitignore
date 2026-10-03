@@ -12,6 +12,10 @@
 *.exe
 
 # Python
+/.venv/
+/dist/
+/wheelhouse/
+/*.whl
 __pycache__/
 *.py[cod]
 

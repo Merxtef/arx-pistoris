@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <string_view>
-#include <vector>
 
 namespace test_support {
 
@@ -27,24 +26,28 @@ template <class Asset>
 void checkSoundsEquivalent(const Asset& lhs, const Asset& rhs, SoundEquivalenceOptions options = {}) {
   CHECK(lhs.soundCount() == rhs.soundCount());
   if (lhs.soundCount() != rhs.soundCount()) return;
-  std::vector<ArxSoundView> lhs_sounds(lhs.soundCount());
-  std::vector<ArxSoundView> rhs_sounds(rhs.soundCount());
-  const ArxReturnCode lhs_status = lhs.copySoundViews(0, lhs_sounds.size(), lhs_sounds.data());
-  const ArxReturnCode rhs_status = rhs.copySoundViews(0, rhs_sounds.size(), rhs_sounds.data());
-  CHECK(lhs_status == ARX_OK);
-  CHECK(rhs_status == ARX_OK);
-  if (lhs_status != ARX_OK || rhs_status != ARX_OK) return;
 
-  for (std::size_t index = 0; index < lhs_sounds.size(); ++index) {
-    if (options.compare_paths)
-      CHECK(soundStringView(lhs_sounds[index].path) == soundStringView(rhs_sounds[index].path));
+  for (std::size_t index = 0; index < lhs.soundCount(); ++index) {
+    ArxSoundView lhs_sound{};
+    ArxSoundView rhs_sound{};
+    if constexpr (requires { lhs.sounds(); }) {
+      lhs_sound = lhs.sounds()[index];
+      rhs_sound = rhs.sounds()[index];
+    } else {
+      const ArxReturnCode lhs_status = lhs.copySoundViews(index, 1, &lhs_sound);
+      const ArxReturnCode rhs_status = rhs.copySoundViews(index, 1, &rhs_sound);
+      CHECK(lhs_status == ARX_OK);
+      CHECK(rhs_status == ARX_OK);
+      if (lhs_status != ARX_OK || rhs_status != ARX_OK) return;
+    }
+    if (options.compare_paths) CHECK(soundStringView(lhs_sound.path) == soundStringView(rhs_sound.path));
     if (!options.compare_encoded_audio) continue;
-    CHECK(lhs_sounds[index].encoded_audio.size == rhs_sounds[index].encoded_audio.size);
-    if (lhs_sounds[index].encoded_audio.size != rhs_sounds[index].encoded_audio.size) continue;
-    if (lhs_sounds[index].encoded_audio.size != 0)
-      CHECK(std::equal(lhs_sounds[index].encoded_audio.data,
-                       lhs_sounds[index].encoded_audio.data + lhs_sounds[index].encoded_audio.size,
-                       rhs_sounds[index].encoded_audio.data));
+    CHECK(lhs_sound.encoded_audio.size == rhs_sound.encoded_audio.size);
+    if (lhs_sound.encoded_audio.size != rhs_sound.encoded_audio.size) continue;
+    if (lhs_sound.encoded_audio.size != 0)
+      CHECK(std::equal(lhs_sound.encoded_audio.data,
+                       lhs_sound.encoded_audio.data + lhs_sound.encoded_audio.size,
+                       rhs_sound.encoded_audio.data));
   }
 }
 

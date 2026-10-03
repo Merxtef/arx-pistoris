@@ -29,6 +29,18 @@
       }
     },
     {
+      "name": "python",
+      "displayName": "Python Development (Debug, Ninja, Clang)",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build-python",
+      "cacheVariables": {
+        "ARX_BUILD_CLI": "OFF",
+        "ARX_BUILD_PYTHON_BINDINGS": "ON",
+        "ARX_BUILD_INFO_LIVE": "OFF",
+        "BUILD_TESTING": "OFF"
+      }
+    },
+    {
       "name": "sanitize",
       "displayName": "Sanitize (RelWithDebInfo + ASan + UBSan)",
       "generator": "Ninja",
@@ -114,6 +126,10 @@
     {
       "name": "release",
       "configurePreset": "release"
+    },
+    {
+      "name": "python",
+      "configurePreset": "python"
     },
     {
       "name": "sanitize",

@@ -4,7 +4,6 @@
 #include "doctest/doctest.h"
 
 #include "arx_pistoris/base/indices.h"
-#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
 #include "arx_pistoris/cinematic.hpp"
 #include "arx_pistoris/cinematic/sound.hpp"
@@ -86,9 +85,14 @@ cli::SoundInput mountedInput() { return {}; }
 
 ArxCinematicSoundView soundView(const pistoris::Cinematic& cinematic, pistoris::SoundKind kind,
                                 pistoris::SoundIndex index) {
-  ArxCinematicSoundView result{};
-  REQUIRE(cinematic.copySoundViews(kind, index, 1, &result) == ARX_OK);
-  return result;
+  REQUIRE(index < cinematic.sounds(kind).size());
+  return cinematic.sounds(kind)[index];
+}
+
+pistoris::SoundHandle addSound(pistoris::Cinematic& cinematic, pistoris::SoundKind kind, std::string_view path) {
+  auto result = cinematic.addSound(kind, path);
+  REQUIRE(result);
+  return *result;
 }
 
 }  // namespace
@@ -102,10 +106,8 @@ TEST_SUITE("CLI Cinematic sound IO") {
     writeBytes(temp.path() / "speech" / "unused" / "other.wav", wav);
 
     pistoris::Cinematic cinematic;
-    pistoris::SoundHandle effect = pistoris::kNoSoundHandle;
-    pistoris::SoundHandle speech = pistoris::kNoSoundHandle;
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kEffect, "effects/hit", effect) == ARX_OK);
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kSpeech, "hero/line", speech) == ARX_OK);
+    const pistoris::SoundHandle effect = addSound(cinematic, pistoris::SoundKind::kEffect, "effects/hit");
+    const pistoris::SoundHandle speech = addSound(cinematic, pistoris::SoundKind::kSpeech, "hero/line");
     std::vector<pistoris::CinematicSoundSourceReference> sources = {
         {effect, "effects/hit"},
         {speech, "hero/line"},
@@ -116,8 +118,7 @@ TEST_SUITE("CLI Cinematic sound IO") {
         cinematic, io, looseInput(temp), sources, cli::CinematicSoundSourceFormat::kCin, true));
     CHECK(cinematic.soundEncodingCount() == 2);
     REQUIRE(cinematic.languageCount() == 1);
-    ArxCinematicLanguageView language{};
-    REQUIRE(cinematic.copyLanguages(0, 1, &language) == ARX_OK);
+    const ArxCinematicLanguageView language = cinematic.languages()[0];
     CHECK(stringView(language.name) == "english");
   }
 
@@ -132,10 +133,8 @@ TEST_SUITE("CLI Cinematic sound IO") {
     writeBytes(temp.path() / "speech" / "english" / "hero" / "line.ogg", fallback);
 
     pistoris::Cinematic cinematic;
-    pistoris::SoundHandle effect = pistoris::kNoSoundHandle;
-    pistoris::SoundHandle speech = pistoris::kNoSoundHandle;
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kEffect, "effects/hit", effect) == ARX_OK);
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kSpeech, "hero/line", speech) == ARX_OK);
+    const pistoris::SoundHandle effect = addSound(cinematic, pistoris::SoundKind::kEffect, "effects/hit");
+    const pistoris::SoundHandle speech = addSound(cinematic, pistoris::SoundKind::kSpeech, "hero/line");
     std::vector<pistoris::CinematicSoundSourceReference> sources = {
         {effect, "effects/hit"},
         {speech, "hero/line"},
@@ -145,10 +144,8 @@ TEST_SUITE("CLI Cinematic sound IO") {
     REQUIRE(cli::prepareCinematicSounds(
         cinematic, io, looseInput(temp), sources, cli::CinematicSoundSourceFormat::kCin, true));
     REQUIRE(cinematic.soundEncodingCount() == 2);
-    ArxCinematicSoundEncodingView encodings[2]{};
-    REQUIRE(cinematic.copySoundEncodings(0, 2, encodings) == ARX_OK);
-    CHECK(encodings[0].encoded_audio.size == preferred.size());
-    CHECK(encodings[1].encoded_audio.size == preferred.size());
+    CHECK(cinematic.soundEncodings()[0].encoded_audio.size == preferred.size());
+    CHECK(cinematic.soundEncodings()[1].encoded_audio.size == preferred.size());
   }
 
   TEST_CASE("Mounted native Cinematic audio only accepts WAV") {
@@ -158,10 +155,8 @@ TEST_SUITE("CLI Cinematic sound IO") {
     writeBytes(temp.path() / "speech" / "english" / "hero" / "line.ogg", wav);
 
     pistoris::Cinematic cinematic;
-    pistoris::SoundHandle effect = pistoris::kNoSoundHandle;
-    pistoris::SoundHandle speech = pistoris::kNoSoundHandle;
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kEffect, "effects/hit", effect) == ARX_OK);
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kSpeech, "hero/line", speech) == ARX_OK);
+    const pistoris::SoundHandle effect = addSound(cinematic, pistoris::SoundKind::kEffect, "effects/hit");
+    const pistoris::SoundHandle speech = addSound(cinematic, pistoris::SoundKind::kSpeech, "hero/line");
     std::vector<pistoris::CinematicSoundSourceReference> sources = {
         {effect, "effects/hit"},
         {speech, "hero/line"},
@@ -208,10 +203,8 @@ TEST_SUITE("CLI Cinematic sound IO") {
     writeBytes(temp.path() / "hero" / "line[french].wav", wav);
 
     pistoris::Cinematic cinematic;
-    pistoris::SoundHandle effect = pistoris::kNoSoundHandle;
-    pistoris::SoundHandle speech = pistoris::kNoSoundHandle;
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kEffect, "effects/hit.mp3", effect) == ARX_OK);
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kSpeech, "hero/line[English].mp3", speech) == ARX_OK);
+    const pistoris::SoundHandle effect = addSound(cinematic, pistoris::SoundKind::kEffect, "effects/hit.mp3");
+    const pistoris::SoundHandle speech = addSound(cinematic, pistoris::SoundKind::kSpeech, "hero/line[English].mp3");
     std::vector<pistoris::CinematicSoundSourceReference> sources = {
         {effect, "effects/hit.mp3"},
         {speech, "hero/line[English].mp3"},
@@ -226,8 +219,7 @@ TEST_SUITE("CLI Cinematic sound IO") {
     CHECK(sources[1].path == "hero/line[English].mp3");
     CHECK(cinematic.soundEncodingCount() == 3);
     REQUIRE(cinematic.languageCount() == 2);
-    ArxCinematicLanguageView languages[2]{};
-    REQUIRE(cinematic.copyLanguages(0, 2, languages) == ARX_OK);
+    const auto languages = cinematic.languages();
     const std::unordered_set<std::string_view> names = {stringView(languages[0].name), stringView(languages[1].name)};
     const std::unordered_set<std::string_view> expected = {"english", "french"};
     CHECK(names == expected);
@@ -235,8 +227,7 @@ TEST_SUITE("CLI Cinematic sound IO") {
 
   TEST_CASE("Skipping GLB audio still canonicalizes logical paths") {
     pistoris::Cinematic cinematic;
-    pistoris::SoundHandle speech = pistoris::kNoSoundHandle;
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kSpeech, "hero/line[english].wav", speech) == ARX_OK);
+    const pistoris::SoundHandle speech = addSound(cinematic, pistoris::SoundKind::kSpeech, "hero/line[english].wav");
     std::vector<pistoris::CinematicSoundSourceReference> sources = {{speech, "hero/line[english].wav"}};
     cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, {});
 
@@ -248,10 +239,8 @@ TEST_SUITE("CLI Cinematic sound IO") {
 
   TEST_CASE("Distinct GLB sounds cannot collapse to one logical identity") {
     pistoris::Cinematic cinematic;
-    pistoris::SoundHandle first = pistoris::kNoSoundHandle;
-    pistoris::SoundHandle second = pistoris::kNoSoundHandle;
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kEffect, "same.wav", first) == ARX_OK);
-    REQUIRE(cinematic.addSound(pistoris::SoundKind::kEffect, "same.mp3", second) == ARX_OK);
+    const pistoris::SoundHandle first = addSound(cinematic, pistoris::SoundKind::kEffect, "same.wav");
+    const pistoris::SoundHandle second = addSound(cinematic, pistoris::SoundKind::kEffect, "same.mp3");
     std::vector<pistoris::CinematicSoundSourceReference> sources = {
         {first, "same.wav"},
         {second, "same.mp3"},

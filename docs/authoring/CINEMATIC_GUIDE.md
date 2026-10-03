@@ -101,7 +101,13 @@ KEY_40__BLUR__DREAM__key
 ```
 
 Fade effects require both RGB colors in the `0` to `1` range. `CROSSFADE` and
-`DREAM` are independent switches.
+`DREAM` are independent switches. The selected base effect and these switches
+apply to the interval that starts at the key. A crossfade renders the current
+and next views throughout that interval and blends between them. Fade-in moves
+from `COLOR` to `SECONDARY`; fade-out moves from `SECONDARY` to `COLOR`, so both
+colors define the visible result rather than merely tinting it. `DREAM` warps
+the illustration grid; higher illustration subdivision gives that distortion
+more points to move.
 
 Add a `FLASH` helper under a key when it starts a flash or hides an ongoing one:
 
@@ -113,9 +119,10 @@ FLASH__HIDDEN__flash
 Add a `LIGHT` helper under a key for a cinematic light. Position it in the
 camera's view; its projected screen position is baked, but its depth is not.
 Scaling an illustration or key also moves the helper in the imported view.
-The name supplies falloff, color, and intensity. No `LIGHT` means no light cue
-on that key; `LIGHT__OFF__light` explicitly turns it off. The exact grammar is
-listed in the reference.
+The name supplies falloff, color, and intensity. A missing `LIGHT` continues
+the interpolated light state between surrounding light cues;
+`LIGHT__OFF__light` is the explicit off state. The exact grammar is listed in
+the reference.
 
 ## Reference Sounds
 
@@ -140,25 +147,40 @@ writes sidecars only for sounds referenced by timeline keys.
 
 ## Distorted Illustration Planes
 
-Rectangular, proportionally sized planes are easiest to edit. They may be
-subdivided or split across primitives without changing the mapping when all
-usable triangles agree on one UV transform. Import also accepts stretched,
-skewed, and non-affine charts: UVs define how key positions map into the image.
-A key outside a non-affine mesh extends the nearest triangle's UV mapping and
-produces a warning.
+Rectangular, proportionally sized planes are easiest to edit, but subdivision,
+stretching, and skewing are accepted. UVs define where keys land in the image,
+so a distorted plane can still bake predictably even when its Blender preview
+is unusual. Keys outside a non-affine mesh extend its nearest usable UV region
+and produce a warning.
 
 A flat plane may be moved toward or away from its cameras in Edit Mode; camera
 distance is measured from the plane. If the mesh is warped toward or away from
 the camera, import uses the average depth of its vertices and warns, so
 Blender's preview is only approximate.
 
-Triangles without a usable UV mapping are excluded from the UV chart and
-produce a warning. If no triangle provides a usable mapping, import maps the
-mesh's local horizontal bounds to the image and extrapolates that mapping for
-keys outside the bounds. A single collapsed axis maps to the image center and
-warns. Geometry with no usable extent, a missing embedded image, or a key
-with an invalid transform is rejected. Orthographic cameras are not supported.
+Triangles without usable UVs are ignored with a warning. If the plane has no
+usable UV mapping, import falls back to its horizontal bounds. Geometry with
+no usable extent, a missing embedded image, or a key with an invalid transform
+is rejected. Orthographic cameras are not supported. The reference documents
+the exact affine, per-triangle, extrapolation, and collapsed-axis rules.
 
 Re-export always produces a clean rectangular plane at the image's natural
 proportions. Distorted authoring geometry is therefore an input convenience,
 not roundtrip state.
+
+## Export Checklist
+
+- Export exactly one `arx_cinematic` root.
+- Keep illustrations directly below the root and keys directly below their
+  illustration.
+- Keep illustration images embedded and preserve their UVs and material
+  assignments.
+- Use perspective cameras for authored framing, or camera-less keys only when
+  the canonical field of view is intended.
+- Preserve semantic names, descriptive labels, unique illustration ordinals,
+  and unique key frames.
+- Keep effect audio and localized speech sidecars relative to the GLB, using
+  the filename patterns described above.
+- Do not use glTF animation channels to define the Cinematic timeline.
+
+[Back to the Authoring Guide](../AUTHORING_GUIDE.md)

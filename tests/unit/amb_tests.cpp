@@ -3,6 +3,7 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/native/location.hpp"
 #include "arx_pistoris/pistoris.hpp"
 
 #include "amb_helpers.h"
@@ -31,9 +32,33 @@ struct LogReset {
   ~LogReset() { pistoris::setLogCallback(nullptr, nullptr); }
 };
 
+ArxReturnCode loadAmb(pistoris::amb::Data& data, pistoris::ReadCursor& cursor) {
+  auto result = pistoris::loadAmb(cursor);
+  if (result) data = std::move(*result);
+  return result.code();
+}
+
 }  // namespace
 
 TEST_SUITE("amb") {
+  TEST_CASE("Version failures retain the version field offset") {
+    std::vector<std::uint8_t> bytes = makeAmbBytes(pistoris::kAmbVersion);
+    const std::uint32_t version = 0;
+    std::memcpy(bytes.data() + sizeof(std::uint32_t), &version, sizeof(version));
+    pistoris::ReadCursor cursor(bytes.data(), bytes.size());
+
+    const auto result = pistoris::loadAmb(cursor);
+
+    REQUIRE_FALSE(result);
+    REQUIRE(result.error());
+    REQUIRE(result.error()->location());
+    const pistoris::AmbBinaryLocation& location = *result.error()->location();
+    CHECK(location.element == pistoris::AmbElement::kHeader);
+    CHECK(location.field == "version");
+    CHECK(location.byte_offset == sizeof(std::uint32_t));
+    CHECK(location.requested_bytes == 0);
+  }
+
   TEST_CASE("ReadsAllKnownVersionsIntoCanonicalData") {
     for (const std::uint32_t version :
          {pistoris::kAmbVersion1000, pistoris::kAmbVersion, pistoris::kAmbVersion1002, pistoris::kAmbVersion1003}) {
@@ -41,7 +66,7 @@ TEST_SUITE("amb") {
       const std::vector<std::uint8_t> bytes = makeAmbBytes(version);
       pistoris::amb::Data data;
       pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-      REQUIRE(pistoris::loadAmb(&data, cursor) == ARX_OK);
+      REQUIRE(loadAmb(data, cursor) == ARX_OK);
       REQUIRE(data.tracks.size() == 1);
       CHECK(data.tracks.front().sample_path == "sfx/ambiance/test.wav");
       CHECK(data.tracks.front().flags == (pistoris::amb::kTrackMaster | pistoris::amb::kTrackPosition));
@@ -67,7 +92,7 @@ TEST_SUITE("amb") {
       const std::vector<std::uint8_t> bytes = makeAmbBytes(source, version);
       pistoris::amb::Data data;
       pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-      REQUIRE(pistoris::loadAmb(&data, cursor) == ARX_OK);
+      REQUIRE(loadAmb(data, cursor) == ARX_OK);
       const pistoris::amb::Track& track = data.tracks.front();
       CHECK(track.flags == (pistoris::amb::kTrackMaster | pistoris::amb::kTrackPosition));
       CHECK(track.keys.front().volume.flags == pistoris::amb::kSettingInterpolate);
@@ -89,7 +114,7 @@ TEST_SUITE("amb") {
 
     pistoris::amb::Data data;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    CHECK(pistoris::loadAmb(&data, cursor) == ARX_OK);
+    CHECK(loadAmb(data, cursor) == ARX_OK);
     REQUIRE(capture.warnings.size() == 2);
     CHECK(capture.warnings[0].find(kTrackNames[0]) != std::string::npos);
     CHECK(capture.warnings[1].find(kTrackNames[1]) != std::string::npos);
@@ -107,7 +132,7 @@ TEST_SUITE("amb") {
     const std::vector<std::uint8_t> bytes = makeAmbBytes(source, pistoris::kAmbVersion1003);
     pistoris::amb::Data result;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadAmb(&result, cursor) == ARX_OK);
+    REQUIRE(loadAmb(result, cursor) == ARX_OK);
     REQUIRE(result.tracks.size() == 2);
     CHECK(result.tracks[0].sample_path == "sfx/ambiance/first.wav");
     CHECK(result.tracks[1].sample_path == "sfx/ambiance/second.wav");
@@ -129,7 +154,7 @@ TEST_SUITE("amb") {
 
     pistoris::amb::Data roundtrip;
     pistoris::ReadCursor read_cursor(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadAmb(&roundtrip, read_cursor) == ARX_OK);
+    REQUIRE(loadAmb(roundtrip, read_cursor) == ARX_OK);
     REQUIRE(roundtrip.tracks.size() == 1);
     REQUIRE(roundtrip.tracks.front().keys.size() == 2);
     CHECK(roundtrip.tracks.front().keys[0].start_ms == 100);
@@ -169,7 +194,7 @@ TEST_SUITE("amb") {
       std::memcpy(bytes.data() + sizeof(std::uint32_t), &version, sizeof(version));
       pistoris::amb::Data data;
       pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-      CHECK(pistoris::loadAmb(&data, cursor) == ARX_AMB_BAD_VERSION);
+      CHECK(loadAmb(data, cursor) == ARX_AMB_BAD_VERSION);
     }
   }
 
@@ -183,7 +208,7 @@ TEST_SUITE("amb") {
 
     pistoris::amb::Data data;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    CHECK(pistoris::loadAmb(&data, cursor) == ARX_AMB_BAD_KEY_COUNT);
+    CHECK(loadAmb(data, cursor) == ARX_AMB_BAD_KEY_COUNT);
   }
 
   TEST_CASE("ValidatesPlayableStructure") {
@@ -243,7 +268,7 @@ TEST_SUITE("amb") {
     const std::vector<std::uint8_t> bytes = makeAmbBytes(source, pistoris::kAmbVersion);
     pistoris::amb::Data result;
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    REQUIRE(pistoris::loadAmb(&result, cursor) == ARX_OK);
+    REQUIRE(loadAmb(result, cursor) == ARX_OK);
 
     const pistoris::amb::Key& loaded = result.tracks.front().keys.front();
     CHECK(loaded.pan.min == 0.0f);
@@ -296,7 +321,7 @@ TEST_SUITE("amb") {
     pistoris::amb::Data data = makeAmbData();
     data.tracks.front().sample_path = "unchanged";
     pistoris::ReadCursor cursor(bytes.data(), bytes.size());
-    CHECK(pistoris::loadAmb(&data, cursor) == ARX_UNEXPECTED_EOF);
+    CHECK(loadAmb(data, cursor) == ARX_UNEXPECTED_EOF);
     CHECK(data.tracks.front().sample_path == "unchanged");
   }
 }

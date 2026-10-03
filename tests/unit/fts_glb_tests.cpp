@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/debug/level.hpp"
 #include "arx_pistoris/glb.hpp"
+#include "arx_pistoris/glb/location.hpp"
 #include "arx_pistoris/level/types.h"
 #include "arx_pistoris/native/dlf.hpp"
 #include "arx_pistoris/native/fts.hpp"
@@ -265,8 +266,10 @@ ArxReturnCode buildLevelModules(pistoris::LevelModules& out, const pistoris::fts
 
 ArxReturnCode buildAndWeldLevel(pistoris::Level& out, const pistoris::fts::Data& fts,
                                 const pistoris::Level::VertexWeldOptions& options = {}) {
-  ArxReturnCode rc = pistoris::Level::importNative(out, fts);
-  return rc == ARX_OK ? out.weldVertices(options) : rc;
+  auto imported = pistoris::Level::importNative(fts);
+  if (!imported) return imported.code();
+  out = std::move(*imported);
+  return out.weldVertices(options).code();
 }
 
 ArxReturnCode validateModules(const pistoris::LevelModules& level, pistoris::ArxAabb* bounds = nullptr,
@@ -873,8 +876,8 @@ TEST_SUITE("FtsGlb") {
     setUsablePlayerSpawn(
         level, pistoris::PlayerSpawn{{95.0f, -20.0f, 15.0f}, pistoris::math::angleToQuat({1.0f, 2.0f, 3.0f})});
     level.geometry.vertices = {{{90.0f, 0.0f, 10.0f}}, {{110.0f, 0.0f, 10.0f}}, {{90.0f, 0.0f, 30.0f}}};
-    level.navigation.anchors.push_back({{95.0f, 0.0f, 15.0f}, 4.0f, -5.0f, pistoris::kAnchorFlagBlocked, {}});
-    level.navigation.anchors.push_back({{105.0f, 0.0f, 15.0f}, 6.0f, -7.0f, 0, {}});
+    level.navigation.anchors.push_back({{95.0f, 0.0f, 15.0f}, 4.0f, -5.0f, pistoris::kAnchorFlagBlocked, "anchor_0"});
+    level.navigation.anchors.push_back({{105.0f, 0.0f, 15.0f}, 6.0f, -7.0f, 0, "anchor_1"});
     level.navigation.connections.push_back({0, 1});
 
     LogCapture logs;
@@ -922,12 +925,9 @@ TEST_SUITE("FtsGlb") {
     CHECK(bundle.dlf.player_spawn.position.x == doctest::Approx(95.0f));
     CHECK(bundle.dlf.player_spawn.angle.yaw == doctest::Approx(2.0f));
 
-    std::vector<std::uint8_t> fts_bytes;
-    CHECK(pistoris::writeFts(bundle.fts, fts_bytes) == ARX_OK);
-    std::vector<std::uint8_t> llf_bytes;
-    CHECK(pistoris::writeLlf(bundle.llf, {}, llf_bytes) == ARX_OK);
-    std::vector<std::uint8_t> dlf_bytes;
-    CHECK(pistoris::writeDlf(bundle.dlf, {}, dlf_bytes) == ARX_OK);
+    CHECK(pistoris::writeFts(bundle.fts));
+    CHECK(pistoris::writeLlf(bundle.llf, {}));
+    CHECK(pistoris::writeDlf(bundle.dlf, {}));
   }
 
   TEST_CASE("LevelNativeBundleBakeCanDisableQuadReconstruction") {
@@ -1165,6 +1165,14 @@ TEST_SUITE("FtsGlb") {
     CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = long_name}, bundle) ==
           ARX_DLF_BAD_SCENE_PATH);
     CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
+
+    CHECK(pistoris::level_native::bakeNativeLevelBundle(level, {.dlf_scene_path = "../../custom"}, bundle) ==
+          ARX_DLF_BAD_SCENE_PATH);
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("unchanged") == 0);
+
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.dlf_scene_path = "../graph/custom"}, bundle) ==
+            ARX_OK);
+    CHECK(pistoris::fixedStringView(bundle.dlf.scene_path).compare("../graph/custom") == 0);
   }
 
   TEST_CASE("LevelNativeBundleBakeRoundsFiniteZoneHeight") {
@@ -1550,9 +1558,9 @@ TEST_SUITE("FtsGlb") {
   TEST_CASE("LevelNativeBundleBakeKeepsDisconnectedAnchorOutput") {
     pistoris::LevelModules level = makeSimpleLevel();
     level.scene.player_spawn = pistoris::PlayerSpawn{{0.0f, 0.0f, 0.0f}, {}};
-    level.navigation.anchors.push_back({{0.1f, 0.0f, 0.1f}, 1.0f, -1.0f, 0, {}});
-    level.navigation.anchors.push_back({{0.2f, 0.0f, 0.1f}, 1.0f, -1.0f, 0, {}});
-    level.navigation.anchors.push_back({{0.3f, 0.0f, 0.1f}, 1.0f, -1.0f, 0, {}});
+    level.navigation.anchors.push_back({{0.1f, 0.0f, 0.1f}, 1.0f, -1.0f, 0, "anchor_0"});
+    level.navigation.anchors.push_back({{0.2f, 0.0f, 0.1f}, 1.0f, -1.0f, 0, "anchor_1"});
+    level.navigation.anchors.push_back({{0.3f, 0.0f, 0.1f}, 1.0f, -1.0f, 0, "anchor_2"});
     level.navigation.connections.push_back({0, 1});
 
     pistoris::NativeLevelBundle bundle;
@@ -2730,7 +2738,7 @@ TEST_SUITE("FtsGlb") {
         {{{-5.0f, 1.0f, -5.0f}}, {{5.0f, 1.0f, -5.0f}}, {{-5.0f, 1.0f, 5.0f}}},
         {{{{0, 1, 2}}}},
     };
-    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 12.0f, -34.0f, 0, {}});
+    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 12.0f, -34.0f, 0, "anchor_0"});
 
     pistoris::Light light;
     light.name = "scaled_light";
@@ -3045,9 +3053,10 @@ TEST_SUITE("FtsGlb") {
   }
 
   TEST_CASE("LevelDebugGlbUsesTheConfiguredCoordinateConversion") {
-    pistoris::Level level;
     pistoris::fts::Data fts = makeTriangleFtsScene();
-    REQUIRE(pistoris::Level::importNative(level, fts) == ARX_OK);
+    auto imported = pistoris::Level::importNative(fts);
+    REQUIRE(imported);
+    pistoris::Level level = std::move(*imported);
 
     pistoris::Level::GlbExportOptions options;
     options.arx_units_per_glb_unit = 50.0f;
@@ -3405,8 +3414,8 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("LevelAnchorConnectionGenerationIsExplicit") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, {}});
-    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, {}});
+    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "anchor_0"});
+    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "anchor_1"});
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
@@ -3563,8 +3572,8 @@ TEST_SUITE("FtsGlb") {
                      0,
                      0.0f});
     src.rooms.face_rooms.push_back(0);
-    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, {}});
-    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, {}});
+    src.navigation.anchors.push_back({{0.25f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "anchor_0"});
+    src.navigation.anchors.push_back({{0.75f, 0.0f, 0.25f}, 10.0f, -20.0f, 0, "anchor_1"});
 
     std::vector<std::uint8_t> glb;
     REQUIRE(exportLevelGlb(src, glb) == ARX_OK);
@@ -3593,7 +3602,7 @@ TEST_SUITE("FtsGlb") {
         {{{0.0f, 0.0f, 0.0f}}, {{200.0f, 0.0f, 0.0f}}, {{200.0f, 0.0f, 200.0f}}, {{0.0f, 0.0f, 200.0f}}},
         {{{{0, 1, 2}}}, {{{0, 2, 3}}}},
     };
-    level.navigation.anchors.push_back({{10.0f, 0.0f, 10.0f}, 1.0f, -1.0f, 0, {}});
+    level.navigation.anchors.push_back({{10.0f, 0.0f, 10.0f}, 1.0f, -1.0f, 0, "anchor_0"});
     level.navigation.connections.push_back({0, 0});
 
     pistoris::GeometryDerived derived;
@@ -4190,7 +4199,18 @@ TEST_SUITE("FtsGlb") {
     REQUIRE(dst.scene.entities.size() == 1);
     CHECK((dst.scene.entities[0].class_path == "graph/obj3d/interactive/fix_inter/door/door" ||
            dst.scene.entities[0].class_path == "graph/obj3d/interactive/fix_inter/chest/chest"));
-    CHECK(importLevelGlb(writeTestGlb(std::move(malformed)), dst) == ARX_GLB_BAD_LEVEL_ENTITY);
+    const std::vector<std::uint8_t> malformed_glb = writeTestGlb(std::move(malformed));
+    pistoris::Level::GlbImportOptions options;
+    options.arx_units_per_glb_unit = 1.0f;
+    const pistoris::GlbResult<pistoris::Level> result = pistoris::Level::importGlb(malformed_glb, options);
+    REQUIRE_FALSE(result);
+    CHECK(result.code() == ARX_GLB_BAD_LEVEL_ENTITY);
+    REQUIRE(result.error() != nullptr);
+    REQUIRE(result.error()->location().has_value());
+    CHECK(result.error()->location()->element == pistoris::GlbElement::kNode);
+    CHECK(result.error()->location()->label == "arx_entity__000__door");
+    CHECK(result.error()->location()->property == "entity");
+    CHECK_FALSE(result.error()->detail().empty());
   }
 
   TEST_CASE("LevelGlbImportAllowsEntityPreviewMeshWithoutImportingItAsGeometry") {
@@ -5493,12 +5513,12 @@ TEST_SUITE("FtsGlb") {
     mesh.face_rooms = source.rooms.face_rooms;
     REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
 
-    REQUIRE(level.validate() == ARX_OK);
+    REQUIRE(level.validate());
     REQUIRE(level.bounds().has_value());
     REQUIRE(level.referencedBounds().has_value());
 
     level.clearMesh();
-    CHECK(level.validate() == ARX_LEVEL_NO_GEOMETRY);
+    CHECK(level.validate().code() == ARX_LEVEL_NO_GEOMETRY);
     CHECK_FALSE(level.bounds().has_value());
     CHECK_FALSE(level.referencedBounds().has_value());
   }
@@ -5546,11 +5566,11 @@ TEST_SUITE("FtsGlb") {
     CHECK(validateModules(level) == ARX_LEVEL_NON_PLANAR_PORTAL);
 
     level = makeSimpleLevel();
-    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, -1.0f, 1.0f, 0, {}});
+    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, -1.0f, 1.0f, 0, "anchor_0"});
     CHECK(validateModules(level) == ARX_LEVEL_BAD_ANCHOR_RADIUS);
 
     level = makeSimpleLevel();
-    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, -2.0f, 0, {}});
+    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, -2.0f, 0, "anchor_0"});
     CHECK(validateModules(level) == ARX_OK);
 
     level.navigation.anchors[0].flags = pistoris::kAnchorFlagBlocked;
@@ -5560,19 +5580,19 @@ TEST_SUITE("FtsGlb") {
     CHECK(validateModules(level) == ARX_LEVEL_BAD_ANCHOR_FLAGS);
 
     level = makeSimpleLevel();
-    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, 2.0f, 0, {}});
+    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, 2.0f, 0, "anchor_0"});
     CHECK(validateModules(level) == ARX_LEVEL_BAD_ANCHOR_HEIGHT);
 
     level = makeSimpleLevel();
-    level.navigation.anchors.push_back({{2.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0, {}});
+    level.navigation.anchors.push_back({{2.0f, 0.0f, 0.0f}, 0.0f, 0.0f, 0, "anchor_0"});
     CHECK(validateModules(level) == ARX_OK);
 
     level.navigation.anchors[0].position.x = -0.01f;
     CHECK(validateModules(level) == ARX_LEVEL_ANCHOR_OUT_OF_BOUNDS);
 
     level = makeSimpleLevel();
-    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, -2.0f, 0, {}});
-    level.navigation.anchors.push_back({{0.5f, 0.0f, 0.0f}, 1.0f, -2.0f, 0, {}});
+    level.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, -2.0f, 0, "anchor_0"});
+    level.navigation.anchors.push_back({{0.5f, 0.0f, 0.0f}, 1.0f, -2.0f, 0, "anchor_1"});
     level.navigation.connections.push_back({0, 1});
     CHECK(validateModules(level) == ARX_OK);
 
@@ -6807,7 +6827,7 @@ TEST_SUITE("FtsGlb") {
 
   TEST_CASE("LevelGlbImportParsesReservedObjectNamesStrictly") {
     pistoris::LevelModules src = makeSimpleLevel();
-    src.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, -1.0f, pistoris::kAnchorFlagBlocked, {}});
+    src.navigation.anchors.push_back({{0.0f, 0.0f, 0.0f}, 1.0f, -1.0f, pistoris::kAnchorFlagBlocked, "anchor_0"});
     pistoris::Light light;
     light.name = "torch";
     light.fallstart = 5.0f;

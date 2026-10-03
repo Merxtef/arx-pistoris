@@ -38,6 +38,7 @@
 #include <ostream>  // IWYU pragma: keep
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -104,30 +105,34 @@ TEST_SUITE("native text") {
     const std::string raw = latin1Path("graph/obj3d/textures/caf", "");
     constexpr std::string_view kUtf8 = "graph/obj3d/textures/caf\xc3\xa9";
     setFtlName(raw, native.texture_containers[0].filename, sizeof(native.texture_containers[0].filename));
-    pistoris::Model model;
     std::vector<std::string> sources;
-    REQUIRE(pistoris::Model::importNative(model, native, &sources) == ARX_OK);
+    auto import_result = pistoris::Model::importNative(native, &sources);
+    REQUIRE(import_result);
+    pistoris::Model model = std::move(*import_result);
     REQUIRE(sources.size() == 1);
     CHECK(sources[0] == kUtf8);
 
-    pistoris::NativeModelBundle baked;
-    REQUIRE(model.bakeNativeBundle({.include_texture_files = false}, baked) == ARX_OK);
-    CHECK(std::string_view(baked.ftl.texture_containers[0].filename) == kUtf8);
-    REQUIRE(model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kLatin1},
-                                   baked) == ARX_OK);
-    CHECK(std::string_view(baked.ftl.texture_containers[0].filename) == raw);
+    auto bake_result = model.bakeNativeBundle({.include_texture_files = false});
+    REQUIRE(bake_result);
+    CHECK(std::string_view(bake_result->ftl.texture_containers[0].filename) == kUtf8);
+    auto latin1_bake_result =
+        model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(latin1_bake_result);
+    CHECK(std::string_view(latin1_bake_result->ftl.texture_containers[0].filename) == raw);
 
     const std::vector<std::uint8_t> image = makeTestBmp();
-    REQUIRE(model.setTextureImage(0, {image.data(), image.size()}) == ARX_OK);
-    REQUIRE(model.bakeNativeBundle({.text_mode = pistoris::NativeTextMode::kLatin1}, baked) == ARX_OK);
-    CHECK(std::string_view(baked.ftl.texture_containers[0].filename) == raw);
-    REQUIRE(baked.texture_files.size() == 1);
-    CHECK(baked.texture_files[0].resource_path == std::string(kUtf8) + ".bmp");
+    REQUIRE(model.setTextureImage(0, {image.data(), image.size()}));
+    auto file_bake_result = model.bakeNativeBundle({.text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(file_bake_result);
+    CHECK(std::string_view(file_bake_result->ftl.texture_containers[0].filename) == raw);
+    REQUIRE(file_bake_result->texture_files.size() == 1);
+    CHECK(file_bake_result->texture_files[0].resource_path == std::string(kUtf8) + ".bmp");
 
-    REQUIRE(model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kLatin1},
-                                   baked) == ARX_OK);
-    CHECK(std::string_view(baked.ftl.texture_containers[0].filename) == raw);
-    CHECK(baked.texture_files.empty());
+    auto no_file_bake_result =
+        model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(no_file_bake_result);
+    CHECK(std::string_view(no_file_bake_result->ftl.texture_containers[0].filename) == raw);
+    CHECK(no_file_bake_result->texture_files.empty());
   }
 
   TEST_CASE("Animation and Ambiance native sound paths decode and bake as UTF-8 by default") {
@@ -136,35 +141,39 @@ TEST_SUITE("native text") {
     constexpr std::string_view kUtf8Sample = "custom/caf\xc3\xa9";
     std::memcpy(tea.keyframes[1].sample->name, sample.data(), sample.size());
     tea.keyframes[1].sample->name[sample.size()] = '\0';
-    pistoris::Animation animation;
     std::vector<pistoris::SoundSourceReference> animation_sources;
-    REQUIRE(pistoris::Animation::importNative(animation, tea, &animation_sources) == ARX_OK);
+    auto animation_result = pistoris::Animation::importNative(tea, &animation_sources);
+    REQUIRE(animation_result);
+    pistoris::Animation animation = std::move(*animation_result);
     REQUIRE(animation_sources.size() == 1);
     CHECK(animation_sources[0].path == kUtf8Sample);
-    pistoris::NativeAnimationBundle baked_animation;
-    REQUIRE(animation.bakeNativeBundle({.include_sound_files = false}, baked_animation) == ARX_OK);
-    REQUIRE(baked_animation.tea.keyframes[1].sample.has_value());
-    CHECK(std::string_view(baked_animation.tea.keyframes[1].sample->name) == kUtf8Sample);
-    REQUIRE(animation.bakeNativeBundle({.include_sound_files = false, .text_mode = pistoris::NativeTextMode::kLatin1},
-                                       baked_animation) == ARX_OK);
-    REQUIRE(baked_animation.tea.keyframes[1].sample.has_value());
-    CHECK(std::string_view(baked_animation.tea.keyframes[1].sample->name) == sample);
+    auto animation_bake = animation.bakeNativeBundle({.include_sound_files = false});
+    REQUIRE(animation_bake);
+    REQUIRE(animation_bake->tea.keyframes[1].sample.has_value());
+    CHECK(std::string_view(animation_bake->tea.keyframes[1].sample->name) == kUtf8Sample);
+    auto latin1_animation_bake =
+        animation.bakeNativeBundle({.include_sound_files = false, .text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(latin1_animation_bake);
+    REQUIRE(latin1_animation_bake->tea.keyframes[1].sample.has_value());
+    CHECK(std::string_view(latin1_animation_bake->tea.keyframes[1].sample->name) == sample);
 
     pistoris::Amb amb = makeAmbData();
     const std::string track = latin1Path("sfx/ambiance/caf", ".wav");
     constexpr std::string_view kUtf8Track = "sfx/ambiance/caf\xc3\xa9.wav";
     amb.tracks[0].sample_path = track;
-    pistoris::Ambiance ambiance;
     std::vector<pistoris::SoundSourceReference> ambiance_sources;
-    REQUIRE(pistoris::Ambiance::importNative(ambiance, amb, &ambiance_sources) == ARX_OK);
+    auto ambiance_result = pistoris::Ambiance::importNative(amb, &ambiance_sources);
+    REQUIRE(ambiance_result);
+    pistoris::Ambiance ambiance = std::move(*ambiance_result);
     REQUIRE(ambiance_sources.size() == 1);
     CHECK(ambiance_sources[0].path == kUtf8Track);
-    pistoris::NativeAmbianceBundle baked_ambiance;
-    REQUIRE(ambiance.bakeNativeBundle({.include_sound_files = false}, baked_ambiance) == ARX_OK);
-    CHECK(baked_ambiance.amb.tracks[0].sample_path == kUtf8Track);
-    REQUIRE(ambiance.bakeNativeBundle({.include_sound_files = false, .text_mode = pistoris::NativeTextMode::kLatin1},
-                                      baked_ambiance) == ARX_OK);
-    CHECK(baked_ambiance.amb.tracks[0].sample_path == track);
+    auto ambiance_bake = ambiance.bakeNativeBundle({.include_sound_files = false});
+    REQUIRE(ambiance_bake);
+    CHECK(ambiance_bake->amb.tracks[0].sample_path == kUtf8Track);
+    auto latin1_ambiance_bake =
+        ambiance.bakeNativeBundle({.include_sound_files = false, .text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(latin1_ambiance_bake);
+    CHECK(latin1_ambiance_bake->amb.tracks[0].sample_path == track);
   }
 
   TEST_CASE("Cinematic native references decode and bake as UTF-8 by default") {
@@ -175,26 +184,26 @@ TEST_SUITE("native text") {
     constexpr std::string_view kUtf8Sound = "cinematic/caf\xc3\xa9";
     native.bitmaps[0].path = image;
     native.sounds[0].path = sound;
-    pistoris::Cinematic cinematic;
     std::vector<std::string> illustration_sources;
     std::vector<pistoris::CinematicSoundSourceReference> sound_sources;
-    REQUIRE(pistoris::Cinematic::importNative(cinematic, native, &illustration_sources, &sound_sources) == ARX_OK);
+    auto import_result = pistoris::Cinematic::importNative(native, &illustration_sources, &sound_sources);
+    REQUIRE(import_result);
+    pistoris::Cinematic cinematic = std::move(*import_result);
     REQUIRE(illustration_sources.size() == 1);
     CHECK(illustration_sources[0] == kUtf8Image);
     REQUIRE(sound_sources.size() == 1);
     CHECK(sound_sources[0].path == kUtf8Sound);
 
-    pistoris::NativeCinematicBundle baked;
-    REQUIRE(cinematic.bakeNativeBundle({.include_illustration_files = false, .include_sound_files = false}, baked) ==
-            ARX_OK);
-    CHECK(baked.cin.bitmaps[0].path == kUtf8Image);
-    CHECK(baked.cin.sounds[0].path == kUtf8Sound);
-    REQUIRE(cinematic.bakeNativeBundle({.include_illustration_files = false,
-                                        .include_sound_files = false,
-                                        .text_mode = pistoris::NativeTextMode::kLatin1},
-                                       baked) == ARX_OK);
-    CHECK(baked.cin.bitmaps[0].path == image);
-    CHECK(baked.cin.sounds[0].path == sound);
+    auto bake_result = cinematic.bakeNativeBundle({.include_illustration_files = false, .include_sound_files = false});
+    REQUIRE(bake_result);
+    CHECK(bake_result->cin.bitmaps[0].path == kUtf8Image);
+    CHECK(bake_result->cin.sounds[0].path == kUtf8Sound);
+    auto latin1_bake_result = cinematic.bakeNativeBundle({.include_illustration_files = false,
+                                                          .include_sound_files = false,
+                                                          .text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(latin1_bake_result);
+    CHECK(latin1_bake_result->cin.bitmaps[0].path == image);
+    CHECK(latin1_bake_result->cin.sounds[0].path == sound);
   }
 
   TEST_CASE("Level native texture references decode and bake as UTF-8 by default") {
@@ -205,32 +214,35 @@ TEST_SUITE("native text") {
     constexpr std::string_view kUtf8 = "graph/obj3d/textures/caf\xc3\xa9";
     std::memcpy(native.textures[1].fic, raw.data(), raw.size());
     native.textures[1].fic[raw.size()] = '\0';
-    pistoris::Level level;
     std::vector<std::string> sources;
-    REQUIRE(pistoris::Level::importNative(level, native, nullptr, nullptr, &sources) == ARX_OK);
+    auto import_result = pistoris::Level::importNative(native, nullptr, nullptr, &sources);
+    REQUIRE(import_result);
+    pistoris::Level level = std::move(*import_result);
     REQUIRE(sources.size() == 1);
     CHECK(sources[0] == kUtf8);
-    pistoris::NativeLevelBundle baked;
     pistoris::Level::NativeBakeOptions options;
     options.level_name = "level1";
     options.include_texture_files = false;
-    REQUIRE(level.bakeNativeBundle(options, baked) == ARX_OK);
-    REQUIRE(baked.fts.textures.size() == 1);
-    CHECK(std::string_view(baked.fts.textures.at(1).fic) == kUtf8);
+    auto bake_result = level.bakeNativeBundle(options);
+    REQUIRE(bake_result);
+    REQUIRE(bake_result->fts.textures.size() == 1);
+    CHECK(std::string_view(bake_result->fts.textures.at(1).fic) == kUtf8);
 
     const std::vector<std::uint8_t> image = makeTestBmp();
-    REQUIRE(level.setTextureImage(0, {image.data(), image.size()}) == ARX_OK);
+    REQUIRE(level.setTextureImage(0, {image.data(), image.size()}));
     options.include_texture_files = true;
     options.text_mode = pistoris::NativeTextMode::kLatin1;
-    REQUIRE(level.bakeNativeBundle(options, baked) == ARX_OK);
-    CHECK(std::string_view(baked.fts.textures.at(1).fic) == raw);
-    REQUIRE(baked.texture_files.size() == 1);
-    CHECK(baked.texture_files[0].resource_path == std::string(kUtf8) + ".bmp");
+    auto file_bake_result = level.bakeNativeBundle(options);
+    REQUIRE(file_bake_result);
+    CHECK(std::string_view(file_bake_result->fts.textures.at(1).fic) == raw);
+    REQUIRE(file_bake_result->texture_files.size() == 1);
+    CHECK(file_bake_result->texture_files[0].resource_path == std::string(kUtf8) + ".bmp");
 
     options.include_texture_files = false;
-    REQUIRE(level.bakeNativeBundle(options, baked) == ARX_OK);
-    CHECK(std::string_view(baked.fts.textures.at(1).fic) == raw);
-    CHECK(baked.texture_files.empty());
+    auto no_file_bake_result = level.bakeNativeBundle(options);
+    REQUIRE(no_file_bake_result);
+    CHECK(std::string_view(no_file_bake_result->fts.textures.at(1).fic) == raw);
+    CHECK(no_file_bake_result->texture_files.empty());
   }
 
   TEST_CASE("Native texture limits apply after text encoding") {
@@ -245,32 +257,35 @@ TEST_SUITE("native text") {
     ArxTextureView texture{};
     texture.path = {utf8_path.data(), utf8_path.size()};
 
-    pistoris::Model model;
-    REQUIRE(pistoris::Model::importNative(model, makeSemanticModelFtl()) == ARX_OK);
-    REQUIRE(model.setTexture(0, texture) == ARX_OK);
-    pistoris::NativeModelBundle model_bundle;
-    REQUIRE(model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kLatin1},
-                                   model_bundle) == ARX_OK);
-    CHECK(std::string_view(model_bundle.ftl.texture_containers[0].filename) == latin1_path);
-    CHECK(model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kUtf8},
-                                 model_bundle) == ARX_MODEL_BAD_TEXTURE_PATH);
+    auto model_result = pistoris::Model::importNative(makeSemanticModelFtl());
+    REQUIRE(model_result);
+    pistoris::Model model = std::move(*model_result);
+    REQUIRE(model.setTexture(0, texture));
+    auto model_bake =
+        model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kLatin1});
+    REQUIRE(model_bake);
+    CHECK(std::string_view(model_bake->ftl.texture_containers[0].filename) == latin1_path);
+    CHECK(
+        model.bakeNativeBundle({.include_texture_files = false, .text_mode = pistoris::NativeTextMode::kUtf8}).code() ==
+        ARX_MODEL_BAD_TEXTURE_PATH);
 
     pistoris::Fts fts = makeTriangleFtsData();
     fts.scene.num_textures = 1;
     fts.cells[0].polygons[0].tex = 1;
     REQUIRE(pistoris::copyFixedString("texture", fts.textures[1].fic, false));
-    pistoris::Level level;
-    REQUIRE(pistoris::Level::importNative(level, fts) == ARX_OK);
-    REQUIRE(level.setTexture(0, texture) == ARX_OK);
+    auto level_result = pistoris::Level::importNative(fts);
+    REQUIRE(level_result);
+    pistoris::Level level = std::move(*level_result);
+    REQUIRE(level.setTexture(0, texture));
     pistoris::Level::NativeBakeOptions level_options;
     level_options.level_name = "level1";
     level_options.include_texture_files = false;
     level_options.text_mode = pistoris::NativeTextMode::kLatin1;
-    pistoris::NativeLevelBundle level_bundle;
-    REQUIRE(level.bakeNativeBundle(level_options, level_bundle) == ARX_OK);
-    CHECK(std::string_view(level_bundle.fts.textures.at(1).fic) == latin1_path);
+    auto level_bake = level.bakeNativeBundle(level_options);
+    REQUIRE(level_bake);
+    CHECK(std::string_view(level_bake->fts.textures.at(1).fic) == latin1_path);
     level_options.text_mode = pistoris::NativeTextMode::kUtf8;
-    CHECK(level.bakeNativeBundle(level_options, level_bundle) == ARX_FTS_BAD_TEXTURE_PATH);
+    CHECK(level.bakeNativeBundle(level_options).code() == ARX_FTS_BAD_TEXTURE_PATH);
   }
 
   TEST_CASE("Level DLF text decodes to UTF-8 and bakes in the requested encoding") {
@@ -300,33 +315,34 @@ TEST_SUITE("native text") {
     native.paths.push_back(path);
 
     const pistoris::Fts fts = makeTriangleFtsData();
-    pistoris::Level utf8_only;
-    CHECK(pistoris::Level::importNative(utf8_only, fts, nullptr, &native, nullptr, pistoris::NativeTextMode::kUtf8) ==
+    CHECK(pistoris::Level::importNative(fts, nullptr, &native, nullptr, pistoris::NativeTextMode::kUtf8).code() ==
           ARX_LEVEL_BAD_ENTITY_CLASS_PATH);
 
-    pistoris::Level level;
-    REQUIRE(pistoris::Level::importNative(level, fts, nullptr, &native, nullptr, pistoris::NativeTextMode::kLatin1) ==
-            ARX_OK);
+    auto level_result =
+        pistoris::Level::importNative(fts, nullptr, &native, nullptr, pistoris::NativeTextMode::kLatin1);
+    REQUIRE(level_result);
+    pistoris::Level level = std::move(*level_result);
 
     pistoris::Level::DlfBakeOptions options;
     options.level_name = "level1";
     options.text_mode = pistoris::NativeTextMode::kUtf8;
-    pistoris::Dlf baked;
-    REQUIRE(level.bakeDlf(options, baked) == ARX_OK);
-    REQUIRE(baked.entities.size() == 1);
-    CHECK(pistoris::fixedStringView(baked.entities[0].class_path) == kUtf8Entity);
-    REQUIRE(baked.zones.size() == 1);
-    CHECK(pistoris::fixedStringView(baked.zones[0].name) == "zone_caf-");
-    REQUIRE(baked.zones[0].ambiance.has_value());
-    CHECK(pistoris::fixedStringView(baked.zones[0].ambiance->name) == kUtf8Ambiance);
-    REQUIRE(baked.paths.size() == 1);
-    CHECK(pistoris::fixedStringView(baked.paths[0].name) == "path_caf-");
+    auto bake_result = level.bakeDlf(options);
+    REQUIRE(bake_result);
+    REQUIRE(bake_result->entities.size() == 1);
+    CHECK(pistoris::fixedStringView(bake_result->entities[0].class_path) == kUtf8Entity);
+    REQUIRE(bake_result->zones.size() == 1);
+    CHECK(pistoris::fixedStringView(bake_result->zones[0].name) == "zone_caf-");
+    REQUIRE(bake_result->zones[0].ambiance.has_value());
+    CHECK(pistoris::fixedStringView(bake_result->zones[0].ambiance->name) == kUtf8Ambiance);
+    REQUIRE(bake_result->paths.size() == 1);
+    CHECK(pistoris::fixedStringView(bake_result->paths[0].name) == "path_caf-");
 
     options.text_mode = pistoris::NativeTextMode::kLatin1;
-    REQUIRE(level.bakeDlf(options, baked) == ARX_OK);
-    CHECK(pistoris::fixedStringView(baked.entities[0].class_path) == raw_entity);
-    CHECK(pistoris::fixedStringView(baked.zones[0].name) == "zone_caf-");
-    CHECK(pistoris::fixedStringView(baked.zones[0].ambiance->name) == raw_ambiance);
-    CHECK(pistoris::fixedStringView(baked.paths[0].name) == "path_caf-");
+    auto latin1_bake_result = level.bakeDlf(options);
+    REQUIRE(latin1_bake_result);
+    CHECK(pistoris::fixedStringView(latin1_bake_result->entities[0].class_path) == raw_entity);
+    CHECK(pistoris::fixedStringView(latin1_bake_result->zones[0].name) == "zone_caf-");
+    CHECK(pistoris::fixedStringView(latin1_bake_result->zones[0].ambiance->name) == raw_ambiance);
+    CHECK(pistoris::fixedStringView(latin1_bake_result->paths[0].name) == "path_caf-");
   }
 }

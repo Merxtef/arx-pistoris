@@ -14,7 +14,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
 
   ArxDlf* raw_dlf = nullptr;
   ArxLlf* raw_embedded_lighting = nullptr;
-  const ArxReturnCode rc = arx_pistoris_dlf_read(data, size, &raw_dlf, &raw_embedded_lighting);
+  const ArxReturnCode rc = arx_pistoris_dlf_read(data, size, &raw_dlf, &raw_embedded_lighting, nullptr);
   arx_fuzz::DlfHandle dlf(raw_dlf);
   arx_fuzz::LlfHandle embedded_lighting(raw_embedded_lighting);
   if (rc != ARX_OK) {

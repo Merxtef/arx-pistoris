@@ -23,11 +23,11 @@ TEST_SUITE("dlf_corpus") {
 
       std::vector<std::uint8_t> bytes;
       if (!test_support::readCorpusBytes(path, bytes)) continue;
-      pistoris::Dlf dlf;
-      std::optional<pistoris::Llf> lighting;
-      if (!test_support::checkCorpusStatus(path, "read DLF", pistoris::readDlf(bytes, dlf, &lighting))) continue;
-      if (!test_support::checkCorpusStatus(path, "validate DLF", pistoris::validate(dlf))) continue;
-      if (lighting) test_support::checkCorpusStatus(path, "validate embedded LLF", pistoris::validate(*lighting));
+      auto bundle = pistoris::readDlf(bytes);
+      if (!test_support::checkCorpusStatus(path, "read DLF", bundle)) continue;
+      if (!test_support::checkCorpusStatus(path, "validate DLF", pistoris::validate(bundle->dlf))) continue;
+      if (bundle->embedded_lighting)
+        test_support::checkCorpusStatus(path, "validate embedded LLF", pistoris::validate(*bundle->embedded_lighting));
     }
   }
 
@@ -37,33 +37,28 @@ TEST_SUITE("dlf_corpus") {
 
       std::vector<std::uint8_t> source_bytes;
       if (!test_support::readCorpusBytes(path, source_bytes)) continue;
-      pistoris::Dlf source;
-      std::optional<pistoris::Llf> source_lighting;
-      if (!test_support::checkCorpusStatus(
-              path, "read source DLF", pistoris::readDlf(source_bytes, source, &source_lighting)))
-        continue;
+      auto source = pistoris::readDlf(source_bytes);
+      if (!test_support::checkCorpusStatus(path, "read source DLF", source)) continue;
 
-      std::vector<std::uint8_t> written;
-      pistoris::DlfWriteOptions options{source_lighting ? &*source_lighting : nullptr, {}};
-      if (!test_support::checkCorpusStatus(path, "write DLF", pistoris::writeDlf(source, options, written))) continue;
+      pistoris::DlfWriteOptions options{source->embedded_lighting ? &*source->embedded_lighting : nullptr, {}};
+      auto written = pistoris::writeDlf(source->dlf, options);
+      if (!test_support::checkCorpusStatus(path, "write DLF", written)) continue;
 
-      pistoris::Dlf roundtrip;
-      std::optional<pistoris::Llf> roundtrip_lighting;
-      if (!test_support::checkCorpusStatus(
-              path, "read written DLF", pistoris::readDlf(written, roundtrip, &roundtrip_lighting)))
+      auto roundtrip = pistoris::readDlf(*written);
+      if (!test_support::checkCorpusStatus(path, "read written DLF", roundtrip)) continue;
+      if (!test_support::checkCorpusStatus(path, "validate written DLF", pistoris::validate(roundtrip->dlf))) continue;
+      test_support::checkEquivalent(source->dlf, roundtrip->dlf);
+      if (!test_support::checkCorpusCondition(
+              path,
+              "compare embedded LLF",
+              source->embedded_lighting.has_value() == roundtrip->embedded_lighting.has_value(),
+              "presence changed"))
         continue;
-      if (!test_support::checkCorpusStatus(path, "validate written DLF", pistoris::validate(roundtrip))) continue;
-      test_support::checkEquivalent(source, roundtrip);
-      if (!test_support::checkCorpusCondition(path,
-                                              "compare embedded LLF",
-                                              source_lighting.has_value() == roundtrip_lighting.has_value(),
-                                              "presence changed"))
-        continue;
-      if (source_lighting) {
+      if (source->embedded_lighting) {
         if (!test_support::checkCorpusStatus(
-                path, "validate written embedded LLF", pistoris::validate(*roundtrip_lighting)))
+                path, "validate written embedded LLF", pistoris::validate(*roundtrip->embedded_lighting)))
           continue;
-        test_support::checkEquivalent(*source_lighting, *roundtrip_lighting);
+        test_support::checkEquivalent(*source->embedded_lighting, *roundtrip->embedded_lighting);
       }
     }
   }

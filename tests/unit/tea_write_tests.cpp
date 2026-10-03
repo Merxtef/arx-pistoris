@@ -18,6 +18,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -42,9 +43,9 @@ struct LogCapture {
 
 static pistoris::tea::Data parse(const std::vector<uint8_t>& buf) {
   pistoris::ReadCursor rc(buf.data(), buf.size());
-  pistoris::tea::Data d;
-  REQUIRE(pistoris::loadTea(&d, rc) == ARX_OK);
-  return d;
+  auto result = pistoris::loadTea(rc);
+  REQUIRE(result);
+  return std::move(*result);
 }
 
 static std::vector<uint8_t> save(const pistoris::tea::Data& d) {

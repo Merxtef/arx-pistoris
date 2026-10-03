@@ -15,7 +15,7 @@ TEST_SUITE("tea") {
   TEST_CASE("WriteNullHandle") {
     uint8_t* out = nullptr;
     size_t sz = 0;
-    ArxReturnCode rc = arx_pistoris_tea_write(nullptr, &out, &sz);
+    ArxReturnCode rc = arx_pistoris_tea_write(nullptr, &out, &sz, nullptr);
     CHECK(rc == ARX_INVALID_HANDLE);
     CHECK(out == nullptr);
     CHECK(sz == 0);
@@ -26,10 +26,10 @@ TEST_SUITE("tea") {
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
     ArxTea* h = nullptr;
-    arx_pistoris_tea_read(buf.data(), buf.size(), &h);
+    arx_pistoris_tea_read(buf.data(), buf.size(), &h, nullptr);
 
     size_t sz = 0;
-    ArxReturnCode rc = arx_pistoris_tea_write(h, nullptr, &sz);
+    ArxReturnCode rc = arx_pistoris_tea_write(h, nullptr, &sz, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
     arx_pistoris_tea_destroy(h);
@@ -40,10 +40,10 @@ TEST_SUITE("tea") {
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
     ArxTea* h = nullptr;
-    arx_pistoris_tea_read(buf.data(), buf.size(), &h);
+    arx_pistoris_tea_read(buf.data(), buf.size(), &h, nullptr);
 
     uint8_t* out = nullptr;
-    ArxReturnCode rc = arx_pistoris_tea_write(h, &out, nullptr);
+    ArxReturnCode rc = arx_pistoris_tea_write(h, &out, nullptr, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
 
     arx_pistoris_tea_destroy(h);
@@ -54,11 +54,11 @@ TEST_SUITE("tea") {
     setNumKeyframes(fixture, 1);
     appendKeyframe2014(fixture);
     ArxTea* h = nullptr;
-    REQUIRE(arx_pistoris_tea_read(fixture.data(), fixture.size(), &h) == ARX_OK);
+    REQUIRE(arx_pistoris_tea_read(fixture.data(), fixture.size(), &h, nullptr) == ARX_OK);
 
     uint8_t* out = nullptr;
     size_t sz = 0;
-    ArxReturnCode rc = arx_pistoris_tea_write(h, &out, &sz);
+    ArxReturnCode rc = arx_pistoris_tea_write(h, &out, &sz, nullptr);
     CHECK(rc == ARX_OK);
     CHECK(out != nullptr);
     CHECK(sz > 0);

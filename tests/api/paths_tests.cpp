@@ -79,7 +79,7 @@ TEST_SUITE("C path API") {
     constexpr std::string_view kPath = "game/graph/obj3d/interactive/items/armor/chest/chest.ftl";
     ArxModelPathView model{};
     REQUIRE(arx_pistoris_path_model_from_ftl(view(kPath), &model) == ARX_OK);
-    CHECK(view(model.type) == "armor");
+    CHECK(model.type == ARX_MODEL_PATH_TYPE_ARMOR);
     CHECK(view(model.name) == "chest");
     CHECK(view(model.tweak).empty());
     CHECK(model.name.data >= kPath.data());
@@ -87,14 +87,14 @@ TEST_SUITE("C path API") {
 
     constexpr std::string_view kTweak = "game/graph/obj3d/interactive/npc/human_base/tweaks/skins/red.ftl";
     REQUIRE(arx_pistoris_path_model_from_ftl(view(kTweak), &model) == ARX_OK);
-    CHECK(view(model.type) == "npc");
+    CHECK(model.type == ARX_MODEL_PATH_TYPE_NPC);
     CHECK(view(model.name) == "human_base");
     CHECK(view(model.tweak) == "skins/red");
   }
 
   TEST_CASE("Static type and search metadata use borrowed views") {
-    CHECK(arx_pistoris_path_model_selector_type_count() == 14);
-    CHECK(arx_pistoris_path_animation_selector_type_count() == 2);
+    CHECK(arx_pistoris_path_model_type_count() == 14);
+    CHECK(arx_pistoris_path_animation_type_count() == 2);
 
     ArxStringView type{};
     REQUIRE(arx_pistoris_path_texture_directory(&type) == ARX_OK);
@@ -109,18 +109,26 @@ TEST_SUITE("C path API") {
     REQUIRE(arx_pistoris_path_cinematic_illustration_directory(&type) == ARX_OK);
     CHECK(view(type) == "graph/interface/illustrations");
     CHECK(arx_pistoris_path_cinematic_illustration_directory(nullptr) == ARX_INVALID_DATA_POINTER);
-    REQUIRE(arx_pistoris_path_model_selector_type(3, &type) == ARX_OK);
+    ArxModelPathType model_type = ARX_MODEL_PATH_TYPE_NONE;
+    REQUIRE(arx_pistoris_path_model_type_at(3, &model_type) == ARX_OK);
+    CHECK(model_type == ARX_MODEL_PATH_TYPE_ARMOR);
+    REQUIRE(arx_pistoris_path_model_type_name(model_type, &type) == ARX_OK);
     CHECK(view(type) == "armor");
-    REQUIRE(arx_pistoris_path_model_selector_type(11, &type) == ARX_OK);
+    REQUIRE(arx_pistoris_path_model_type_at(11, &model_type) == ARX_OK);
+    REQUIRE(arx_pistoris_path_model_type_name(model_type, &type) == ARX_OK);
     CHECK(view(type) == "ui-runes");
-    CHECK(arx_pistoris_path_model_selector_type(14, &type) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(view(type).empty());
+    CHECK(arx_pistoris_path_model_type_at(14, &model_type) == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(model_type == ARX_MODEL_PATH_TYPE_NONE);
+    REQUIRE(arx_pistoris_path_model_type_from_name(view("NPC"), &model_type) == ARX_OK);
+    CHECK(model_type == ARX_MODEL_PATH_TYPE_NPC);
+    CHECK(arx_pistoris_path_model_type_from_name(view("items"), &model_type) == ARX_INVALID_IDENTIFIER);
+    CHECK(model_type == ARX_MODEL_PATH_TYPE_NONE);
 
     ArxResourceSearchLocation location{};
-    REQUIRE(arx_pistoris_path_model_search_location(view("armor"), &location) == ARX_OK);
+    REQUIRE(arx_pistoris_path_model_search_location(ARX_MODEL_PATH_TYPE_ARMOR, &location) == ARX_OK);
     CHECK(view(location.base_path) == "game/graph/obj3d/interactive/items/armor");
     CHECK(location.max_discovery_depth == 3);
-    REQUIRE(arx_pistoris_path_model_search_location(view("ui-menus"), &location) == ARX_OK);
+    REQUIRE(arx_pistoris_path_model_search_location(ARX_MODEL_PATH_TYPE_UI_MENUS, &location) == ARX_OK);
     CHECK(view(location.base_path) == "game/graph/interface/menus");
     CHECK(location.max_discovery_depth == 1);
     REQUIRE(arx_pistoris_path_ambiance_search_location(&location) == ARX_OK);
@@ -131,13 +139,16 @@ TEST_SUITE("C path API") {
   TEST_CASE("C selector helpers mirror the typed C++ resource API") {
     std::array<char, 128> output{};
     std::size_t size = 0;
-    ArxModelPathView model{view("npc"), view("human_base"), view("red")};
+    ArxModelPathView model{ARX_MODEL_PATH_TYPE_NPC, view("human_base"), view("red")};
     REQUIRE(arx_pistoris_path_model_selector(model, output.data(), output.size(), &size) == ARX_OK);
     CHECK(std::string_view(output.data()) == "model:npc:human_base:red");
+    model.type = ARX_MODEL_PATH_TYPE_NONE;
+    CHECK(arx_pistoris_path_model_selector(model, output.data(), output.size(), &size) == ARX_INVALID_IDENTIFIER);
+    model.type = ARX_MODEL_PATH_TYPE_NPC;
 
     ArxModelPathView parsed{};
     REQUIRE(arx_pistoris_path_model_from_selector(view(output.data()), &parsed) == ARX_OK);
-    CHECK(view(parsed.type) == "npc");
+    CHECK(parsed.type == ARX_MODEL_PATH_TYPE_NPC);
     CHECK(view(parsed.name) == "human_base");
     CHECK(view(parsed.tweak) == "red");
 
@@ -167,11 +178,11 @@ TEST_SUITE("C path API") {
     CHECK(std::string_view(output.data()).empty());
     CHECK(arx_pistoris_path_entity_class_kind(view("../items/sword"), &class_kind) == ARX_INVALID_IDENTIFIER);
 
-    ArxModelPathView ui_model{view("ui-runes"), view("aam"), {}};
+    ArxModelPathView ui_model{ARX_MODEL_PATH_TYPE_UI_RUNES, view("aam"), {}};
     REQUIRE(arx_pistoris_path_model_ftl(ui_model, output.data(), output.size(), &size) == ARX_OK);
     CHECK(std::string_view(output.data()) == "game/graph/interface/book/runes/aam.ftl");
     REQUIRE(arx_pistoris_path_model_from_ftl(view(output.data()), &parsed) == ARX_OK);
-    CHECK(view(parsed.type) == "ui-runes");
+    CHECK(parsed.type == ARX_MODEL_PATH_TYPE_UI_RUNES);
     CHECK(view(parsed.name) == "aam");
     CHECK(view(parsed.tweak).empty());
 

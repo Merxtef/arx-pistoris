@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
 #include "arx_pistoris/paths.h"
+#include "arx_pistoris/paths/types.h"
 
 #include <array>
 #include <cstddef>
@@ -65,6 +66,11 @@ TEST_SUITE("C path API") {
     REQUIRE(arx_pistoris_path_fts_from_dlf_scene(
                 pathView("graph/levels/custom.v2"), output.data(), output.size(), &size) == ARX_OK);
     CHECK(std::string_view(output.data()) == "game/graph/levels/custom.v2/fast.fts");
+    REQUIRE(arx_pistoris_path_fts_from_dlf_scene(pathView("../custom.v2"), output.data(), output.size(), &size) ==
+            ARX_OK);
+    CHECK(std::string_view(output.data()) == "custom.v2/fast.fts");
+    CHECK(arx_pistoris_path_fts_from_dlf_scene(pathView("../../custom.v2"), output.data(), output.size(), &size) ==
+          ARX_INVALID_IDENTIFIER);
 
     ArxResourceSearchLocation location{};
     REQUIRE(arx_pistoris_path_level_search_location(&location) == ARX_OK);
@@ -78,32 +84,36 @@ TEST_SUITE("C path API") {
     ArxModelPathView model{};
     REQUIRE(arx_pistoris_path_model_from_entity_class(pathView("graph/obj3d/interactive/npc/human_base/tweaks/red"),
                                                       &model) == ARX_OK);
-    CHECK(pathView(model.type) == "npc");
+    CHECK(model.type == ARX_MODEL_PATH_TYPE_NPC);
     CHECK(pathView(model.name) == "human_base");
     CHECK(pathView(model.tweak) == "red");
 
-    ArxStringView type{};
-    REQUIRE(arx_pistoris_path_animation_selector_type(0, &type) == ARX_OK);
-    CHECK(pathView(type) == "npc");
-    REQUIRE(arx_pistoris_path_animation_directory(pathView("armor"), output.data(), output.size(), &size) == ARX_OK);
+    ArxAnimationPathType type = ARX_ANIMATION_PATH_TYPE_NONE;
+    REQUIRE(arx_pistoris_path_animation_type_at(0, &type) == ARX_OK);
+    CHECK(type == ARX_ANIMATION_PATH_TYPE_NPC);
+    ArxStringView type_name{};
+    REQUIRE(arx_pistoris_path_animation_type_name(type, &type_name) == ARX_OK);
+    CHECK(pathView(type_name) == "npc");
+    REQUIRE(arx_pistoris_path_model_animation_directory(
+                ARX_MODEL_PATH_TYPE_ARMOR, output.data(), output.size(), &size) == ARX_OK);
     CHECK(std::string_view(output.data()) == "graph/obj3d/anims/fix_inter");
 
-    ArxAnimationPathView animation{pathView("npc"), pathView("walk")};
+    ArxAnimationPathView animation{ARX_ANIMATION_PATH_TYPE_NPC, pathView("walk")};
     REQUIRE(arx_pistoris_path_animation_tea(animation, output.data(), output.size(), &size) == ARX_OK);
     CHECK(std::string_view(output.data()) == "graph/obj3d/anims/npc/walk.tea");
     ArxAnimationPathView parsed{};
     REQUIRE(arx_pistoris_path_animation_from_tea(pathView(output.data()), &parsed) == ARX_OK);
-    CHECK(pathView(parsed.type) == "npc");
+    CHECK(parsed.type == ARX_ANIMATION_PATH_TYPE_NPC);
     CHECK(pathView(parsed.name) == "walk");
 
     REQUIRE(arx_pistoris_path_animation_selector(animation, output.data(), output.size(), &size) == ARX_OK);
     CHECK(std::string_view(output.data()) == "anim:npc:walk");
     REQUIRE(arx_pistoris_path_animation_from_selector(pathView(output.data()), &parsed) == ARX_OK);
-    CHECK(pathView(parsed.type) == "npc");
+    CHECK(parsed.type == ARX_ANIMATION_PATH_TYPE_NPC);
     CHECK(pathView(parsed.name) == "walk");
 
     ArxResourceSearchLocation location{};
-    REQUIRE(arx_pistoris_path_animation_search_location(pathView("npc"), &location) == ARX_OK);
+    REQUIRE(arx_pistoris_path_animation_search_location(ARX_ANIMATION_PATH_TYPE_NPC, &location) == ARX_OK);
     CHECK(pathView(location.base_path) == "graph/obj3d/anims/npc");
   }
 

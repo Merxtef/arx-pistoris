@@ -33,39 +33,46 @@ bool equal(ArxVector3 first, ArxVector3 second) {
 TEST_SUITE("C Model API") {
   TEST_CASE("Stores and renders an optional inventory icon") {
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_create(&model) == ARX_OK);
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
 
     ArxModelInventoryIconView borrowed = ARX_MODEL_INVENTORY_ICON_VIEW_INIT;
-    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed) == ARX_OK);
+    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed, nullptr) == ARX_OK);
     CHECK(borrowed.encoded_image.data == nullptr);
     CHECK(borrowed.encoded_image.size == 0);
     CHECK(borrowed.width_slots == 0);
     CHECK(borrowed.height_slots == 0);
 
     ArxModelInventoryIconSetOptions set_options = ARX_MODEL_INVENTORY_ICON_SET_OPTIONS_INIT;
-    CHECK(arx_pistoris_model_set_inventory_icon(model, {}, nullptr) == ARX_INVALID_OPTIONS);
-    CHECK(arx_pistoris_model_set_inventory_icon(model, {}, &set_options) == ARX_MODEL_BAD_INVENTORY_ICON);
+    CHECK(arx_pistoris_model_set_inventory_icon(model, {}, nullptr, nullptr) == ARX_INVALID_OPTIONS);
+    CHECK(arx_pistoris_model_set_inventory_icon(model, {}, &set_options, nullptr) == ARX_MODEL_BAD_INVENTORY_ICON);
 
     ArxModelInventoryIconRenderOptions options = ARX_MODEL_INVENTORY_ICON_RENDER_OPTIONS_INIT;
     std::uint8_t sentinel = 0;
     std::uint8_t* rendered = &sentinel;
     std::size_t rendered_size = 1;
-    REQUIRE(arx_pistoris_model_render_icon_png(model, &options, &rendered, &rendered_size) == ARX_OK);
+    REQUIRE(arx_pistoris_model_render_icon(model, &options, &rendered, &rendered_size, nullptr) == ARX_OK);
     CHECK(rendered == nullptr);
     CHECK(rendered_size == 0);
 
     const std::vector<std::uint8_t> icon = makeTestBmp(255, 0, 0);
-    CHECK(arx_pistoris_model_set_inventory_icon(model, {icon.data(), 1}, &set_options) == ARX_MODEL_BAD_INVENTORY_ICON);
-    REQUIRE(arx_pistoris_model_set_inventory_icon(model, {icon.data(), icon.size()}, &set_options) == ARX_OK);
-    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed) == ARX_OK);
+    CHECK(arx_pistoris_model_set_inventory_icon(model, {icon.data(), 1}, &set_options, nullptr) ==
+          ARX_MODEL_BAD_INVENTORY_ICON);
+    REQUIRE(arx_pistoris_model_set_inventory_icon(model, {icon.data(), icon.size()}, &set_options, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed, nullptr) == ARX_OK);
     REQUIRE(borrowed.encoded_image.size == icon.size());
     CHECK(std::equal(icon.begin(), icon.end(), borrowed.encoded_image.data));
     CHECK(borrowed.width_slots == 1);
     CHECK(borrowed.height_slots == 1);
+    set_options.width_slots = 2;
+    set_options.height_slots = 0;
+    REQUIRE(arx_pistoris_model_set_inventory_icon(model, {icon.data(), icon.size()}, &set_options, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed, nullptr) == ARX_OK);
+    CHECK(borrowed.width_slots == 2);
+    CHECK(borrowed.height_slots >= 1);
     set_options.width_slots = 3;
     set_options.height_slots = 2;
-    REQUIRE(arx_pistoris_model_set_inventory_icon(model, {icon.data(), icon.size()}, &set_options) == ARX_OK);
-    REQUIRE(arx_pistoris_model_render_icon_png(model, &options, &rendered, &rendered_size) == ARX_OK);
+    REQUIRE(arx_pistoris_model_set_inventory_icon(model, {icon.data(), icon.size()}, &set_options, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_render_icon(model, &options, &rendered, &rendered_size, nullptr) == ARX_OK);
     REQUIRE(rendered != nullptr);
     REQUIRE(rendered_size != 0);
     ArxImageInfo info{};
@@ -75,7 +82,8 @@ TEST_SUITE("C Model API") {
     CHECK(info.height == 64);
     arx_pistoris_free_bytes(rendered);
 
-    REQUIRE(arx_pistoris_model_render_icon_bmp(model, &options, &rendered, &rendered_size) == ARX_OK);
+    options.format = ARX_IMAGE_FORMAT_BMP;
+    REQUIRE(arx_pistoris_model_render_icon(model, &options, &rendered, &rendered_size, nullptr) == ARX_OK);
     REQUIRE(rendered != nullptr);
     REQUIRE(rendered_size != 0);
     REQUIRE(arx_pistoris_binary_inspect_encoded_image({rendered, rendered_size}, &info) == ARX_OK);
@@ -85,20 +93,28 @@ TEST_SUITE("C Model API") {
     CHECK(info.components == 4);
     arx_pistoris_free_bytes(rendered);
 
-    options.layout = 255;
-    rendered = &sentinel;
-    rendered_size = 1;
-    CHECK(arx_pistoris_model_render_icon_png(model, &options, &rendered, &rendered_size) == ARX_INVALID_OPTIONS);
-    CHECK(rendered == nullptr);
-    CHECK(rendered_size == 0);
-    rendered = &sentinel;
-    rendered_size = 1;
-    CHECK(arx_pistoris_model_render_icon_bmp(model, &options, &rendered, &rendered_size) == ARX_INVALID_OPTIONS);
+    options.format = ARX_IMAGE_FORMAT_TGA;
+    REQUIRE(arx_pistoris_model_render_icon(model, &options, &rendered, &rendered_size, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_binary_inspect_encoded_image({rendered, rendered_size}, &info) == ARX_OK);
+    CHECK(info.format == ARX_IMAGE_FORMAT_TGA);
+    arx_pistoris_free_bytes(rendered);
+
+    options.format = ARX_IMAGE_FORMAT_JPEG;
+    CHECK(arx_pistoris_model_render_icon(model, &options, &rendered, &rendered_size, nullptr) ==
+          ARX_MODEL_UNSUPPORTED_INVENTORY_ICON_FORMAT);
     CHECK(rendered == nullptr);
     CHECK(rendered_size == 0);
 
-    REQUIRE(arx_pistoris_model_clear_inventory_icon(model) == ARX_OK);
-    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed) == ARX_OK);
+    options.format = ARX_IMAGE_FORMAT_PNG;
+    options.layout = 255;
+    rendered = &sentinel;
+    rendered_size = 1;
+    CHECK(arx_pistoris_model_render_icon(model, &options, &rendered, &rendered_size, nullptr) == ARX_INVALID_OPTIONS);
+    CHECK(rendered == nullptr);
+    CHECK(rendered_size == 0);
+
+    REQUIRE(arx_pistoris_model_clear_inventory_icon(model, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_inventory_icon(model, &borrowed, nullptr) == ARX_OK);
     CHECK(borrowed.encoded_image.data == nullptr);
     CHECK(borrowed.encoded_image.size == 0);
     CHECK(borrowed.width_slots == 0);
@@ -120,15 +136,15 @@ map_Kd imported/wall.bmp
 
     ArxObjMaterialLibraryPaths* paths = nullptr;
     REQUIRE(arx_pistoris_obj_material_library_paths(
-                reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), &paths) == ARX_OK);
+                reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), &paths, nullptr) == ARX_OK);
     REQUIRE(paths != nullptr);
     std::size_t path_count = 0;
-    REQUIRE(arx_pistoris_obj_material_library_paths_count(paths, &path_count) == ARX_OK);
+    REQUIRE(arx_pistoris_obj_material_library_paths_count(paths, &path_count, nullptr) == ARX_OK);
     REQUIRE(path_count == 1);
     ArxStringView path{};
-    REQUIRE(arx_pistoris_obj_material_library_paths_get(paths, 0, &path) == ARX_OK);
+    REQUIRE(arx_pistoris_obj_material_library_paths_get(paths, 0, &path, nullptr) == ARX_OK);
     CHECK((std::string_view(path.data, path.size) == "materials.mtl"));
-    CHECK(arx_pistoris_obj_material_library_paths_get(paths, 1, &path) == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(arx_pistoris_obj_material_library_paths_get(paths, 1, &path, nullptr) == ARX_INDEX_OUT_OF_RANGE);
     CHECK(path.data == nullptr);
     CHECK(path.size == 0);
     arx_pistoris_obj_material_library_paths_destroy(paths);
@@ -140,9 +156,10 @@ map_Kd imported/wall.bmp
         .data = reinterpret_cast<const std::uint8_t*>(kMtl.data()),
         .size = kMtl.size(),
     };
-    REQUIRE(arx_pistoris_model_import_obj(
-                reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), &library, 1, &model, &sources) ==
-            ARX_OK);
+    REQUIRE(
+        arx_pistoris_model_import_obj(
+            reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), &library, 1, &model, &sources, nullptr) ==
+        ARX_OK);
     REQUIRE(model != nullptr);
     REQUIRE(sources != nullptr);
 
@@ -157,20 +174,21 @@ map_Kd imported/wall.bmp
     CHECK(source.size == 0);
 
     const std::vector<std::uint8_t> image = makeTestBmp();
-    REQUIRE(arx_pistoris_model_set_texture_image(model, 0, image.data(), image.size()) == ARX_OK);
+    REQUIRE(arx_pistoris_model_set_texture_image(model, 0, image.data(), image.size(), nullptr) == ARX_OK);
     const ArxObjExportOptions options = ARX_OBJ_EXPORT_OPTIONS_INIT;
     char* obj = nullptr;
     char* mtl = nullptr;
     ArxObjTextureFiles* textures = nullptr;
-    REQUIRE(arx_pistoris_model_export_obj(model, view("static_model"), &options, &obj, &mtl, &textures) == ARX_OK);
+    REQUIRE(arx_pistoris_model_export_obj(model, view("static_model"), &options, &obj, &mtl, &textures, nullptr) ==
+            ARX_OK);
     REQUIRE(obj != nullptr);
     REQUIRE(mtl != nullptr);
     REQUIRE(textures != nullptr);
     std::size_t texture_count = 0;
-    REQUIRE(arx_pistoris_obj_texture_files_count(textures, &texture_count) == ARX_OK);
+    REQUIRE(arx_pistoris_obj_texture_files_count(textures, &texture_count, nullptr) == ARX_OK);
     REQUIRE(texture_count == 1);
     ArxObjTextureFile texture{};
-    REQUIRE(arx_pistoris_obj_texture_files_get(textures, 0, &texture) == ARX_OK);
+    REQUIRE(arx_pistoris_obj_texture_files_get(textures, 0, &texture, nullptr) == ARX_OK);
     CHECK(texture.source_texture == 0);
     CHECK((std::string_view(texture.path.data, texture.path.size) == "imported/wall.bmp"));
     CHECK(texture.encoded_image.size == image.size());
@@ -204,15 +222,17 @@ vn 0 0 1
 f 1//1 2//1 3//1
 )";
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_import_obj(
-                reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), nullptr, 0, &model, nullptr) ==
-            ARX_OK);
+    REQUIRE(
+        arx_pistoris_model_import_obj(
+            reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), nullptr, 0, &model, nullptr, nullptr) ==
+        ARX_OK);
     REQUIRE(model != nullptr);
-    CHECK(arx_pistoris_model_validate(model) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(model, nullptr) == ARX_OK);
 
     char* obj = nullptr;
     char* mtl = nullptr;
-    REQUIRE(arx_pistoris_model_export_obj(model, view("static_model"), nullptr, &obj, &mtl, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_export_obj(model, view("static_model"), nullptr, &obj, &mtl, nullptr, nullptr) ==
+            ARX_OK);
     REQUIRE(obj != nullptr);
     REQUIRE(mtl != nullptr);
     CHECK(std::string_view(obj).find("# arx_action weapon_attach 4 5 6") != std::string_view::npos);
@@ -221,6 +241,52 @@ f 1//1 2//1 3//1
     arx_pistoris_free_string(mtl);
     arx_pistoris_free_string(obj);
     arx_pistoris_model_destroy(model);
+  }
+
+  TEST_CASE("Publishes OBJ and GLB error locations") {
+    constexpr std::string_view kBadObj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 4\n";
+    ArxModel* model = nullptr;
+    ArxError error = ARX_ERROR_INIT;
+    CHECK(arx_pistoris_model_import_obj(reinterpret_cast<const std::uint8_t*>(kBadObj.data()),
+                                        kBadObj.size(),
+                                        nullptr,
+                                        0,
+                                        &model,
+                                        nullptr,
+                                        &error) == ARX_OBJ_BAD_POSITION_INDEX);
+    CHECK(model == nullptr);
+    CHECK(error.code == ARX_OBJ_BAD_POSITION_INDEX);
+    CHECK(error.location.kind == ARX_ERROR_LOCATION_OBJ);
+    CHECK(error.location.element == ARX_ERROR_ELEMENT_OBJ_DOCUMENT);
+    CHECK(error.location.line == 4);
+    CHECK(error.location.input_index == SIZE_MAX);
+    CHECK(error.detail.size != 0);
+
+    constexpr std::array<std::uint8_t, 12> kBadGlb = {
+        'g',
+        'l',
+        'T',
+        'F',
+        1,
+        0,
+        0,
+        0,
+        12,
+        0,
+        0,
+        0,
+    };
+    const ArxModelGlbImportOptions options = ARX_MODEL_GLB_IMPORT_OPTIONS_INIT;
+    CHECK(arx_pistoris_model_import_glb(
+              kBadGlb.data(), kBadGlb.size(), &options, &model, nullptr, nullptr, nullptr, nullptr, &error) ==
+          ARX_GLB_BAD_FORMAT);
+    CHECK(model == nullptr);
+    CHECK(error.code == ARX_GLB_BAD_FORMAT);
+    CHECK(error.location.kind == ARX_ERROR_LOCATION_GLB);
+    CHECK(error.location.element == ARX_ERROR_ELEMENT_GLB_DOCUMENT);
+    CHECK(error.location.index == SIZE_MAX);
+    CHECK(error.location.subindex == SIZE_MAX);
+    arx_pistoris_error_clear(&error);
   }
 
   TEST_CASE("Converts Model GLB through opaque handles") {
@@ -244,12 +310,12 @@ f 1//1 2//1 3//1
     CHECK(arx_pistoris_strerror(ARX_GLB_BAD_ANIMATION_BINDING) != nullptr);
 
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_create(&model) == ARX_OK);
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
     std::array<ArxModelVertex, 3> vertices{};
     vertices[1].position.x = 1.0f;
     vertices[2].position.y = 1.0f;
     ArxVertexIndex first = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_vertices(model, vertices.data(), vertices.size(), &first) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_vertices(model, vertices.data(), vertices.size(), &first, nullptr) == ARX_OK);
     ArxModelFace face{};
     face.normal = {0.0f, 0.0f, 1.0f};
     face.texture = ARX_NO_TEXTURE;
@@ -258,13 +324,13 @@ f 1//1 2//1 3//1
       face.corners[index].normal = face.normal;
     }
     ArxFaceIndex face_index = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_face(model, &face, &face_index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_face(model, &face, &face_index, nullptr) == ARX_OK);
 
     const ArxModelGlbExportOptions export_options = ARX_MODEL_GLB_EXPORT_OPTIONS_INIT;
     std::uint8_t* encoded = nullptr;
     std::size_t encoded_size = 0;
     REQUIRE(arx_pistoris_model_export_glb(
-                model, nullptr, 0, &export_options, nullptr, &encoded, &encoded_size, nullptr) == ARX_OK);
+                model, nullptr, 0, &export_options, nullptr, &encoded, &encoded_size, nullptr, nullptr) == ARX_OK);
     REQUIRE(encoded != nullptr);
     REQUIRE(encoded_size != 0);
 
@@ -272,15 +338,16 @@ f 1//1 2//1 3//1
     ArxModel* imported = nullptr;
     ArxTextureSourcePaths* sources = nullptr;
     REQUIRE(arx_pistoris_model_import_glb(
-                encoded, encoded_size, &import_options, &imported, nullptr, nullptr, &sources, nullptr) == ARX_OK);
+                encoded, encoded_size, &import_options, &imported, nullptr, nullptr, &sources, nullptr, nullptr) ==
+            ARX_OK);
     REQUIRE(imported != nullptr);
     REQUIRE(sources != nullptr);
     std::size_t source_count = 1;
     REQUIRE(arx_pistoris_texture_source_paths_count(sources, &source_count) == ARX_OK);
     CHECK(source_count == 0);
-    CHECK(arx_pistoris_model_validate(imported) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(imported, nullptr) == ARX_OK);
     std::size_t count = 0;
-    REQUIRE(arx_pistoris_model_face_count(imported, &count) == ARX_OK);
+    REQUIRE(arx_pistoris_model_face_count(imported, &count, nullptr) == ARX_OK);
     CHECK(count == 1);
 
     arx_pistoris_texture_source_paths_destroy(sources);
@@ -296,16 +363,17 @@ v 0 1 0
 f 1 2 3
 )";
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_import_obj(
-                reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), nullptr, 0, &model, nullptr) ==
-            ARX_OK);
+    REQUIRE(
+        arx_pistoris_model_import_obj(
+            reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), nullptr, 0, &model, nullptr, nullptr) ==
+        ARX_OK);
 
     ArxModelLevelPreviewGlbOptions options = ARX_MODEL_LEVEL_PREVIEW_GLB_OPTIONS_INIT;
     options.class_path = view("model:weapons:long_sword");
     options.asset_name = view("long_sword");
     std::uint8_t* encoded = nullptr;
     std::size_t encoded_size = 0;
-    REQUIRE(arx_pistoris_model_export_level_preview_glb(model, &options, &encoded, &encoded_size) == ARX_OK);
+    REQUIRE(arx_pistoris_model_export_level_preview_glb(model, &options, &encoded, &encoded_size, nullptr) == ARX_OK);
     CHECK(encoded != nullptr);
     CHECK(encoded_size != 0);
 
@@ -320,9 +388,10 @@ v 0 1 0
 f 1 2 3
 )";
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_import_obj(
-                reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), nullptr, 0, &model, nullptr) ==
-            ARX_OK);
+    REQUIRE(
+        arx_pistoris_model_import_obj(
+            reinterpret_cast<const std::uint8_t*>(kObj.data()), kObj.size(), nullptr, 0, &model, nullptr, nullptr) ==
+        ARX_OK);
 
     std::vector<ArxModelActionPoint> action_points(1025);
     for (ArxModelActionPoint& point : action_points) {
@@ -330,13 +399,14 @@ f 1 2 3
       point.bone = ARX_INVALID_INDEX;
     }
     const ArxModelActionPointsInput input{action_points.data(), action_points.size()};
-    REQUIRE(arx_pistoris_model_replace_action_points(model, &input) == ARX_OK);
-    CHECK(arx_pistoris_model_validate(model) == ARX_OK);
+    REQUIRE(arx_pistoris_model_replace_action_points(model, &input, nullptr) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(model, nullptr) == ARX_OK);
 
     const ArxNativeModelBakeOptions options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
     ArxFtl* native = nullptr;
     ArxNativeTextureFiles* textures = nullptr;
-    CHECK(arx_pistoris_model_bake_native(model, &options, &native, &textures) == ARX_MODEL_TOO_MANY_ACTION_POINTS);
+    CHECK(arx_pistoris_model_bake_native(model, &options, &native, &textures, nullptr) ==
+          ARX_MODEL_TOO_MANY_ACTION_POINTS);
     CHECK(native == nullptr);
     CHECK(textures == nullptr);
     arx_pistoris_model_destroy(model);
@@ -344,14 +414,14 @@ f 1 2 3
 
   TEST_CASE("Edits, bakes, and reimports through opaque handles") {
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_create(&model) == ARX_OK);
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
     REQUIRE(model != nullptr);
-    REQUIRE(arx_pistoris_model_set_resource_path(model, view("model:npc:human_base")) == ARX_OK);
+    REQUIRE(arx_pistoris_model_set_resource_path(model, view("model:npc:human_base"), nullptr) == ARX_OK);
 
     ArxModelBone root{};
     root.name = view("ROOT");
     ArxBoneIndex root_index = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_bone(model, &root, &root_index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_bone(model, &root, &root_index, nullptr) == ARX_OK);
     CHECK(root_index == 0);
 
     ArxModelActionPoint hit{};
@@ -359,12 +429,12 @@ f 1 2 3
     hit.bone = root_index;
     ArxActionPointIndex first_hit = ARX_INVALID_INDEX;
     ArxActionPointIndex second_hit = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_action_point(model, &hit, &first_hit) == ARX_OK);
-    REQUIRE(arx_pistoris_model_add_action_point(model, &hit, &second_hit) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_action_point(model, &hit, &first_hit, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_action_point(model, &hit, &second_hit, nullptr) == ARX_OK);
     CHECK(first_hit == 0);
     CHECK(second_hit == 1);
     std::array<ArxModelActionPoint, 2> hits{};
-    REQUIRE(arx_pistoris_model_copy_action_points(model, 0, hits.size(), hits.data()) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_action_points(model, 0, hits.size(), hits.data(), nullptr) == ARX_OK);
     CHECK((std::string_view(hits[0].name.data, hits[0].name.size) == "hit_30"));
     CHECK((std::string_view(hits[1].name.data, hits[1].name.size) == "hit_30"));
 
@@ -374,7 +444,7 @@ f 1 2 3
     cut_head.leading_position = {0.25f, 0.25f, 0.0f};
     cut_head.leading_bone = root_index;
     ArxSelectionId cut_head_id = ARX_INVALID_SELECTION_ID;
-    REQUIRE(arx_pistoris_model_add_selection(model, &cut_head, &cut_head_id) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_selection(model, &cut_head, &cut_head_id, nullptr) == ARX_OK);
     CHECK(cut_head_id == 0);
 
     std::array<ArxModelVertex, 3> input_vertices{};
@@ -383,8 +453,8 @@ f 1 2 3
     input_vertices[2].position = {0.0f, 1.0f, 0.0f};
     for (ArxModelVertex& vertex : input_vertices) vertex.bone = root_index;
     ArxVertexIndex first_vertex = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_vertices(model, input_vertices.data(), input_vertices.size(), &first_vertex) ==
-            ARX_OK);
+    REQUIRE(arx_pistoris_model_add_vertices(
+                model, input_vertices.data(), input_vertices.size(), &first_vertex, nullptr) == ARX_OK);
     CHECK(first_vertex == 0);
 
     const std::vector<std::uint8_t> image = makeTestBmp();
@@ -392,15 +462,15 @@ f 1 2 3
     texture.path = view("wall");
     texture.encoded_image = {image.data(), image.size()};
     ArxTextureIndex texture_index = ARX_NO_TEXTURE;
-    REQUIRE(arx_pistoris_model_add_texture(model, &texture, &texture_index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_texture(model, &texture, &texture_index, nullptr) == ARX_OK);
     CHECK(texture_index == 0);
-    REQUIRE(arx_pistoris_model_rebase_texture_paths(model, view("graph/obj3d/textures")) == ARX_OK);
+    REQUIRE(arx_pistoris_model_rebase_texture_paths(model, view("graph/obj3d/textures"), nullptr) == ARX_OK);
 
     const ArxVertexIndex cut_vertex = 0;
     ArxModelSelectionMembersInput members{};
     members.vertices = &cut_vertex;
     members.vertex_count = 1;
-    REQUIRE(arx_pistoris_model_update_selection_members(model, cut_head_id, &members) == ARX_OK);
+    REQUIRE(arx_pistoris_model_update_selection_members(model, cut_head_id, &members, nullptr) == ARX_OK);
 
     ArxModelFace face{};
     face.normal = {1.0f, 0.0f, 0.0f};
@@ -410,59 +480,59 @@ f 1 2 3
       face.corners[corner].normal = {0.0f, 0.0f, 1.0f};
     }
     ArxFaceIndex face_index = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_face(model, &face, &face_index) == ARX_OK);
-    CHECK(arx_pistoris_model_validate(model) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_face(model, &face, &face_index, nullptr) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(model, nullptr) == ARX_OK);
     ArxModelFace copied_face{};
-    REQUIRE(arx_pistoris_model_copy_faces(model, 0, 1, &copied_face) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_faces(model, 0, 1, &copied_face, nullptr) == ARX_OK);
     CHECK(equal(copied_face.normal, face.normal));
     copied_face.corners[0].normal = {1.0f, 0.0f, 0.0f};
-    REQUIRE(arx_pistoris_model_set_face(model, 0, &copied_face) == ARX_OK);
+    REQUIRE(arx_pistoris_model_set_face(model, 0, &copied_face, nullptr) == ARX_OK);
     copied_face = {};
-    REQUIRE(arx_pistoris_model_copy_faces(model, 0, 1, &copied_face) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_faces(model, 0, 1, &copied_face, nullptr) == ARX_OK);
     CHECK(equal(copied_face.corners[0].normal, {1.0f, 0.0f, 0.0f}));
     std::size_t vertex_count = 0;
     std::size_t bone_count = 0;
     std::size_t selection_count = 0;
-    REQUIRE(arx_pistoris_model_vertex_count(model, &vertex_count) == ARX_OK);
-    REQUIRE(arx_pistoris_model_bone_count(model, &bone_count) == ARX_OK);
-    REQUIRE(arx_pistoris_model_selection_count(model, &selection_count) == ARX_OK);
+    REQUIRE(arx_pistoris_model_vertex_count(model, &vertex_count, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_bone_count(model, &bone_count, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection_count(model, &selection_count, nullptr) == ARX_OK);
     CHECK(vertex_count == 3);
     CHECK(bone_count == 1);
     CHECK(selection_count == 1);
 
     std::array<ArxModelVertex, 3> vertices{};
-    REQUIRE(arx_pistoris_model_copy_vertices(model, 0, vertices.size(), vertices.data()) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_vertices(model, 0, vertices.size(), vertices.data(), nullptr) == ARX_OK);
     std::size_t selection_vertex_count = 0;
-    REQUIRE(arx_pistoris_model_selection_vertex_count(model, cut_head_id, &selection_vertex_count) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection_vertex_count(model, cut_head_id, &selection_vertex_count, nullptr) == ARX_OK);
     CHECK(selection_vertex_count == 1);
     ArxVertexIndex selected_vertex = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_copy_selection_vertices(model, cut_head_id, 0, 1, &selected_vertex) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_selection_vertices(model, cut_head_id, 0, 1, &selected_vertex, nullptr) == ARX_OK);
     CHECK(selected_vertex == 0);
     ArxSelectionId copied_id = ARX_INVALID_SELECTION_ID;
-    REQUIRE(arx_pistoris_model_copy_selection_ids(model, 0, 1, &copied_id) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_selection_ids(model, 0, 1, &copied_id, nullptr) == ARX_OK);
     CHECK(copied_id == cut_head_id);
     ArxModelSelection copied_selection{};
-    REQUIRE(arx_pistoris_model_selection(model, copied_id, &copied_selection) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection(model, copied_id, &copied_selection, nullptr) == ARX_OK);
     CHECK((std::string_view(copied_selection.name.data, copied_selection.name.size) == "cut_head"));
     CHECK(copied_selection.has_leading_vertex == 1);
     CHECK(equal(copied_selection.leading_position, cut_head.leading_position));
     CHECK(copied_selection.leading_bone == root_index);
 
     ArxStringView path{};
-    REQUIRE(arx_pistoris_model_resource_path(model, &path) == ARX_OK);
+    REQUIRE(arx_pistoris_model_resource_path(model, &path, nullptr) == ARX_OK);
     CHECK((std::string_view(path.data, path.size) == "game/graph/obj3d/interactive/npc/human_base/human_base.ftl"));
-    REQUIRE(arx_pistoris_model_set_resource_path(model, {nullptr, 0}) == ARX_OK);
-    REQUIRE(arx_pistoris_model_resource_path(model, &path) == ARX_OK);
+    REQUIRE(arx_pistoris_model_set_resource_path(model, {nullptr, 0}, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_resource_path(model, &path, nullptr) == ARX_OK);
     CHECK(path.size == 0);
-    CHECK(arx_pistoris_model_validate(model) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(model, nullptr) == ARX_OK);
 
     const ArxNativeModelBakeOptions bake_options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
     ArxFtl* baked = nullptr;
     ArxNativeTextureFiles* texture_files = nullptr;
-    REQUIRE(arx_pistoris_model_bake_native(model, &bake_options, &baked, &texture_files) == ARX_OK);
+    REQUIRE(arx_pistoris_model_bake_native(model, &bake_options, &baked, &texture_files, nullptr) == ARX_OK);
     REQUIRE(baked != nullptr);
     REQUIRE(texture_files != nullptr);
-    CHECK(arx_pistoris_ftl_validate(baked) == ARX_OK);
+    CHECK(arx_pistoris_ftl_validate(baked, nullptr) == ARX_OK);
     std::size_t native_texture_count = 0;
     REQUIRE(arx_pistoris_native_texture_files_count(texture_files, &native_texture_count) == ARX_OK);
     REQUIRE(native_texture_count == 1);
@@ -475,7 +545,8 @@ f 1 2 3
 
     ArxModel* imported = nullptr;
     ArxTextureSourcePaths* imported_sources = nullptr;
-    REQUIRE(arx_pistoris_model_import_native(baked, &imported, &imported_sources, ARX_NATIVE_TEXT_AUTO) == ARX_OK);
+    REQUIRE(arx_pistoris_model_import_native(baked, &imported, &imported_sources, ARX_NATIVE_TEXT_AUTO, nullptr) ==
+            ARX_OK);
     REQUIRE(imported_sources != nullptr);
     std::size_t source_count = 0;
     REQUIRE(arx_pistoris_texture_source_paths_count(imported_sources, &source_count) == ARX_OK);
@@ -483,17 +554,17 @@ f 1 2 3
     ArxStringView source{};
     REQUIRE(arx_pistoris_texture_source_paths_get(imported_sources, 0, &source) == ARX_OK);
     CHECK((std::string_view(source.data, source.size) == "graph/obj3d/textures/wall"));
-    CHECK(arx_pistoris_model_validate(imported) == ARX_OK);
-    REQUIRE(arx_pistoris_model_copy_faces(imported, 0, 1, &copied_face) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(imported, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_faces(imported, 0, 1, &copied_face, nullptr) == ARX_OK);
     CHECK(equal(copied_face.normal, face.normal));
-    REQUIRE(arx_pistoris_model_resource_path(imported, &path) == ARX_OK);
+    REQUIRE(arx_pistoris_model_resource_path(imported, &path, nullptr) == ARX_OK);
     CHECK(path.size == 0);
 
     ArxModel* clone = nullptr;
-    REQUIRE(arx_pistoris_model_clone(model, &clone) == ARX_OK);
-    REQUIRE(arx_pistoris_model_reset(model) == ARX_OK);
-    CHECK(arx_pistoris_model_validate(model) == ARX_MODEL_NO_GEOMETRY);
-    CHECK(arx_pistoris_model_validate(clone) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clone(model, &clone, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_reset(model, nullptr) == ARX_OK);
+    CHECK(arx_pistoris_model_validate(model, nullptr) == ARX_MODEL_NO_GEOMETRY);
+    CHECK(arx_pistoris_model_validate(clone, nullptr) == ARX_OK);
 
     arx_pistoris_model_destroy(clone);
     arx_pistoris_texture_source_paths_destroy(imported_sources);
@@ -505,139 +576,140 @@ f 1 2 3
 
   TEST_CASE("Validates opaque handles and submitted pointers") {
     CHECK(arx_pistoris_strerror(ARX_MODEL_TOO_MANY_NATIVE_VERTICES) != nullptr);
-    CHECK(arx_pistoris_model_create(nullptr) == ARX_INVALID_DATA_POINTER);
-    CHECK(arx_pistoris_model_validate(nullptr) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_model_clone(nullptr, nullptr) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_model_scale(nullptr, 1.0f) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_model_rotate(nullptr, {}) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_model_translate(nullptr, {}) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_model_apply_reference(nullptr, nullptr, nullptr) == ARX_INVALID_HANDLE);
-    CHECK(arx_pistoris_model_infer_bone_origin_selections(nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_create(nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_validate(nullptr, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_clone(nullptr, nullptr, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_scale(nullptr, 1.0f, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_rotate(nullptr, {}, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_translate(nullptr, {}, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_apply_reference(nullptr, nullptr, nullptr, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_infer_bone_selection_memberships(nullptr, nullptr) == ARX_INVALID_HANDLE);
 
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_create(&model) == ARX_OK);
-    CHECK(arx_pistoris_model_apply_reference(model, model, nullptr) == ARX_INVALID_OPTIONS);
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
+    CHECK(arx_pistoris_model_apply_reference(model, model, nullptr, nullptr) == ARX_INVALID_OPTIONS);
     const ArxModelReferenceOptions empty_reference = ARX_MODEL_REFERENCE_OPTIONS_INIT;
-    CHECK(arx_pistoris_model_apply_reference(model, model, &empty_reference) == ARX_INVALID_OPTIONS);
-    CHECK(arx_pistoris_model_resource_path(model, nullptr) == ARX_INVALID_DATA_POINTER);
-    CHECK(arx_pistoris_model_vertex_count(model, nullptr) == ARX_INVALID_DATA_POINTER);
-    CHECK(arx_pistoris_model_copy_vertices(model, 0, 1, nullptr) == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(arx_pistoris_model_add_vertex(model, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_apply_reference(model, model, &empty_reference, nullptr) == ARX_INVALID_OPTIONS);
+    CHECK(arx_pistoris_model_resource_path(model, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_vertex_count(model, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_copy_vertices(model, 0, 1, nullptr, nullptr) == ARX_INDEX_OUT_OF_RANGE);
+    CHECK(arx_pistoris_model_add_vertex(model, nullptr, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
     ArxVertexIndex first_vertex = 42;
-    CHECK(arx_pistoris_model_add_vertices(model, nullptr, 0, &first_vertex) == ARX_INVALID_OPTIONS);
+    CHECK(arx_pistoris_model_add_vertices(model, nullptr, 0, &first_vertex, nullptr) == ARX_INVALID_OPTIONS);
     CHECK(first_vertex == ARX_INVALID_INDEX);
     ArxTextureView texture{};
     texture.path = view("wall.bmp");
     ArxTextureIndex texture_index = ARX_NO_TEXTURE;
-    REQUIRE(arx_pistoris_model_add_texture(model, &texture, &texture_index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_texture(model, &texture, &texture_index, nullptr) == ARX_OK);
     const std::vector<std::uint8_t> image = makeTestBmp();
-    REQUIRE(arx_pistoris_model_set_texture_image(model, texture_index, image.data(), image.size()) == ARX_OK);
-    CHECK(arx_pistoris_model_set_texture_image(model, texture_index, nullptr, 0) == ARX_MODEL_BAD_TEXTURE_IMAGE);
+    REQUIRE(arx_pistoris_model_set_texture_image(model, texture_index, image.data(), image.size(), nullptr) == ARX_OK);
+    CHECK(arx_pistoris_model_set_texture_image(model, texture_index, nullptr, 0, nullptr) ==
+          ARX_MODEL_BAD_TEXTURE_IMAGE);
     ArxTextureView copied_texture{};
-    REQUIRE(arx_pistoris_model_copy_texture_views(model, 0, 1, &copied_texture) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_texture_views(model, 0, 1, &copied_texture, nullptr) == ARX_OK);
     REQUIRE(copied_texture.encoded_image.size == image.size());
     CHECK(std::equal(image.begin(), image.end(), copied_texture.encoded_image.data));
-    REQUIRE(arx_pistoris_model_clear_texture_image(model, texture_index) == ARX_OK);
-    REQUIRE(arx_pistoris_model_copy_texture_views(model, 0, 1, &copied_texture) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clear_texture_image(model, texture_index, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_texture_views(model, 0, 1, &copied_texture, nullptr) == ARX_OK);
     CHECK(copied_texture.encoded_image.size == 0);
     CHECK(std::string(copied_texture.external_image_extension.data, copied_texture.external_image_extension.size) ==
           ".bmp");
 
     ArxModelMeshInput oversized{};
     oversized.vertex_count = std::numeric_limits<std::size_t>::max();
-    CHECK(arx_pistoris_model_replace_mesh(model, &oversized) == ARX_MODEL_TOO_MANY_VERTICES);
+    CHECK(arx_pistoris_model_replace_mesh(model, &oversized, nullptr) == ARX_MODEL_TOO_MANY_VERTICES);
 
     ArxModelSkeletonInput oversized_skeleton{};
     oversized_skeleton.bone_count = 1025;
-    CHECK(arx_pistoris_model_replace_skeleton(model, &oversized_skeleton) == ARX_MODEL_TOO_MANY_BONES);
+    CHECK(arx_pistoris_model_replace_skeleton(model, &oversized_skeleton, nullptr) == ARX_MODEL_TOO_MANY_BONES);
 
     ArxModelActionPointsInput oversized_action_points{};
     oversized_action_points.action_point_count = std::numeric_limits<std::size_t>::max();
-    CHECK(arx_pistoris_model_replace_action_points(model, &oversized_action_points) ==
+    CHECK(arx_pistoris_model_replace_action_points(model, &oversized_action_points, nullptr) ==
           ARX_MODEL_TOO_MANY_ACTION_POINTS);
 
     ArxModelVertex vertex{};
     ArxVertexIndex index = 42;
-    REQUIRE(arx_pistoris_model_add_vertex(model, &vertex, &index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_vertex(model, &vertex, &index, nullptr) == ARX_OK);
 
     ArxModelSelection selection{};
     selection.name = view("test");
     ArxSelectionId selection_id = ARX_INVALID_SELECTION_ID;
-    REQUIRE(arx_pistoris_model_add_selection(model, &selection, &selection_id) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_selection(model, &selection, &selection_id, nullptr) == ARX_OK);
     ArxModelSelectionMembersInput invalid_members{};
     invalid_members.vertex_count = 1;
-    CHECK(arx_pistoris_model_update_selection_members(model, selection_id, &invalid_members) ==
+    CHECK(arx_pistoris_model_update_selection_members(model, selection_id, &invalid_members, nullptr) ==
           ARX_INVALID_DATA_POINTER);
 
     ArxModelBone bone{};
     bone.name = {nullptr, 1};
     ArxBoneIndex bone_index = 42;
-    CHECK(arx_pistoris_model_add_bone(model, &bone, &bone_index) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_add_bone(model, &bone, &bone_index, nullptr) == ARX_INVALID_DATA_POINTER);
     CHECK(bone_index == 42);
     bone.name = {nullptr, 0};
-    CHECK(arx_pistoris_model_add_bone(model, &bone, &bone_index) == ARX_MODEL_BAD_BONE_NAME);
+    CHECK(arx_pistoris_model_add_bone(model, &bone, &bone_index, nullptr) == ARX_MODEL_BAD_BONE_NAME);
 
-    CHECK(arx_pistoris_model_bake_native(model, nullptr, nullptr, nullptr) == ARX_INVALID_OPTIONS);
+    CHECK(arx_pistoris_model_bake_native(model, nullptr, nullptr, nullptr, nullptr) == ARX_INVALID_OPTIONS);
     const ArxNativeModelBakeOptions bake_options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
-    CHECK(arx_pistoris_model_bake_native(model, &bake_options, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_bake_native(model, &bake_options, nullptr, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
     arx_pistoris_model_destroy(model);
   }
 
   TEST_CASE("Transforms Model positions through the C boundary") {
     ArxModel* model = nullptr;
-    REQUIRE(arx_pistoris_model_create(&model) == ARX_OK);
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
     ArxModelVertex vertex{{1.0f, 0.0f, 0.0f}};
     ArxVertexIndex index = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_vertex(model, &vertex, &index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_vertex(model, &vertex, &index, nullptr) == ARX_OK);
 
-    REQUIRE(arx_pistoris_model_scale(model, 2.0f) == ARX_OK);
-    REQUIRE(arx_pistoris_model_rotate(model, {2.0f, 0.0f, 0.0f, 2.0f}) == ARX_OK);
-    REQUIRE(arx_pistoris_model_translate(model, {3.0f, 4.0f, 5.0f}) == ARX_OK);
-    REQUIRE(arx_pistoris_model_copy_vertices(model, 0, 1, &vertex) == ARX_OK);
+    REQUIRE(arx_pistoris_model_scale(model, 2.0f, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_rotate(model, {2.0f, 0.0f, 0.0f, 2.0f}, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_translate(model, {3.0f, 4.0f, 5.0f}, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_vertices(model, 0, 1, &vertex, nullptr) == ARX_OK);
     CHECK(vertex.position.x == doctest::Approx(3.0f));
     CHECK(vertex.position.y == doctest::Approx(6.0f));
     CHECK(vertex.position.z == doctest::Approx(5.0f));
 
-    CHECK(arx_pistoris_model_scale(model, 0.0f) == ARX_INVALID_OPTIONS);
-    CHECK(arx_pistoris_model_rotate(model, {0.0f, 0.0f, 0.0f, 0.0f}) == ARX_INVALID_OPTIONS);
+    CHECK(arx_pistoris_model_scale(model, 0.0f, nullptr) == ARX_INVALID_OPTIONS);
+    CHECK(arx_pistoris_model_rotate(model, {0.0f, 0.0f, 0.0f, 0.0f}, nullptr) == ARX_INVALID_OPTIONS);
     arx_pistoris_model_destroy(model);
   }
 
   TEST_CASE("Applies Model reference and inference through the C boundary") {
     ArxModel* target = nullptr;
     ArxModel* reference = nullptr;
-    REQUIRE(arx_pistoris_model_create(&target) == ARX_OK);
-    REQUIRE(arx_pistoris_model_create(&reference) == ARX_OK);
+    REQUIRE(arx_pistoris_model_create(&target, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_create(&reference, nullptr) == ARX_OK);
 
     ArxModelBone target_root{view("root"), {1.0f, 2.0f, 3.0f}, ARX_INVALID_INDEX, 0.0f};
     ArxModelBone reference_root{view("root"), {4.0f, 5.0f, 6.0f}, ARX_INVALID_INDEX, 0.0f};
     ArxBoneIndex index = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_bone(target, &target_root, &index) == ARX_OK);
-    REQUIRE(arx_pistoris_model_add_bone(reference, &reference_root, &index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_bone(target, &target_root, &index, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_bone(reference, &reference_root, &index, nullptr) == ARX_OK);
     ArxModelBone target_other_root{view("other_root"), {7.0f, 8.0f, 9.0f}, ARX_INVALID_INDEX, 0.0f};
     ArxModelBone reference_other_root{view("other_root"), {10.0f, 11.0f, 12.0f}, ARX_INVALID_INDEX, 0.0f};
-    REQUIRE(arx_pistoris_model_add_bone(target, &target_other_root, &index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_bone(target, &target_other_root, &index, nullptr) == ARX_OK);
     REQUIRE(index == 1);
-    REQUIRE(arx_pistoris_model_add_bone(reference, &reference_other_root, &index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_bone(reference, &reference_other_root, &index, nullptr) == ARX_OK);
     REQUIRE(index == 1);
 
     ArxModelActionPoint action{view("attach"), {}, 0};
     ArxActionPointIndex target_action = ARX_INVALID_INDEX;
     ArxActionPointIndex reference_action = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_action_point(target, &action, &target_action) == ARX_OK);
-    REQUIRE(arx_pistoris_model_add_action_point(reference, &action, &reference_action) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_action_point(target, &action, &target_action, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_action_point(reference, &action, &reference_action, nullptr) == ARX_OK);
 
     ArxModelSelection selection{};
     selection.name = view("armor");
     ArxSelectionId target_selection = ARX_INVALID_SELECTION_ID;
     ArxSelectionId reference_selection = ARX_INVALID_SELECTION_ID;
-    REQUIRE(arx_pistoris_model_add_selection(target, &selection, &target_selection) == ARX_OK);
-    REQUIRE(arx_pistoris_model_add_selection(reference, &selection, &reference_selection) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_selection(target, &selection, &target_selection, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_selection(reference, &selection, &reference_selection, nullptr) == ARX_OK);
 
     ArxModelVertex vertex{};
     vertex.bone = 1;
     ArxVertexIndex vertex_index = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_add_vertex(target, &vertex, &vertex_index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_vertex(target, &vertex, &vertex_index, nullptr) == ARX_OK);
     const ArxBoneIndex target_bone = 1;
     const ArxModelSelectionMembersInput target_members{
         .vertices = &vertex_index,
@@ -645,7 +717,7 @@ f 1 2 3
         .bones = &target_bone,
         .bone_count = 1,
     };
-    REQUIRE(arx_pistoris_model_update_selection_members(target, target_selection, &target_members) == ARX_OK);
+    REQUIRE(arx_pistoris_model_update_selection_members(target, target_selection, &target_members, nullptr) == ARX_OK);
     const ArxBoneIndex reference_bone = 0;
     const ArxModelSelectionMembersInput reference_members{
         .bones = &reference_bone,
@@ -653,52 +725,56 @@ f 1 2 3
         .action_points = &reference_action,
         .action_point_count = 1,
     };
-    REQUIRE(arx_pistoris_model_update_selection_members(reference, reference_selection, &reference_members) == ARX_OK);
+    REQUIRE(arx_pistoris_model_update_selection_members(reference, reference_selection, &reference_members, nullptr) ==
+            ARX_OK);
 
     ArxModelReferenceOptions options = ARX_MODEL_REFERENCE_OPTIONS_INIT;
-    options.snap_bone_origins = 1U;
-    options.copy_bone_origin_selections = 1U;
+    options.snap_bone_positions = 1U;
+    options.copy_bone_selection_memberships = 1U;
     options.copy_action_point_selections = 1U;
-    REQUIRE(arx_pistoris_model_apply_reference(target, reference, &options) == ARX_OK);
+    REQUIRE(arx_pistoris_model_apply_reference(target, reference, &options, nullptr) == ARX_OK);
 
     std::array<ArxModelBone, 2> snapped{};
-    REQUIRE(arx_pistoris_model_copy_bones(target, 0, snapped.size(), snapped.data()) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_bones(target, 0, snapped.size(), snapped.data(), nullptr) == ARX_OK);
     CHECK(equal(snapped[0].position, reference_root.position));
     CHECK(equal(snapped[1].position, reference_other_root.position));
 
     std::size_t member_count = 0;
-    REQUIRE(arx_pistoris_model_selection_bone_count(target, target_selection, &member_count) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection_bone_count(target, target_selection, &member_count, nullptr) == ARX_OK);
     REQUIRE(member_count == 1);
     ArxBoneIndex selected_bone = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_copy_selection_bones(target, target_selection, 0, 1, &selected_bone) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_selection_bones(target, target_selection, 0, 1, &selected_bone, nullptr) == ARX_OK);
     CHECK(selected_bone == reference_bone);
-    REQUIRE(arx_pistoris_model_selection_action_point_count(target, target_selection, &member_count) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection_action_point_count(target, target_selection, &member_count, nullptr) ==
+            ARX_OK);
     REQUIRE(member_count == 1);
     ArxActionPointIndex selected_action = ARX_INVALID_INDEX;
-    REQUIRE(arx_pistoris_model_copy_selection_action_points(target, target_selection, 0, 1, &selected_action) ==
-            ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_selection_action_points(
+                target, target_selection, 0, 1, &selected_action, nullptr) == ARX_OK);
     CHECK(selected_action == target_action);
 
-    REQUIRE(arx_pistoris_model_infer_bone_origin_selections(target) == ARX_OK);
-    REQUIRE(arx_pistoris_model_copy_selection_bones(target, target_selection, 0, 1, &selected_bone) == ARX_OK);
+    REQUIRE(arx_pistoris_model_infer_bone_selection_memberships(target, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_selection_bones(target, target_selection, 0, 1, &selected_bone, nullptr) == ARX_OK);
     CHECK(selected_bone == target_bone);
-    REQUIRE(arx_pistoris_model_copy_selection_action_points(target, target_selection, 0, 1, &selected_action) ==
-            ARX_OK);
+    REQUIRE(arx_pistoris_model_copy_selection_action_points(
+                target, target_selection, 0, 1, &selected_action, nullptr) == ARX_OK);
     CHECK(selected_action == target_action);
 
-    REQUIRE(arx_pistoris_model_clear_selection_action_points(target, target_selection) == ARX_OK);
-    REQUIRE(arx_pistoris_model_selection_action_point_count(target, target_selection, &member_count) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clear_selection_action_points(target, target_selection, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection_action_point_count(target, target_selection, &member_count, nullptr) ==
+            ARX_OK);
     CHECK(member_count == 0);
 
     ArxModelBone reference_extra_root{view("extra_root"), {}, ARX_INVALID_INDEX, 0.0f};
-    REQUIRE(arx_pistoris_model_add_bone(reference, &reference_extra_root, &index) == ARX_OK);
+    REQUIRE(arx_pistoris_model_add_bone(reference, &reference_extra_root, &index, nullptr) == ARX_OK);
     options = ARX_MODEL_REFERENCE_OPTIONS_INIT;
     options.copy_action_point_selections = 1U;
-    REQUIRE(arx_pistoris_model_apply_reference(target, reference, &options) == ARX_OK);
-    REQUIRE(arx_pistoris_model_selection_action_point_count(target, target_selection, &member_count) == ARX_OK);
-    REQUIRE(member_count == 1);
-    REQUIRE(arx_pistoris_model_copy_selection_action_points(target, target_selection, 0, 1, &selected_action) ==
+    REQUIRE(arx_pistoris_model_apply_reference(target, reference, &options, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_selection_action_point_count(target, target_selection, &member_count, nullptr) ==
             ARX_OK);
+    REQUIRE(member_count == 1);
+    REQUIRE(arx_pistoris_model_copy_selection_action_points(
+                target, target_selection, 0, 1, &selected_action, nullptr) == ARX_OK);
     CHECK(selected_action == target_action);
 
     arx_pistoris_model_destroy(reference);

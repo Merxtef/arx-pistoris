@@ -17,7 +17,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
   ArxSoundSourceReferences* raw_sources = nullptr;
   const ArxAmbianceGlbImportOptions options = ARX_AMBIANCE_GLB_IMPORT_OPTIONS_INIT;
   const ArxReturnCode rc =
-      arx_pistoris_ambiance_import_glb(glb.data(), glb.size(), &options, &raw_ambiance, &raw_sources);
+      arx_pistoris_ambiance_import_glb(glb.data(), glb.size(), &options, &raw_ambiance, &raw_sources, nullptr);
   arx_fuzz::AmbianceHandle ambiance(raw_ambiance);
   arx_fuzz::SoundSourceReferencesHandle sources(raw_sources);
   if (rc != ARX_OK) {
@@ -25,9 +25,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     return 0;
   }
   if (!ambiance.get() || !sources.get()) std::abort();
-  if (arx_pistoris_ambiance_validate(ambiance.get()) != ARX_OK) std::abort();
+  if (arx_pistoris_ambiance_validate(ambiance.get(), nullptr) != ARX_OK) std::abort();
   std::size_t sound_count = 0;
-  if (arx_pistoris_ambiance_sound_count(ambiance.get(), &sound_count) != ARX_OK) std::abort();
+  if (arx_pistoris_ambiance_sound_count(ambiance.get(), &sound_count, nullptr) != ARX_OK) std::abort();
   arx_fuzz::validateSoundSourceReferences(sources.get(), sound_count);
   return 0;
 }

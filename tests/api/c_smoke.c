@@ -10,7 +10,7 @@ _Static_assert(sizeof(ArxVector2) == 8, "ArxVector2 ABI mismatch");
 _Static_assert(sizeof(ArxVector3) == 12, "ArxVector3 ABI mismatch");
 _Static_assert(sizeof(ArxResourceKind) == 1, "ArxResourceKind ABI mismatch");
 _Static_assert(sizeof(ArxLevelCorner) == 36, "ArxLevelCorner ABI mismatch");
-_Static_assert(sizeof(ArxLevelFace) == 128, "ArxLevelFace ABI mismatch");
+_Static_assert(sizeof(ArxLevelFace) == 124, "ArxLevelFace ABI mismatch");
 _Static_assert(offsetof(ArxLevelFace, texture) == 108, "ArxLevelFace ABI mismatch");
 _Static_assert(sizeof(ArxLevelNavSurfaceTriangle) == 12, "ArxLevelNavSurfaceTriangle ABI mismatch");
 _Static_assert((ARX_LEVEL_FACE_BITS_ALL & ARX_FACE_BIT_QUAD) == 0, "Level face mask includes QUAD");
@@ -20,6 +20,7 @@ _Static_assert((ARX_MODEL_FACE_BITS_ALL & ARX_FACE_BIT_QUAD) == 0, "Model face m
   _Static_assert(sizeof((type[]){initializer}) == sizeof(type), #type " initializer mismatch")
 
 ARX_ASSERT_INITIALIZER(ArxQuat, ARX_QUAT_IDENTITY_INIT);
+ARX_ASSERT_INITIALIZER(ArxError, ARX_ERROR_INIT);
 ARX_ASSERT_INITIALIZER(ArxNativeModelBakeOptions, ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxNativeAnimationBakeOptions, ARX_NATIVE_ANIMATION_BAKE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxNativeAmbianceBakeOptions, ARX_NATIVE_AMBIANCE_BAKE_OPTIONS_INIT);
@@ -28,6 +29,7 @@ ARX_ASSERT_INITIALIZER(ArxLlfWriteOptions, ARX_LLF_WRITE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxAmbianceGlbImportOptions, ARX_AMBIANCE_GLB_IMPORT_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxAmbianceGlbExportOptions, ARX_AMBIANCE_GLB_EXPORT_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxLevelVertexWeldOptions, ARX_LEVEL_VERTEX_WELD_OPTIONS_INIT);
+ARX_ASSERT_INITIALIZER(ArxModelVertexWeldOptions, ARX_MODEL_VERTEX_WELD_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxLevelPortalSnapOptions, ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxLevelNavSurfaceSourceOptions, ARX_LEVEL_NAV_SURFACE_SOURCE_OPTIONS_INIT);
 ARX_ASSERT_INITIALIZER(ArxLevelNavSurfaceGenOptions, ARX_LEVEL_NAV_SURFACE_GEN_OPTIONS_INIT);
@@ -59,19 +61,34 @@ int main(void) {
     return 101;
 
   ArxLevel* level = NULL;
-  if (arx_pistoris_level_create(&level) != ARX_OK || level == NULL) return 1;
+  if (arx_pistoris_level_create(&level, NULL) != ARX_OK || level == NULL) return 1;
 
   size_t vertex_count = 1;
-  if (arx_pistoris_level_vertex_count(level, &vertex_count) != ARX_OK) return 2;
-  if (vertex_count != 0 || arx_pistoris_level_copy_vertices(level, 0, 0, NULL) != ARX_OK) return 3;
+  {
+    ArxError error = ARX_ERROR_INIT;
+    const ArxLevelVertex vertex = {{0.0f, 0.0f, 0.0f}};
+    if (arx_pistoris_level_set_vertex(level, 0, vertex, &error) != ARX_INDEX_OUT_OF_RANGE) return 102;
+    if (error.code != ARX_INDEX_OUT_OF_RANGE || error.location.kind != ARX_ERROR_LOCATION_LEVEL ||
+        error.location.index != 0 || error.location.element_name.size != sizeof("vertex") - 1 ||
+        memcmp(error.location.element_name.data, "vertex", sizeof("vertex") - 1) != 0)
+      return 103;
+    if (arx_pistoris_level_vertex_count(level, &vertex_count, &error) != ARX_OK || error.code != ARX_OK ||
+        error.private_data != NULL)
+      return 104;
+    arx_pistoris_error_clear(&error);
+    arx_pistoris_error_clear(&error);
+  }
+
+  if (arx_pistoris_level_vertex_count(level, &vertex_count, NULL) != ARX_OK) return 2;
+  if (vertex_count != 0 || arx_pistoris_level_copy_vertices(level, 0, 0, NULL, NULL) != ARX_OK) return 3;
 
   {
     const char first_name[] = "room";
     ArxLevelRoom room = {{first_name, sizeof(first_name) - 1}};
     ArxRoomIndex index = ARX_INVALID_INDEX;
     ArxLevelRoom returned = {{NULL, 0}};
-    if (arx_pistoris_level_add_room(level, &room, &index) != ARX_OK || index != 0) return 4;
-    if (arx_pistoris_level_copy_rooms(level, index, 1, &returned) != ARX_OK) return 5;
+    if (arx_pistoris_level_add_room(level, &room, &index, NULL) != ARX_OK || index != 0) return 4;
+    if (arx_pistoris_level_copy_rooms(level, index, 1, &returned, NULL) != ARX_OK) return 5;
     if (returned.name.size != sizeof(first_name) - 1 ||
         memcmp(returned.name.data, first_name, sizeof(first_name) - 1) != 0)
       return 6;
@@ -79,14 +96,15 @@ int main(void) {
     const char second_name[] = "second";
     room.name.data = second_name;
     room.name.size = sizeof(second_name) - 1;
-    if (arx_pistoris_level_add_room(level, &room, &index) != ARX_OK || index != 1) return 7;
+    if (arx_pistoris_level_add_room(level, &room, &index, NULL) != ARX_OK || index != 1) return 7;
   }
 
   {
     const ArxLevelVertex vertices[] = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
     for (ArxVertexIndex expected = 0; expected < 3; ++expected) {
       ArxVertexIndex index = ARX_INVALID_INDEX;
-      if (arx_pistoris_level_add_vertex(level, vertices[expected], &index) != ARX_OK || index != expected) return 8;
+      if (arx_pistoris_level_add_vertex(level, vertices[expected], &index, NULL) != ARX_OK || index != expected)
+        return 8;
     }
 
     ArxLevelFace face = {0};
@@ -99,12 +117,12 @@ int main(void) {
     face.flags = ARX_FACE_BIT_DOUBLESIDED;
 
     ArxFaceIndex face_index = ARX_INVALID_INDEX;
-    if (arx_pistoris_level_add_face(level, &face, &face_index) != ARX_OK || face_index != 0) return 9;
+    if (arx_pistoris_level_add_face(level, &face, &face_index, NULL) != ARX_OK || face_index != 0) return 9;
 
     ArxLevelFace returned = {0};
     size_t face_count = 0;
-    if (arx_pistoris_level_face_count(level, &face_count) != ARX_OK ||
-        arx_pistoris_level_copy_faces(level, 0, 1, &returned) != ARX_OK)
+    if (arx_pistoris_level_face_count(level, &face_count, NULL) != ARX_OK ||
+        arx_pistoris_level_copy_faces(level, 0, 1, &returned, NULL) != ARX_OK)
       return 10;
     if (face_count != 1 || returned.flags != ARX_FACE_BIT_DOUBLESIDED || returned.room != 0) return 11;
   }
@@ -123,10 +141,10 @@ int main(void) {
     portal.vertices[3] = (ArxVector3){123.0f, 456.0f, 789.0f};
 
     ArxPortalIndex index = ARX_INVALID_INDEX;
-    if (arx_pistoris_level_add_portal(level, &portal, &index) != ARX_OK || index != 0) return 12;
+    if (arx_pistoris_level_add_portal(level, &portal, &index, NULL) != ARX_OK || index != 0) return 12;
 
     ArxLevelPortal returned = {0};
-    if (arx_pistoris_level_copy_portals(level, index, 1, &returned) != ARX_OK) return 13;
+    if (arx_pistoris_level_copy_portals(level, index, 1, &returned, NULL) != ARX_OK) return 13;
     if (returned.shape != ARX_PORTAL_TRIANGLE || returned.vertices[3].x != 0.0f || returned.vertices[3].y != 0.0f ||
         returned.vertices[3].z != 0.0f)
       return 14;
@@ -137,7 +155,7 @@ int main(void) {
     spawn.position = (ArxVector3){0.25f, 0.0f, 0.25f};
     spawn.rotation.w = 1.0f;
     spawn.is_usable = 1;
-    if (arx_pistoris_level_set_player_spawn(level, &spawn) != ARX_OK) return 15;
+    if (arx_pistoris_level_set_player_spawn(level, &spawn, NULL) != ARX_OK) return 15;
   }
 
   arx_pistoris_level_destroy(level);

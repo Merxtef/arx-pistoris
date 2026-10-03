@@ -11,6 +11,38 @@ policy.
 The API is pre-1.0. Source and ABI compatibility are not promised between
 minor releases.
 
+## Conversion Layers
+
+Pistoris keeps serialization, format carriers, and semantic editing separate:
+
+```text
+native bytes <-> native carrier <-> editing class <-> authoring projection
+```
+
+- **Native bytes** are encoded FTL, TEA, FTS, DLF, LLF, AMB, or CIN data.
+- **Native carriers** closely represent one decoded format. Read and write
+  them for binary inspection or compatible-JSON interchange.
+- **Editing classes** combine and validate data as a usable Model, Animation,
+  Level, Ambiance, or Cinematic. Their native `import` and `bake` operations
+  are the semantic boundary between carriers and editable resources.
+- **Authoring projections** always pass through an editing class rather than
+  preserving native layout. GLB covers Level, Model, Ambiance, and Cinematic,
+  with Animation authored through Model GLB. OBJ covers static Models only.
+
+Images and audio remain explicit sidecars. Import overloads with source outputs
+return caller-facing lookup references. Native imports provide canonical
+logical resource paths; external formats may preserve their authored lookup
+spelling. Bake and export results return encoded sidecar files for the caller
+to place. The library does not infer mounts or open those paths. A direct
+native-carrier conversion avoids an editing-class rebuild; generation,
+validation, rebasing, GLB, and OBJ work on the semantic resource and can
+therefore canonicalize native structure.
+
+Logical resource paths identify game resources and use portable `/`
+separators. Filesystem paths belong to the caller. The CLI is the supplied
+filesystem consumer: it resolves logical paths through mounts or relative to
+loose inputs and writes returned sidecars into the selected output layout.
+
 ## Build Targets and Headers
 
 The current CMake project provides build-tree integration:
@@ -23,54 +55,21 @@ The current CMake project provides build-tree integration:
 The C++ target defines `ARX_PISTORIS_CPP_API`, which the umbrella header
 requires. The produced C shared library is named `arx_pistoris`.
 
-Focused C++ headers are also available:
+Focused public headers are grouped as follows:
 
-```text
-arx_pistoris/ambiance.hpp
-arx_pistoris/ambiance/bake.hpp
-arx_pistoris/animation.hpp
-arx_pistoris/animation/bake.hpp
-arx_pistoris/binary.hpp
-arx_pistoris/cinematic.hpp
-arx_pistoris/cinematic/bake.hpp
-arx_pistoris/cinematic/glb.hpp
-arx_pistoris/cinematic/sound.hpp
-arx_pistoris/glb.hpp
-arx_pistoris/level.hpp
-arx_pistoris/level/bake.hpp
-arx_pistoris/level/images.hpp
-arx_pistoris/model.hpp
-arx_pistoris/model/bake.hpp
-arx_pistoris/model/glb.hpp
-arx_pistoris/model/obj.hpp
-arx_pistoris/native.hpp
-arx_pistoris/native/amb.hpp
-arx_pistoris/native/cin.hpp
-arx_pistoris/native/dlf.hpp
-arx_pistoris/native/ftl.hpp
-arx_pistoris/native/fts.hpp
-arx_pistoris/native/llf.hpp
-arx_pistoris/native/tea.hpp
-arx_pistoris/native/text.hpp
-arx_pistoris/paths.hpp
-arx_pistoris/runtime.hpp
-arx_pistoris/sound.hpp
-arx_pistoris/texture.hpp
-```
+| Concern | C++20 headers | C headers |
+| --- | --- | --- |
+| Editing resources | `ambiance.hpp`, `animation.hpp`, `cinematic.hpp`, `level.hpp`, `model.hpp` | `{ambiance,animation,cinematic,level,model}.h` and matching `types.h` files |
+| Resource conversion | `{ambiance,animation,cinematic,level,model}/bake.hpp`; `cinematic/glb.hpp`; `model/glb.hpp`; `model/obj.hpp`; `level/images.hpp` | `level/images.h` |
+| Locations and errors | `error.hpp`; `{ambiance,animation,cinematic,level,model}/location.hpp`; `glb/location.hpp`; `json/location.hpp`; `model/obj_location.hpp` | `base/error.h` |
+| Native carriers | `native.hpp`; `native/{amb,cin,dlf,ftl,fts,llf,tea}.hpp`; `native/location.hpp`; `native/text.hpp` | `native.h`; `native/text.h` |
+| Binary, paths, and media | `binary.hpp`, `paths.hpp`, `sound.hpp`, `texture.hpp`, `glb.hpp`, `cinematic/sound.hpp` | `binary.h`, `paths.h`, `sound.h`, `texture.h`, `glb.h`, and `paths/types.h` |
+| Runtime and shared values | `runtime.hpp`; `base/{image,indexed_view,location,math,result}.hpp` | `runtime.h`, `runtime/types.h`, and `base/{abi,audio,buffer,error,flags,image,indices,math,status,string_view}.h` |
+| Optional Level debug API | `debug/level.hpp`, `debug/level/diagnostics.hpp` | - |
 
-Shared public value types are available without including a resource API:
-
-```text
-arx_pistoris/base/flags.h
-arx_pistoris/base/audio.h
-arx_pistoris/base/image.h
-arx_pistoris/base/indices.h
-arx_pistoris/base/math.h
-arx_pistoris/base/math.hpp
-arx_pistoris/base/status.h
-arx_pistoris/base/string_view.h
-arx_pistoris/runtime/types.h
-```
+Paths in the table are below `arx_pistoris/`; braces list alternative file or
+directory names. Include the umbrella header unless a focused dependency is
+useful.
 
 `arx_pistoris/glb.h` and `arx_pistoris/glb.hpp` expose the inclusive supported
 range for Arx-units-per-GLB-unit options. Resource-specific defaults remain on
@@ -151,30 +150,177 @@ JPEG, BMP, or TGA data. Empty, malformed, and unrecognized data returns
 same validation and return the detected format, dimensions, and component
 count. Image width and height are each limited to 8192 pixels.
 
-## Return Codes
+## Results and Return Codes
 
-Fallible operations return `ArxReturnCode`. `ARX_OK` is zero. Always check the
-return code before using output values.
+The C++ editing and conversion API returns `Result<T, Location>`. Public aliases
+name the relevant location domain, including `LevelResult<T>`, `ModelResult<T>`,
+`AnimationResult<T>`, `AmbianceResult<T>`, `CinematicResult<T>`,
+`GlbResult<T>`, `ObjResult<T>`, and the native-format results such as
+`FtlResult<T>` and `TeaResult<T>`. Native byte readers use distinct aliases
+such as `FtlBinaryResult<T>` and `TeaBinaryResult<T>`; carrier validation and
+writing use `FtlResult<T>` and `TeaResult<T>`. `Result<void, Location>`
+represents a fallible operation without a value.
 
-C++ functions returning `ArxReturnCode` are `noexcept`: allocation failure
+Test a result before reading it. `code()` returns `ARX_OK` on success or the
+stable `ArxReturnCode` category on failure. `error()` then exposes the same
+code, an optional typed location, and optional human-readable detail. Locations
+identify the relevant resource element, semantic native-format element, GLB
+object, or OBJ source line. Editing and conversion failures use the narrowest
+stable location available; exception translation and violated internal
+invariants may be unlocated. Error data is immutable. Detail text is diagnostic,
+not a machine-readable contract. Code constructing a failed generic `Result`
+must pass either a location or `std::nullopt` explicitly.
+
+Location indices are zero-based. `kNoInputIndex` and `kNoElementIndex` mark
+index fields that do not apply or cannot be identified. `ResourceLocation`
+describes an editing resource: `resource_path` identifies the owning or
+referenced resource when known, `input_index` identifies an entry in a composite
+input array, `element` selects the kind of data, and `index`/`subindex` identify
+that element and an optional nested item. `label` preserves a useful authored
+name when one is available. Empty identity strings mean that the caller did not
+supply that identity; they do not replace the numeric location.
+
+`CinematicLocation` uses `sound_handle` for sound and sound-encoding failures,
+and `language_id` when a language is known. Their unavailable values are
+`kNoSoundHandle` and `kInvalidLanguageId`. Use the `SoundHandle` helpers to
+inspect a reported handle; do not reinterpret its representation. Other
+Cinematic elements use the ordinary `index` and `subindex` fields.
+
+`NativeLocation` uses `element`, `index`, and `subindex` for the corresponding
+native record and nested item; `field` names the relevant structure member
+when one can be identified. `NativeBinaryLocation` additionally identifies the
+stored or decoded byte region, byte offset, and requested byte count. A
+`byte_offset` of `kNoElementIndex` means that the failure was identified after
+the bytes were read, such as during canonicalization or validation. A DLF binary
+location can name either a DLF record or its embedded LLF record.
+
+`GlbLocation` locates the relevant GLB element and may further provide its
+authored `label` and failing `property`.
+For a primitive, `index` selects the mesh and `subindex` selects its primitive.
+For an animation channel or sampler, `index` selects the animation and
+`subindex` selects the nested channel or sampler. Other GLB elements use
+`index` for their top-level array and leave `subindex` unset unless documented
+by that operation.
+`ObjLocation::line` is one-based; zero means that no source line applies.
+`source_index` selects a material-library input and is `kNoInputIndex` for the
+OBJ document itself. Results whose work spans multiple resource kinds expose a
+`std::variant` location; inspect its active alternative before interpreting the
+indices.
+
+Within Pistoris operations, the site that originates a typed failure emits one
+`ARX_LOG_DEBUG` source trace after recording the available code, operation,
+typed location, and detail. Constructing a generic `Result::failure` directly is
+silent, as are propagation, remapping, and resource-identity enrichment.
+Result-returning operations do not emit user-facing error logs: the caller
+decides whether a returned failure is fatal, recoverable, or ignored. Use
+`describeError(*result.error())` for the stable code, typed location, and
+diagnostic detail in one human-readable string. If storing the complete error
+itself fails, Pistoris emits a minimal debug trace and returns an allocation or
+internal failure without a location. Low-level utilities that return only
+`ArxReturnCode` do not expose typed location data.
+The typed `errorElementName(location.element)` overloads return the same
+readable element labels exposed by `ArxErrorLocation::element_name` in the C
+API.
+
+C++ editing and conversion entry points are `noexcept`: allocation failure
 returns `ARX_BAD_ALLOC`, while an unexpected internal exception returns
-`ARX_INTERNAL_ERROR` and emits one error log. Constructors, copying, assignment,
-and value-returning C++ helpers follow normal C++ allocation behavior and may
-throw.
+`ARX_INTERNAL_ERROR` and emits one debug source trace. Constructors and copying follow
+normal C++ allocation behavior and may throw. Move construction and move
+assignment of the five editing classes are `noexcept`.
 
 ```cpp
-ArxReturnCode rc = level.validate();
-if (rc != ARX_OK) {
-  throw std::runtime_error(pistoris::errorString(rc));
+const pistoris::LevelResult<void> result = level.validate();
+if (!result) {
+  std::fprintf(stderr, "%s\n", pistoris::describeError(*result.error()).c_str());
+  if (result.error()->location()) {
+    const pistoris::LevelLocation& location = *result.error()->location();
+    // Inspect location.element, location.index, and location.label as needed.
+  }
 }
 ```
 
+Dereference a successful value result or move its value into caller-owned
+storage. Optional report and source-path output pointers are assigned only when
+the operation succeeds.
+
+```cpp
+auto imported = pistoris::Level::importGlb(glb_bytes);
+if (!imported) {
+  return imported.code();
+}
+pistoris::Level level = std::move(*imported);
+```
+
+The C ABI returns `ArxReturnCode`; `ARX_OK` is zero. Fallible resource,
+conversion, and native-format functions accept an optional trailing
+`ArxError*`. Initialize caller-owned storage with `ARX_ERROR_INIT`. On failure,
+the snapshot repeats the code and, when available, identifies the location,
+element name, indices, authored identity, binary field, JSON pointer, or source
+line. On success, the same object is cleared. Its string views remain valid
+until the next operation receiving that object or `arx_pistoris_error_clear`.
+Do not copy an initialized `ArxError`; clear it before its lifetime ends.
+Passing `NULL` requests only the return code.
+
+Inspect location fields only when `location.kind` is not
+`ARX_ERROR_LOCATION_NONE`. `element` is a stable `ArxErrorElement`; use its
+symbolic values rather than assuming that it matches a C++ enum ordinal.
+`input_index`, `index`, `subindex`, and `byte_offset` are zero-based and use
+`SIZE_MAX` when unavailable. Cinematic sound and language locations use
+`sound_handle` and `language_id`; their unavailable values are
+`ARX_NO_SOUND_HANDLE` and `ARX_INVALID_LANGUAGE_ID`. OBJ source lines are
+one-based and use zero when unavailable. `requested_bytes` is nonzero only when
+a binary read could not consume the requested field. A JSON pointer with
+`{NULL, 0}` is unavailable; a non-null view of length zero identifies the
+document root.
+
 ```c
-ArxReturnCode rc = arx_pistoris_level_validate(level);
+ArxError error = ARX_ERROR_INIT;
+ArxReturnCode rc = arx_pistoris_level_validate(level, &error);
 if (rc != ARX_OK) {
   fprintf(stderr, "%s\n", arx_pistoris_strerror(rc));
+  if (error.detail.size != 0) {
+    fwrite(error.detail.data, 1, error.detail.size, stderr);
+    fputc('\n', stderr);
+  }
+  if (error.location.kind != ARX_ERROR_LOCATION_NONE) {
+    fputs("location: ", stderr);
+    if (error.location.element_name.size != 0) {
+      fwrite(error.location.element_name.data, 1,
+             error.location.element_name.size, stderr);
+    } else {
+      fprintf(stderr, "element=%d", (int)error.location.element);
+    }
+    if (error.location.index != SIZE_MAX) {
+      fprintf(stderr, " index=%zu", error.location.index);
+    }
+    if (error.location.field.size != 0) {
+      fputs(" field=", stderr);
+      fwrite(error.location.field.data, 1, error.location.field.size, stderr);
+    }
+    if (error.location.label.size != 0) {
+      fputs(" label=", stderr);
+      fwrite(error.location.label.data, 1, error.location.label.size, stderr);
+    }
+    fputc('\n', stderr);
+    if (error.location.resource_path.size != 0) {
+      fprintf(stderr, "resource: ");
+      fwrite(error.location.resource_path.data, 1,
+             error.location.resource_path.size, stderr);
+      fputc('\n', stderr);
+    }
+  }
 }
+arx_pistoris_error_clear(&error);
 ```
+
+### Editing Object Lifetime
+
+`Level`, `Model`, `Animation`, `Ambiance`, and `Cinematic` are deep-copyable and
+have `noexcept` move operations. A moved-from object remains destructible,
+assignable, and resettable but is disengaged: read-only inspection returns
+empty or neutral values, clear operations are no-ops, and fallible operations
+return `ARX_INVALID_STATE`. Copying a disengaged object preserves that state.
+Call `reset()` to create fresh empty state before reusing it.
 
 Public code ranges are grouped by concern:
 
@@ -207,15 +353,13 @@ The C++ API exposes native carriers as value types:
 
 std::vector<std::uint8_t> source = /* caller-owned file bytes */;
 
-pistoris::Fts fts;
-ArxReturnCode rc = pistoris::readFts(source, fts);
-if (rc != ARX_OK) {
-  return rc;
+auto fts = pistoris::readFts(source);
+if (!fts) {
+  return fts.code();
 }
 
-std::vector<std::uint8_t> encoded;
-rc = pistoris::writeFts(fts, encoded);          // compressed
-rc = pistoris::writeFts(fts, encoded, false);   // raw
+auto compressed = pistoris::writeFts(*fts);
+auto raw = pistoris::writeFts(*fts, false);
 ```
 
 `readFtl`, `readFts`, `readDlf`, and `readLlf` accept raw and supported PKWARE
@@ -228,11 +372,25 @@ constant settings are stored as zero. AMB validation requires this form.
 `writeAmb` emits version 1.001 with only game-observable flag bits.
 `readDlf` can return embedded lighting separately.
 
-Native carrier resource references use the spelling the game uses for lookup,
-not the exact serialized spelling. Readers lowercase ASCII, use `/` separators,
+FTS binary carriers do not contain a semantic level number. The
+arx-convert-compatible JSON adapter exposes that required schema value
+separately: `toFtsJson` accepts a level number, while `fromFtsJson` returns
+`FtsJsonImport` containing both `fts` and `level`. The C API mirrors this with
+the `level` and `out_level` arguments of `arx_pistoris_fts_to_json` and
+`arx_pistoris_fts_from_json`.
+
+Native carrier resource references store the field-local value produced by the
+engine's normalization, not the exact serialized spelling or the complete path
+later assembled by a loader. Readers lowercase ASCII, use `/` separators,
 resolve `.` and `..`, and remove a lookup suffix where the engine does. Writers
 require this canonical carrier form and reconstruct wire-only spelling such as
-protective trailing dots.
+protective trailing dots. Carrier fields do not absorb prefixes, filenames, or
+extensions added later during lookup. When Pistoris exposes construction of a
+complete logical resource path, that operation belongs to `pistoris::paths`.
+For example, a DLF carrier stores the normalized scene directory while
+`ftsFromDlfScene` resolves that directory against `game/` and appends
+`fast.fts`. A leading `..` may consume `game/`; paths that would remain above
+the resource root are invalid.
 
 `Level`, `Model`, `Animation`, `Ambiance`, and `Cinematic` store semantic text
 as UTF-8. Native import uses the binary text classification above: ASCII and
@@ -258,19 +416,22 @@ The C ABI exposes opaque `ArxAmb`, `ArxCin`, `ArxFtl`, `ArxTea`, `ArxFts`,
 #include "arx_pistoris/native.h"
 
 ArxFts* fts = NULL;
-ArxReturnCode rc = arx_pistoris_fts_read(data, size, &fts);
+ArxError error = ARX_ERROR_INIT;
+ArxReturnCode rc = arx_pistoris_fts_read(data, size, &fts, &error);
 if (rc != ARX_OK) {
+  arx_pistoris_error_clear(&error);
   return rc;
 }
 
 uint8_t* encoded = NULL;
 size_t encoded_size = 0;
-rc = arx_pistoris_fts_write(fts, 1, &encoded, &encoded_size);
+rc = arx_pistoris_fts_write(fts, 1, &encoded, &encoded_size, &error);
 if (rc == ARX_OK) {
   /* consume encoded */
   arx_pistoris_free_bytes(encoded);
 }
 arx_pistoris_fts_destroy(fts);
+arx_pistoris_error_clear(&error);
 ```
 
 For DLF, `arx_pistoris_dlf_read` returns embedded LLF through a separate
@@ -284,6 +445,11 @@ CIN does not. The umbrella headers re-export those declarations. OBJ and GLB
 conversion use the coherent Model surface; GLB accepts and returns Animation
 sidecars.
 
+The C++ JSON functions name their carrier format explicitly: `toAmbJson` and
+`fromAmbJson`, `toDlfJson` and `fromDlfJson`, and likewise for FTL, FTS, LLF,
+and TEA. The C and Python APIs provide the same operations under their existing
+format-specific function names and modules.
+
 Native writers serialize canonical carrier resource paths. Writing succeeds
 with a warning when a reference resolves outside Libertatis' default loose
 resource roots (`editor`, `game`, `graph`, `localisation`, `misc`, `sfx`, and
@@ -294,9 +460,17 @@ JSON is an arx-convert compatibility serialization of native carriers. It is
 not a separate Pistoris intermediate and is not promised to preserve data that
 the compatibility schema cannot represent. This includes AMB JSON through the
 same native carrier API used by FTL, TEA, FTS, DLF, and LLF.
+
+FTS `uniqueHeaders` records contain legacy source checks rather than runtime
+Level data. Binary readers validate their count and framing before discarding
+the records. When `uniqueHeaders` is present in JSON input, readers validate
+its field types and sizes before discarding it. Binary writers emit no source
+checks, and JSON writers emit an empty `uniqueHeaders` array.
+
 JSON text is always UTF-8. A JSON conversion's `NativeTextMode` controls only
 decoding text from the source carrier or encoding text into the destination
-carrier.
+carrier. LLF JSON has no native text fields and therefore does not accept a
+text mode.
 
 ## Textures and Native Sidecars
 
@@ -331,7 +505,8 @@ Native import supplies the canonical lookup identity, but no physical suffix
 hint or image bytes. The native format does not preserve which file extension
 won the engine's lookup. The library does not search for or read referenced
 image files. A caller can attach encoded image data with `setTextureImage`
-before baking.
+before baking. `setTexturePath` and `setTextureExternalImageExtension` update
+those fields without copying the encoded image payload.
 
 Model and Level import overloads can also return texture source paths. The
 returned vector has one entry per texture in `TextureIndex` order. Native
@@ -380,13 +555,18 @@ combines `SoundKind` with a per-kind `SoundIndex`; use `soundHandle`,
 `SoundHandle` invalidates together with `SoundIndex` when a sound collection is
 edited.
 
+Animation and Ambiance `setSoundPath` update a sound identity without copying
+its encoded audio. Cinematic exposes the equivalent operation by
+`SoundHandle`.
+
 `LanguageId` identifies a registered speech language. Value `kSoundEffects`
 (`ARX_SOUND_EFFECTS_LANGUAGE_ID`) is reserved for effect encodings. Effect
 sounds can have one encoding under that value; speech sounds can have one
 encoding per registered nonzero language. Logical sound identities do not
 require encoded audio, and speech paths can exist before any language is
-registered. Language names are portable identifiers and must be unique by
-case-insensitive path identity.
+registered. Language names are stored as lowercase portable identifiers and
+must be unique by case-insensitive path identity. Editing and lookup accept
+any ASCII letter case.
 
 ## Level
 
@@ -404,16 +584,18 @@ anonymous because byte conversion has no filesystem context.
 ### Import and Export
 
 ```cpp
-pistoris::Level level;
-ArxReturnCode rc = pistoris::Level::importNative(level, fts, &llf, &dlf);
-if (rc != ARX_OK) {
-  return rc;
+auto imported = pistoris::Level::importNative(fts, &llf, &dlf);
+if (!imported) {
+  return imported.code();
 }
+pistoris::Level level = std::move(*imported);
 
-std::vector<std::uint8_t> glb;
 pistoris::Level::GlbExportOptions glb_options;
 glb_options.arx_units_per_glb_unit = 100.0f;
-rc = level.exportGlb(glb, glb_options);
+auto glb = level.exportGlb(glb_options);
+if (!glb) {
+  return glb.code();
+}
 ```
 
 Level GLB export can attach static Model previews to matching entities:
@@ -421,7 +603,7 @@ Level GLB export can attach static Model previews to matching entities:
 ```cpp
 const std::array<const pistoris::Model*, 2> previews = {&human, &spider};
 ArxLevelModelPreviewReport preview_report;
-rc = level.exportGlb(glb, previews, glb_options, &preview_report);
+auto glb = level.exportGlb(previews, glb_options, &preview_report);
 ```
 
 Each non-anonymous Model is mapped from its FTL resource identity to an entity
@@ -437,8 +619,10 @@ Level GLB can preserve a complete, nonempty room-distance collection when
 every Level room has exported geometry. It can also preserve anchor
 connections. Both use opaque, best-effort round-trip data. Room distances are
 restored or discarded as a complete set when the stored room or portal
-structure no longer matches. Missing or discarded data remains absent; import
-never runs generation implicitly.
+structure no longer matches. Import never runs generation implicitly. The
+editing API nevertheless exposes one value for every unordered pair of
+distinct rooms. An unavailable pair has distance `-1` and invalid portal
+indices.
 The exact authored hierarchy is documented in the
 [Level authoring reference](authoring/LEVEL_REFERENCE.md).
 
@@ -455,14 +639,15 @@ current Level geometry, and an Arx-unit projection offset. Minimap projection
 uses 25 Arx units per image pixel. Image setters require non-empty, valid data;
 use the corresponding clear function to remove an image.
 
-`renderMinimapPng` projects the stored rectangle from the referenced Level
-bounds. Its Arx-unit projection offset and fill color are caller supplied.
-Projection-based setting and rendering require referenced Level geometry.
-`renderGameMinimapPng` performs the same projection and overwrites the final
-one-pixel perimeter with its caller-supplied border color without changing the
-image dimensions.
-`renderCompactMinimapPng` chooses an Arx-unit offset for a tight projection
-without leading padding and returns both that offset and the PNG.
+`renderMinimap` projects the stored rectangle from the referenced Level bounds
+and returns both the effective Arx-unit projection offset and the encoded
+image. Plain mode derives a tight projection without leading padding when no
+offset is supplied, or uses an explicit offset when one is supplied. Game mode
+requires an explicit offset and overwrites the final one-pixel perimeter with
+the requested border color; an omitted border color selects white. A border is
+invalid in plain mode. Output may be PNG, BMP, or TGA; JPEG is accepted as
+input but is not an output format. Projection-based setting and rendering
+require referenced Level geometry.
 
 `generateMinimap` stores a `640 x 640` PNG sampled from the full `0..16000`
 Level X/Z domain at 25 Arx units per pixel. The default palette uses dark blue
@@ -470,7 +655,7 @@ foreground, lighter blue background, light brown water, cyan lava, and a
 five-pixel white halo. The options overload can replace those colors, provide
 sampler images, or change the halo. Rendering projects the image from the
 top-left anchor at the minimum referenced X and maximum referenced Z, then
-applies the requested offset. This can crop or pad the rendered PNG, so its
+applies the requested offset. This can crop or pad the rendered image, so its
 dimensions can differ from the stored image. Each sampler uses its color
 directly when its image is empty; otherwise its image is stretched to
 `640 x 640` and multiplied by that color. Sampler alpha is ignored and the
@@ -481,18 +666,18 @@ halo uses square pixel-distance rings around all occupied pixels; radius zero
 disables it. Failed generation leaves the stored minimap unchanged.
 
 The optional loading screen stores an encoded PNG, JPEG, BMP, or TGA image.
-`renderLoadingScreenPng` produces the normal `320 x 390` layout and
-`renderFullscreenLoadingScreenPng` produces the `640 x 480` fullscreen layout.
-`transcodeLoadingScreenPng` preserves the source dimensions while producing
-PNG.
+`renderLoadingScreen` can preserve the source dimensions, produce the normal
+`320 x 390` layout, or produce the `640 x 480` fullscreen layout. Output may be
+PNG, BMP, or TGA.
 
 The focused `level/images` API performs the same output operations on detached
 encoded images. It can reproject a minimap between two Arx-unit projection
 offsets, optionally with the game-layout one-pixel border, or render a loading
 screen at original, normal, or fullscreen dimensions without a `Level`
 instance. `projectionOffsetFromMiniOffset` and
-`miniOffsetFromProjectionOffset` convert the values used by `mini_offsets.ini`;
-the C API exposes equivalent functions.
+`miniOffsetFromProjectionOffset` convert the values used by `mini_offsets.ini`.
+`projectionOffsetForLevel` additionally applies the offsets the engine uses for
+levels with built-in overrides. The C API exposes equivalent functions.
 
 Level GLB preserves a valid minimap image and placement. Invalid or ambiguous
 minimap payloads are omitted with a warning. Loading screens have no Level GLB
@@ -503,21 +688,27 @@ render them and choose destinations with
 
 ### Reading Collections
 
-Level collections use caller-owned count-and-copy access. Query the count,
-allocate a caller-owned array, and copy the requested range:
+The C++ API exposes named read-only random-access views. Values with only scalar
+or fixed-size fields are independent copies; string and encoded-media members
+borrow from Level. Nested collections return a result because the parent index
+is checked.
 
 ```cpp
-std::vector<ArxLevelRoom> rooms(level.roomCount());
-if (!rooms.empty()) {
-  rc = level.copyRooms(0, rooms.size(), rooms.data());
+for (const ArxLevelRoom room : level.rooms()) {
+  // Inspect room.
+}
+
+auto perimeter = level.zonePerimeter(zone);
+if (!perimeter) {
+  return perimeter.code();
 }
 ```
 
-The C ABI uses the same count-and-copy model:
+The C ABI uses count-and-copy access:
 
 ```c
 size_t room_count = 0;
-ArxReturnCode rc = arx_pistoris_level_room_count(level, &room_count);
+ArxReturnCode rc = arx_pistoris_level_room_count(level, &room_count, NULL);
 if (rc != ARX_OK) {
   return rc;
 }
@@ -527,15 +718,13 @@ if (room_count != 0 && rooms == NULL) {
   return ARX_BAD_ALLOC;
 }
 if (room_count != 0) {
-  rc = arx_pistoris_level_copy_rooms(level, 0, room_count, rooms);
+  rc = arx_pistoris_level_copy_rooms(level, 0, room_count, rooms, NULL);
 }
 free(rooms);
 ```
 
-Copied scalar and fixed-size fields are independent values. `ArxStringView`
-and `ArxEncodedImageView` members borrow from Level. Any non-const Level
-operation invalidates all previously returned borrowed views and collection
-indices.
+Every non-const Level operation invalidates collection views, their iterators,
+borrowed members, and collection indices.
 
 Indices are zero-based positions in the current collection, not persistent
 object identities. An add operation returns an index valid for the resulting
@@ -545,8 +734,14 @@ Level state. Do not retain indices across another editing operation.
 
 Level provides add, set, remove, clear, and replacement operations for all
 authored data. Mesh operations maintain room assignments and corner colors.
-Room- or portal-topology changes discard room distances; ordinary geometry
-edits do not.
+Every public face exposes a color for each corner. When no lighting has been
+authored, those colors are neutral gray (`0.5, 0.5, 0.5`); this does not expose
+whether the Level uses compact default storage internally. `resetCornerColors`
+restores all corners to that default.
+Room- or portal-topology changes reset room distances to their unavailable
+sentinels; ordinary geometry edits do not. Clearing room distances has the
+same semantic effect. Setting one pair leaves the values of all other pairs
+unchanged.
 Explicit compaction removes unreferenced vertices or textures.
 
 Convenience operations include:
@@ -600,10 +795,12 @@ copying, editing, generation, and native baking functions.
 
 ```c
 ArxLevel* level = NULL;
+ArxError error = ARX_ERROR_INIT;
 ArxReturnCode rc =
     arx_pistoris_level_import_native(
-        fts, llf, dlf, &level, NULL, ARX_NATIVE_TEXT_AUTO);
+        fts, llf, dlf, &level, NULL, ARX_NATIVE_TEXT_AUTO, &error);
 if (rc != ARX_OK) {
+  arx_pistoris_error_clear(&error);
   return rc;
 }
 
@@ -612,12 +809,13 @@ ArxLevelGlbExportOptions options =
 uint8_t* glb = NULL;
 size_t glb_size = 0;
 rc = arx_pistoris_level_export_glb(
-    level, NULL, 0, &options, NULL, &glb, &glb_size);
+    level, NULL, 0, &options, NULL, &glb, &glb_size, &error);
 if (rc == ARX_OK) {
   /* consume glb */
   arx_pistoris_free_bytes(glb);
 }
 arx_pistoris_level_destroy(level);
+arx_pistoris_error_clear(&error);
 ```
 
 Level native bake option pointers are required.
@@ -643,58 +841,73 @@ The inventory icon is optional project data rather than FTL, OBJ, GLB, or JSON
 content. `inventoryIcon` exposes the encoded PNG, JPEG, BMP, or TGA image and
 its stored inventory footprint. Empty input is rejected; use
 `clearInventoryIcon` to remove the icon. `setInventoryIcon` accepts an explicit
-one-to-three-slot footprint or `-1` to derive each axis from the image. The
-default derives both axes, retaining a native footprint within 3x3 and fitting
-larger images proportionally to three slots on their longest axis. Deriving one
-axis uses the explicit other axis and the source aspect ratio. The resolved
-one-to-three-slot footprint is stored with the unchanged encoded image.
+one-to-three-slot footprint or an unspecified dimension. In C++, unspecified
+dimensions are `std::nullopt`; the C option structs use zero. With neither axis
+specified, the footprint is derived from the image, retaining a native
+footprint within 3x3 and fitting larger images proportionally to three slots on
+their longest axis. With one axis specified, the other follows the source
+aspect ratio. The resolved footprint is stored with the unchanged encoded
+image.
 
-`renderIconPng` and `renderIconBmp` return a detached image whose dimensions
-are exactly 32 pixels per resolved slot, or empty output when the Model has no
-icon. A zero render dimension uses the stored value, `-1` derives that axis
-from the source image, and values from one to three are explicit. Two derived
-axes preserve the native footprint when it fits, otherwise the longest axis
-becomes three slots.
+`renderIcon` returns a detached PNG, BMP, or TGA whose dimensions are exactly
+32 pixels per resolved slot, or empty output when the Model has no icon. With
+neither render dimension specified, it uses the stored footprint. With one
+specified, it derives the other from the source aspect ratio; with both
+specified, it uses both. PNG is the default output format. JPEG output is not
+supported because inventory-icon rendering can produce transparency.
 `InventoryIconLayout` places aspect-preserving content at the center or one of
 the four corners, or stretches it to fill the footprint. Center is the default.
 Unused pixels are transparent. RGB BMP input applies exact-black color keying
 and the engine default morphological antialiasing before either output
-encoding. BMP output retains the projected alpha channel. The stored image is
-unchanged.
+encoding. BMP and TGA output retain the projected alpha channel. The stored
+image is unchanged.
 
 ### Native, OBJ, and GLB Conversion
 
 ```cpp
-pistoris::Model model;
-ArxReturnCode rc = pistoris::Model::importNative(model, ftl);
-if (rc != ARX_OK) {
-  return rc;
+pistoris::FtlResult<pistoris::Model> imported =
+    pistoris::Model::importNative(ftl);
+if (!imported) {
+  return imported.code();
+}
+pistoris::Model model = std::move(*imported);
+
+if (auto result = model.setResourcePath("model:npc:human_base"); !result) {
+  return result.code();
 }
 
-rc = model.setResourcePath("model:npc:human_base");
-if (rc != ARX_OK) {
-  return rc;
+auto baked = model.bakeNativeBundle({});
+if (!baked) {
+  return baked.code();
 }
 
-pistoris::NativeModelBundle baked;
-rc = model.bakeNativeBundle({}, baked);
+auto obj = model.exportObj("human_base");
+if (!obj) {
+  return obj.code();
+}
 
-pistoris::ObjBundle obj;
-rc = model.exportObj("human_base", obj);
+auto static_model = pistoris::Model::importObj(obj->text, obj->mtl);
+if (!static_model) {
+  return static_model.code();
+}
 
-pistoris::Model static_model;
-rc = pistoris::Model::importObj(static_model, obj.text, obj.mtl);
-
-std::vector<std::uint8_t> glb;
-rc = model.exportGlb(glb);
+auto glb = model.exportGlb();
+if (!glb) {
+  return glb.code();
+}
 
 pistoris::Model::LevelPreviewGlbOptions preview_options;
 preview_options.class_path = "model:npc:human_base";
 preview_options.asset_name = "human";
-rc = model.exportLevelPreviewGlb(glb, preview_options);
+auto preview = model.exportLevelPreviewGlb(preview_options);
+if (!preview) {
+  return preview.code();
+}
 
-pistoris::Model authored;
-rc = pistoris::Model::importGlb(authored, glb);
+auto authored = pistoris::Model::importGlb(*glb);
+if (!authored) {
+  return authored.code();
+}
 ```
 
 `ObjBundle::text` and `ObjBundle::mtl` contain the main OBJ and generated MTL.
@@ -789,29 +1002,28 @@ to `asset` and is normalized for the Level entity grammar.
 
 ### Reading and Editing
 
-Model uses caller-owned count-and-copy access like Level. Selection records
-are addressed by stable `SelectionId` values and expose a name plus an optional
-leading position and bone. Membership is queried and copied separately for
-geometry vertices, bones, action points, and the implicit origin.
+Model exposes named read-only random-access views. Selection records are
+addressed by stable `SelectionId` values and expose a name plus an optional
+leading position and bone. Membership uses checked nested views for geometry
+vertices, bones, and action points; origin membership is a scalar query.
 
 ```cpp
-std::vector<ArxModelBone> bones(model.boneCount());
-if (!bones.empty()) {
-  rc = model.copyBones(0, bones.size(), bones.data());
+for (const ArxModelBone bone : model.bones()) {
+  // Inspect bone.
 }
 
-std::size_t member_count = 0;
-rc = model.selectionVertexCount(selection_id, member_count);
-std::vector<pistoris::VertexIndex> members(member_count);
-if (rc == ARX_OK && !members.empty()) {
-  rc = model.copySelectionVertices(
-      selection_id, 0, members.size(), members.data());
+auto members = model.selectionVertices(selection_id);
+if (!members) {
+  return members.code();
+}
+for (pistoris::VertexIndex vertex : *members) {
+  // Inspect membership.
 }
 ```
 
-Copied scalar fields are independent values. String and encoded-image members
-are borrowed views into Model. Every non-const operation invalidates borrowed
-views and collection indices. Selection IDs remain stable until their
+View elements are returned by value. String and encoded-image members inside
+those values borrow from Model. Every non-const operation invalidates views,
+their iterators, borrowed members, and collection indices. Selection IDs remain stable until their
 selection is removed. Replacing or resetting Model invalidates all selection
 IDs. Removing a selection clears its memberships without changing any other
 selection ID.
@@ -821,6 +1033,9 @@ transaction. `{nullptr,0}` leaves that category unchanged. A non-null pointer
 with count zero clears it. Dedicated clear functions are also available.
 Object setters preserve existing memberships, while replacing an entire mesh,
 skeleton, or action-point collection clears the matching membership category.
+Replacing or clearing a skeleton also unbinds every vertex, the origin, every
+action point, and every selection leading vertex from the old bones. Their
+positions and non-bone selection memberships remain unchanged.
 
 Bone names are unique after ASCII uppercase-to-lowercase normalization. A
 nonempty skeleton is an ordered forest: it may have multiple roots, and every
@@ -844,12 +1059,16 @@ returns contiguous indices for the appended vertices.
 Level and Model faces are triangles; submitted `QUAD` bits are stripped because
 that bit belongs to native FTS polygon encoding rather than either editing
 surface.
-Explicit compaction removes unreferenced vertices or textures.
+Explicit compaction removes unreferenced vertices or textures. Vertex welding
+merges nearby vertices only when their bone and complete selection membership
+match. The default preserves every face by cancelling merges that would make
+it degenerate; callers can instead reject the operation or discard those
+faces.
 
 `applyReference` requires at least one requested operation. It can copy exact
-bone positions, replace bone-origin selection memberships, replace action-point
+bone positions, replace bone selection memberships, replace action-point
 selection memberships, or combine those operations in one transaction.
-Snapping and bone-origin membership copying require identical bone counts and
+Snapping and bone membership copying require identical bone counts and
 parent topology. Action-point membership copying does not require matching
 skeletons. Bones correspond by index; name differences warn without preventing
 the operation. Selections correspond by name. Reference-only selections are not
@@ -859,7 +1078,7 @@ action-point memberships clear, while selection memberships on unmatched
 reference action points are omitted with a warning. The Model changes nothing
 on failure.
 
-`inferBoneOriginSelections` replaces bone-origin memberships using geometry
+`inferBoneSelectionMemberships` replaces bone selection memberships using geometry
 owned directly by each bone. A bone joins a selection when at least 90% of its
 owned vertices belong to that selection. Unbound vertices are ignored, and a
 bone without owned geometry receives no memberships. Vertex, action-point,
@@ -867,7 +1086,7 @@ origin, and leading-vertex memberships are unchanged.
 
 Native baking preserves copied Model-space bone positions exactly relative to
 the emitted origin, which supports engines that compare replacement-model bone
-origins by exact component equality.
+positions by exact component equality.
 
 A Model skeleton contains at most 1024 bones. Other Model collection limits
 follow the intermediate representation rather than FTL encoding limits. A
@@ -897,7 +1116,7 @@ until the handle is destroyed. `ArxModelGlbImportOptions` and
 `arx_pistoris_model_export_level_preview_glb` mirror static Level-preview
 export. `ArxModelReferenceOptions` and
 `arx_pistoris_model_apply_reference` mirror the C++ reference operation.
-`arx_pistoris_model_infer_bone_origin_selections` exposes the same inference
+`arx_pistoris_model_infer_bone_selection_memberships` exposes the same inference
 helper. `ARX_MODEL_REFERENCE_OPTIONS_INIT` selects no operation; enable at
 least one field before calling `arx_pistoris_model_apply_reference`.
 `ARX_MODEL_INVENTORY_ICON_SET_OPTIONS_INIT` derives both footprint axes.
@@ -957,10 +1176,10 @@ Animation resource identity is optional. `setResourcePath` accepts an Animation
 selector or any portable logical `.tea` path. Selectors expand to registered
 game paths; direct paths are normalized but retain their directory layout.
 
-Keyframes use count-and-copy access. `copyKeyframes` returns independent Sound
-indices, while `copySoundViews` returns borrowed logical paths and encoded-audio
-views. `copyGroupTransforms` copies one contiguous group range for a selected
-keyframe. `replaceKeyframes` changes the complete timeline in one transaction.
+`keyframes()` returns independent keyframe values, while `sounds()` returns
+values whose logical paths and encoded-audio members borrow from Animation.
+`groupTransforms(keyframe)` returns a checked nested random-access view.
+`replaceKeyframes` changes the complete timeline in one transaction.
 The first added keyframe establishes the group count; later keyframes must
 match it until the timeline is cleared or replaced. An Animation contains at
 most 1024 groups. Sound editing, compaction, and rebasing follow the same
@@ -989,8 +1208,8 @@ Different Animations can request the same sidecar path; the caller decides
 which payload to write. `importGlb` can return authored format paths for caller
 lookup. Case and separator aliases may map to one Sound while distinct source
 spellings remain available for lookup. Unrepairable sound paths skip only the
-affected Animation. GLB import returns owning `std::unique_ptr<Animation>`
-values.
+affected Animation. `importGlbWithAnimations` returns one owning Model and an
+owning vector of Animation values.
 
 ### C ABI
 
@@ -1077,11 +1296,13 @@ embedded as PNG or JPEG, with other supported formats converted to PNG. Bundle
 export rejects effect and localized speech encodings that map to the same
 generated relative sidecar path.
 
-Collection access uses count-and-copy operations. Returned texture, sound,
-language, and encoding views borrow storage from Cinematic. Non-const calls
-invalidate collection indices, `SoundHandle` values, and borrowed views.
+C++ collection access uses named read-only random-access views. Texture, sound,
+language, and encoding values contain members that borrow storage from
+Cinematic. Non-const calls invalidate collection indices, `SoundHandle`
+values, views, their iterators, and borrowed members. The C ABI retains
+count-and-copy access.
 Removing a referenced illustration or sound fails; explicit compaction removes
-unused textures or sounds and remaps retained references.
+unused illustration images or sounds and remaps retained references.
 
 ### C ABI
 
@@ -1179,12 +1400,13 @@ sidecars. The first `view_attach` action point places the Ambiance root; a
 Model without one remains a reference around the Model origin. The reference
 mesh is visual context and is ignored by Ambiance import.
 
-Ambiance uses the same caller-owned count-and-copy model as Level.
-`copyTracks` returns independent Sound indices; `copySoundViews` returns
-borrowed path and encoded-audio views; key copies contain independent values.
+Ambiance exposes named read-only random-access views. `tracks()` returns
+independent Sound indices, `sounds()` returns values with borrowed path and
+encoded-audio members, and `pannedKeys(track)` or `positionedKeys(track)`
+returns a checked nested key view. The C ABI retains count-and-copy access.
 Input strings, bytes, and key arrays are copied by editing calls. Every
-non-const operation invalidates prior borrowed views, Sound indices, and track
-indices.
+non-const operation invalidates prior views, iterators, borrowed members,
+Sound indices, and track indices.
 `clearTracks` removes every track and resets the master index while preserving
 resource identity and Sounds. `compactSounds` removes Sounds that are no longer
 referenced.
@@ -1226,9 +1448,20 @@ native files.
 Resource-search helpers describe selector discovery without accessing the
 filesystem. `ResourceSearchLocation::base_path` is the logical directory to
 search and `max_discovery_depth` bounds recursive discovery. Model and
-Animation search locations depend on a registered selector type; their helpers
-return `false` for an unsupported type. Level, Cinematic, and Ambiance have
-fixed search locations.
+Animation paths use the closed `ModelPathType` and `AnimationPathType` enums.
+`modelPathTypes` and `animationPathTypes` enumerate their supported non-`none`
+values; the matching `*PathTypeName` and `*PathTypeFromName` helpers convert
+canonical selector tokens. Search helpers accept these enums and return
+`false` for an unsupported value. Level, Cinematic, and Ambiance have fixed
+search locations. The C API provides the equivalent type enumeration and name
+conversion functions.
+
+`animationDirectory` accepts either an Animation path type or an interactive
+Model path type. NPC Models map to the NPC Animation directory; other
+Animation-bearing Model types map to `fix_inter`. Model types without an
+Animation layout are rejected. The C API exposes the two inputs separately as
+`arx_pistoris_path_animation_directory` and
+`arx_pistoris_path_model_animation_directory`.
 
 `textureDirectory`, `soundDirectory`, `ambianceSoundDirectory`, and
 `cinematicIllustrationDirectory` return the canonical
@@ -1274,7 +1507,7 @@ the exact FTL selected by a Model identity, including tweaks.
 `baseEntityClassFromModel` instead returns the base Model entity class and
 ignores a valid tweak after validating the complete Model identity.
 `modelFromEntityClass` succeeds only when the class maps back to one registered
-Model layout. A Model selector type describes that storage layout; it does not
+Model layout. A Model path type describes that storage layout; it does not
 override the engine's runtime classification of the complete class path.
 `entityClassKind` reports the engine classification of a normalized class
 path. `itemIconFromEntityClass` returns `<class>[icon]` for item classes, an

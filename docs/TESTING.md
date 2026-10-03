@@ -34,7 +34,8 @@ just pre-release
 
 The release gate checks formatting without modifying files, runs the ordinary
 and sanitizer test suites, enforces clang-tidy, builds every fuzz target,
-replays its fixture seeds, and installs and smoke-tests the release CLI package.
+replays its fixture seeds, builds and tests the installed Python wheel in an
+isolated environment, and installs and smoke-tests the release CLI package.
 
 `sanitize` runs the test suite with ASan and UBSan. `tidy` applies available
 clang-tidy fixes; `tidy-check` treats diagnostics as errors without modifying
@@ -42,7 +43,10 @@ files. `format` applies clang-format; `format-check` only reports differences.
 
 GitHub pull requests and pushes to `main` run development, sanitizer, and
 package checks on Windows and Linux. Formatting, clang-tidy, and fuzz builds
-run on Linux. Branch protection should require the `CI / Gate` check.
+run on Linux. Python CI verifies the source distribution, builds stable-ABI
+wheels for Windows x64, Windows ARM64, macOS ARM64, and manylinux x64, and tests
+those wheels with CPython 3.12, 3.13, and 3.14. Branch protection should require
+the `CI / Gate` check.
 
 ## Coverage
 
@@ -50,7 +54,7 @@ Coverage requires `llvm-profdata` and `llvm-cov`:
 
 ```text
 just coverage
-just coverage src/level/level.cpp
+just coverage libs/core/src/level/level.cpp
 ```
 
 The complete command prints a summary and writes an HTML report below
@@ -68,7 +72,7 @@ data/fixtures/level/glb/<fixture>/
 data/fixtures/model/glb/<fixture>/
 data/fixtures/model/obj/<fixture>/
 data/fixtures/ambiance/glb/<fixture>/
-data/fixtures/cinematic/<fixture>/
+data/fixtures/cinematic/glb/<fixture>/
 data/fixtures/json/
 ```
 

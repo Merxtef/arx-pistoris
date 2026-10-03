@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 TEST_SUITE("ambiance_corpus") {
@@ -33,16 +34,15 @@ TEST_SUITE("ambiance_corpus") {
 
       pistoris::Ambiance::GlbImportOptions options;
       options.arx_units_per_glb_unit = fixture.glb.arx_units_per_glb_unit;
-      pistoris::Ambiance ambiance;
       std::vector<pistoris::SoundSourceReference> sources;
-      REQUIRE(pistoris::Ambiance::importGlb(ambiance, test_support::readBytes(fixture.glb.path), options, &sources) ==
-              ARX_OK);
+      auto imported = pistoris::Ambiance::importGlb(test_support::readBytes(fixture.glb.path), options, &sources);
+      REQUIRE(imported);
+      pistoris::Ambiance ambiance = std::move(*imported);
       const std::optional<test_support::HydrationResult> hydration =
           test_support::hydrateSounds(ambiance, fixture.glb.path.parent_path(), sources);
       REQUIRE(hydration.has_value());
 
-      std::vector<ArxSoundView> sounds(ambiance.soundCount());
-      if (!sounds.empty()) REQUIRE(ambiance.copySoundViews(0, sounds.size(), sounds.data()) == ARX_OK);
+      const auto sounds = ambiance.sounds();
       std::vector<pistoris::SoundIndex> converted_sources;
       for (std::size_t index = 0; index < sounds.size(); ++index) {
         const ArxSoundView& sound = sounds[index];
@@ -60,9 +60,10 @@ TEST_SUITE("ambiance_corpus") {
         }
       }
 
-      pistoris::NativeAmbianceBundle bundle;
-      REQUIRE(ambiance.bakeNativeBundle({.include_sound_files = true}, bundle) == ARX_OK);
-      REQUIRE(pistoris::validate(bundle.amb) == ARX_OK);
+      const auto bundle_result = ambiance.bakeNativeBundle({.include_sound_files = true});
+      REQUIRE(bundle_result);
+      const pistoris::NativeAmbianceBundle& bundle = *bundle_result;
+      REQUIRE(pistoris::validate(bundle.amb));
       REQUIRE(test_support::validateSoundFiles(ambiance, std::span<const pistoris::SoundFile>(bundle.sound_files)));
       for (const pistoris::SoundIndex source : converted_sources) {
         bool emitted = false;

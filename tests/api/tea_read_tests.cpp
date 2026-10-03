@@ -13,14 +13,14 @@
 TEST_SUITE("tea") {
   TEST_CASE("TeaApiNullData") {
     ArxTea* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_tea_read(nullptr, 0, &h);
+    ArxReturnCode rc = arx_pistoris_tea_read(nullptr, 0, &h, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
     CHECK(h == nullptr);
   }
 
   TEST_CASE("TeaApiNullOut") {
     uint8_t dummy = 0;
-    ArxReturnCode rc = arx_pistoris_tea_read(&dummy, sizeof(dummy), nullptr);
+    ArxReturnCode rc = arx_pistoris_tea_read(&dummy, sizeof(dummy), nullptr, nullptr);
     CHECK(rc == ARX_INVALID_DATA_POINTER);
   }
 
@@ -29,7 +29,7 @@ TEST_SUITE("tea") {
     setNumKeyframes(buf, 1);
     appendKeyframe2014(buf);
     ArxTea* h = nullptr;
-    ArxReturnCode rc = arx_pistoris_tea_read(buf.data(), buf.size(), &h);
+    ArxReturnCode rc = arx_pistoris_tea_read(buf.data(), buf.size(), &h, nullptr);
     CHECK(rc == ARX_OK);
     CHECK(h != nullptr);
     arx_pistoris_tea_destroy(h);

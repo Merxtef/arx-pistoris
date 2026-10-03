@@ -10,6 +10,33 @@ and automation helpers.
 Ambiance GLB uses empties and external audio sidecars. Audio is not embedded.
 The default scale is 10 Arx units per GLB unit.
 
+## Start From An Export
+
+Export and reinstall a mounted Ambiance with:
+
+```text
+arx-pistor --auto-mount ambiance:forest forest.glb
+arx-pistor --auto-mount forest.glb ambiance:forest
+```
+
+Use absolute AMB paths for a loose layout:
+
+```text
+arx-pistor C:/project/forest.amb forest.glb
+arx-pistor --kind ambiance forest.glb C:/project/forest.amb
+```
+
+GLB audio sidecars use the sample paths written in the track names and live
+relative to the GLB. Native output places converted audio beside a loose AMB
+or in the mounted game layout selected by an `ambiance:` destination.
+
+An Ambiance is a layered schedule. A track selects one audio sample; its keys
+say when and how often that sample plays. The key's automation changes volume,
+pitch, and either listener pan or world position over time. The master track
+defines the Ambiance's playback envelope, so every other track should fit
+inside its possible duration. Panned tracks are listener-relative; positioned
+tracks use the Ambiance coordinate space.
+
 ## Root and Tracks
 
 Create one root named `arx_ambiance__MASTER_4__forest`. `MASTER_4` selects track

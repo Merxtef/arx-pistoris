@@ -16,7 +16,7 @@ level/glb/<fixture>/<fixture>.glb
 model/glb/<fixture>/<fixture>.glb
 model/obj/<fixture>/<fixture>.obj
 ambiance/glb/<fixture>/<fixture>.glb
-cinematic/<fixture>/<fixture>.glb
+cinematic/glb/<fixture>/<fixture>.glb
 ```
 
 Sidecars may be absent when a fixture is not intended to exercise hydration.

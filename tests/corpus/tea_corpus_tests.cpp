@@ -24,7 +24,7 @@ TEST_SUITE("tea") {
       std::vector<std::uint8_t> bytes;
       if (!test_support::readCorpusBytes(path, bytes)) continue;
       ArxTea* h = nullptr;
-      const ArxReturnCode rc = arx_pistoris_tea_read(bytes.data(), bytes.size(), &h);
+      const ArxReturnCode rc = arx_pistoris_tea_read(bytes.data(), bytes.size(), &h, nullptr);
       if (!test_support::checkCorpusStatus(path, "read TEA", rc)) {
         if (h) arx_pistoris_tea_destroy(h);
         continue;
@@ -40,7 +40,7 @@ TEST_SUITE("tea") {
       std::vector<std::uint8_t> bytes;
       if (!test_support::readCorpusBytes(path, bytes)) continue;
       ArxTea* h1 = nullptr;
-      ArxReturnCode rc = arx_pistoris_tea_read(bytes.data(), bytes.size(), &h1);
+      ArxReturnCode rc = arx_pistoris_tea_read(bytes.data(), bytes.size(), &h1, nullptr);
       if (!test_support::checkCorpusStatus(path, "read source TEA", rc)) {
         if (h1) arx_pistoris_tea_destroy(h1);
         continue;
@@ -49,7 +49,7 @@ TEST_SUITE("tea") {
 
       uint8_t* out = nullptr;
       size_t sz = 0;
-      rc = arx_pistoris_tea_write(h1, &out, &sz);
+      rc = arx_pistoris_tea_write(h1, &out, &sz, nullptr);
       if (!test_support::checkCorpusStatus(path, "write TEA", rc) ||
           !test_support::checkCorpusCondition(path, "write TEA", out != nullptr, "returned no bytes")) {
         if (out) arx_pistoris_free_bytes(out);
@@ -58,7 +58,7 @@ TEST_SUITE("tea") {
       }
 
       ArxTea* h2 = nullptr;
-      const ArxReturnCode rc2 = arx_pistoris_tea_read(out, sz, &h2);
+      const ArxReturnCode rc2 = arx_pistoris_tea_read(out, sz, &h2, nullptr);
       arx_pistoris_free_bytes(out);
       if (!test_support::checkCorpusStatus(path, "read written TEA", rc2)) {
         if (h2) arx_pistoris_tea_destroy(h2);

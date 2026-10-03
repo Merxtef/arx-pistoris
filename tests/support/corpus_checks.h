@@ -7,6 +7,7 @@
 
 #include "arx_pistoris/base/status.h"
 #if defined(ARX_PISTORIS_CPP_API)
+#include "arx_pistoris/base/result.hpp"
 #include "arx_pistoris/runtime.hpp"
 #else
 #include "arx_pistoris/runtime.h"
@@ -41,6 +42,14 @@ inline bool checkCorpusStatus(const std::filesystem::path& path, std::string_vie
   CHECK_MESSAGE(false, std::format("{}: {} failed: {} ({})", path.generic_string(), stage, message, status));
   return false;
 }
+
+#if defined(ARX_PISTORIS_CPP_API)
+template <class Value, class Location>
+bool checkCorpusStatus(const std::filesystem::path& path, std::string_view stage,
+                       const pistoris::Result<Value, Location>& result) {
+  return checkCorpusStatus(path, stage, result.code());
+}
+#endif
 
 inline bool readCorpusBytes(const std::filesystem::path& path, std::vector<std::uint8_t>& out) {
   std::ifstream file(path, std::ios::binary);
