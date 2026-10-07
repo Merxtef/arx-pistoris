@@ -358,8 +358,14 @@ struct SoundSourceReferenceValue {
   std::string source_path;
 };
 
-struct CinematicSoundValue {
+struct CinematicSpeechEncodingValue {
+  std::string language;
+  std::vector<std::uint8_t> encoded_audio;
+};
+
+struct CinematicSpeechValue {
   std::string path;
+  std::vector<CinematicSpeechEncodingValue> encodings;
 };
 
 struct CinematicIllustrationValue {

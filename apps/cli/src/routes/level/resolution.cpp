@@ -17,7 +17,6 @@
 #include "conversion/options.h"
 #include "formats/classification.h"
 #include "formats/format.h"
-#include "io/native_text.h"
 #include "io/path_location.h"
 #include "io/service.h"
 #include "media/encoded.h"
@@ -31,12 +30,10 @@
 #include "resources/selector.h"
 #include "resources/sidecar_io.h"
 #include "resources/texture_io.h"
-#include "routes/conversion_failure.h"
 #include "routes/conversion_path.h"
 #include "routes/descriptor.h"
 #include "routes/level/invocation.h"
 #include "routes/level/load.h"
-#include "routes/level/native_carriers.h"
 #include "routes/level/options.h"
 #include "routes/level/save.h"
 #include "routes/level/state.h"
@@ -46,7 +43,6 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -123,103 +119,6 @@ bool loadMinimapSamplerImages(Invocation& invocation, IoService& io) {
              io, "background", paths.background, invocation.minimap_background, generation.background.image) &&
          loadMinimapSamplerImage(io, "water", paths.water, invocation.minimap_water, generation.water.image) &&
          loadMinimapSamplerImage(io, "lava", paths.lava, invocation.minimap_lava, generation.lava.image);
-}
-
-bool discoverDlfCompanions(Invocation& invocation, std::vector<ClassifiedPath>& inputs, IoService& io,
-                           std::optional<InputConverterDescriptor::DecodedDlfInput>& decoded_dlf) {
-  if (invocation.input == kNoClassifiedPath || inputs[invocation.input].facts.format != Format::kDlf) return true;
-
-  const std::size_t dlf_index = invocation.input;
-  const ClassifiedPath& dlf_input = inputs[dlf_index];
-  if (dlf_input.location.address == PathAddress::kAbsolute) {
-    diagnostic(DiagnosticCode::kLevelInputFailed,
-               "DLF Level input must be mount-relative; absolute paths cannot define a game resource layout: %s",
-               dlf_input.path.c_str());
-    return false;
-  }
-
-  PathLocation parent;
-  PathLocation llf_location;
-  std::string error;
-  if (!io.parentPathLocation(dlf_input.location, parent, error) ||
-      !io.appendPathLocation(parent, resourceFormatStem(dlf_input.path) + ".llf", llf_location, error)) {
-    diagnostic(DiagnosticCode::kIoPathInvalid,
-               "Cannot resolve sibling LLF path for '%s': %s",
-               dlf_input.path.c_str(),
-               error.c_str());
-    return false;
-  }
-
-  std::vector<std::uint8_t> llf_buffer;
-  const ResourceReadResult llf_result = io.readPath(llf_location, llf_buffer);
-  if (llf_result == ResourceReadResult::kInvalidPath || llf_result == ResourceReadResult::kReadFailed) {
-    diagnostic(DiagnosticCode::kResourceReadFailed, "Optional Level LLF cannot be read: %s", llf_location.path.c_str());
-    return false;
-  }
-
-  InputConverterDescriptor::DecodedDlfInput prepared;
-  std::optional<pistoris::Llf>* embedded_output =
-      llf_result == ResourceReadResult::kSuccess ? nullptr : &prepared.embedded_lighting;
-  std::string decode_failure;
-  const ArxReturnCode rc =
-      decodeDlf(dlf_input, invocation.native_text_mode, prepared.dlf, embedded_output, &decode_failure);
-  if (rc != ARX_OK) {
-    conversionInputFailure(
-        DiagnosticCode::kLevelInputFailed, "DLF Level", dlf_input.path, std::string_view(decode_failure));
-    return false;
-  }
-
-  const void* scene_path_end = std::memchr(prepared.dlf.scene_path, '\0', sizeof(prepared.dlf.scene_path));
-  const std::string_view raw_scene_path(prepared.dlf.scene_path,
-                                        scene_path_end
-                                            ? static_cast<const char*>(scene_path_end) - prepared.dlf.scene_path
-                                            : sizeof(prepared.dlf.scene_path));
-  std::string scene_path;
-  const ArxReturnCode text_rc = io_detail::nativeTextToUtf8(raw_scene_path, invocation.native_text_mode, scene_path);
-  if (text_rc != ARX_OK) {
-    diagnostic(DiagnosticCode::kLevelInputFailed,
-               "DLF Level scene path cannot be decoded: %s (code %d)",
-               pistoris::errorString(text_rc),
-               static_cast<int>(text_rc));
-    return false;
-  }
-
-  std::string fts_path;
-  if (!pistoris::paths::ftsFromDlfScene(scene_path, fts_path)) {
-    diagnostic(DiagnosticCode::kLevelInputFailed, "DLF Level scene path is invalid: %s", scene_path.c_str());
-    return false;
-  }
-  std::vector<std::uint8_t> fts_buffer;
-  if (!readRequiredResource(io, fts_path, fts_buffer)) return false;
-
-  const std::size_t positional_index = dlf_input.positional_index;
-  const ArxResourceKind resource_kind = dlf_input.resource_kind;
-  invocation.dlf = dlf_index;
-  invocation.input = inputs.size();
-  if (!appendClassifiedInput(fts_path,
-                             {.path = fts_path, .address = PathAddress::kMountRelative},
-                             std::move(fts_buffer),
-                             positional_index,
-                             resource_kind,
-                             ResourceLayout::kGame,
-                             inputs)) {
-    return false;
-  }
-  if (llf_result == ResourceReadResult::kSuccess) {
-    invocation.llf = inputs.size();
-    std::string llf_path = llf_location.path;
-    if (!appendClassifiedInput(std::move(llf_path),
-                               std::move(llf_location),
-                               std::move(llf_buffer),
-                               positional_index,
-                               resource_kind,
-                               ResourceLayout::kGame,
-                               inputs)) {
-      return false;
-    }
-  }
-  decoded_dlf.emplace(std::move(prepared));
-  return true;
 }
 
 bool siblingTarget(IoService& io, const OutputTarget& primary, std::string_view filename, Format format,
@@ -441,9 +340,6 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
   invocation.texture_options = context.texture_options;
   applyFormatModifiers(invocation.options, context.format_modifiers);
 
-  std::optional<InputConverterDescriptor::DecodedDlfInput> decoded_dlf;
-  if (!discoverDlfCompanions(invocation, context.inputs, context.io, decoded_dlf)) return false;
-
   const InputConverterDescriptor* input_converter = inputConverterDescriptor(context.route);
   invocation.output_converter = outputConverterDescriptor(context.route.output, context.output_converter.module);
   if (!input_converter) {
@@ -477,7 +373,6 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
   if (!loadMinimapSamplerImages(invocation, context.io)) return false;
   invocation.image_output.minimap_border_color = effectiveMinimapBorderColor(invocation.options);
 
-  loadLevelImages(context.io, invocation.image_input, invocation.loaded_images);
   const bool native = selectConversionPath(input_converter->load_native != nullptr,
                                            invocation.output_converter->write_native != nullptr,
                                            context.requires_intermediate) == ConversionPath::kNative;
@@ -486,17 +381,10 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
              : automaticSidecarRebase(sidecarEndpoint(context.inputs[invocation.input], ARX_RESOURCE_KIND_LEVEL),
                                       sidecarEndpoint(invocation.output, ARX_RESOURCE_KIND_LEVEL));
   if (!resolveTextureRebase(invocation, context.conversion, automatic, context.io)) return false;
-  if (!loadInput(*input_converter,
-                 context.inputs,
-                 invocation,
-                 invocation.options,
-                 decoded_dlf ? &*decoded_dlf : nullptr,
-                 native,
-                 invocation.state))
+  if (!loadInput(
+          *input_converter, context.inputs, invocation, invocation.options, context.io, native, invocation.state))
     return false;
-  if (IntermediateLevel* intermediate = std::get_if<IntermediateLevel>(&invocation.state))
-    applyLevelImages(intermediate->level, invocation.loaded_images);
-  if (invocation.texture_options.export_files) {
+  if (invocation.texture_options.export_files && invocation.texture_options.input_folder_specified) {
     if (IntermediateLevel* intermediate = std::get_if<IntermediateLevel>(&invocation.state)) {
       if (!loadTextureImages(intermediate->level, context.io, invocation.textures, intermediate->texture_source_paths))
         return false;

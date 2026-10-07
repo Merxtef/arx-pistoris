@@ -31,6 +31,7 @@ struct NativeAnimationFile {
 
 struct NativeModelFiles {
   pistoris::Ftl ftl;
+  std::vector<pistoris::NativeTextureFile> texture_files;
   std::vector<std::uint8_t> inventory_icon;
   ArxImageFormat inventory_icon_format = ARX_IMAGE_FORMAT_UNKNOWN;
   std::vector<NativeAnimationFile> animations;

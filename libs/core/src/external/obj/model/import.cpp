@@ -24,6 +24,7 @@
 #include "utils/log.h"
 #include "utils/math/triangulation.h"
 #include "utils/number_text.h"
+#include "utils/path.h"
 #include "utils/resource_path.h"
 #include "utils/text_cursor.h"
 
@@ -325,6 +326,14 @@ struct TextureImportRegistry {
   TextureSourceMap fallbacks;
 };
 
+bool absoluteSourcePath(std::string_view path) noexcept {
+  if (path.empty()) return false;
+  if (path.front() == '/' || path.front() == '\\') return true;
+  return path.size() >= 3U &&
+         ((path.front() >= 'A' && path.front() <= 'Z') || (path.front() >= 'a' && path.front() <= 'z')) &&
+         path[1] == ':' && (path[2] == '/' || path[2] == '\\');
+}
+
 ArxReturnCode resolveTexture(std::string_view material_name, const MtlEntry* material,
                              TextureImportRegistry& texture_registry, ModelModules& out, MaterialState& state,
                              std::vector<std::string>* texture_source_paths) {
@@ -360,7 +369,8 @@ ArxReturnCode resolveTexture(std::string_view material_name, const MtlEntry* mat
 
   const std::string_view source = has_source ? std::string_view(material->image_path) : decoded.fallback_stem;
   TextureSourceMap& textures_by_source = has_source ? texture_registry.external : texture_registry.fallbacks;
-  Texture texture = has_source ? textures::fromImagePath(source) : Texture(source);
+  const std::string_view identity_source = absoluteSourcePath(source) ? pathFilename(source) : source;
+  Texture texture = has_source ? textures::fromImagePath(identity_source) : Texture(identity_source);
   const auto found = textures_by_source.find(source);
   if (found != textures_by_source.end()) {
     Texture& existing = out.textures.textures[found->second];

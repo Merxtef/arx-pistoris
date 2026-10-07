@@ -89,9 +89,10 @@ Model GLB imports also include animations by default. Set
 conversion report when animations were requested and `None` otherwise.
 `include_sound_sources` applies only when animations are included.
 
-The paths are lookup inputs, not files opened by Pistoris. For Model and Level,
-texture source paths correspond to textures in collection order. A caller can
-resolve and attach them before exporting another format:
+The core conversion methods treat these paths as lookup inputs rather than
+opening them. For Model and Level, texture source paths correspond to textures
+in collection order. A caller can resolve and attach them before exporting
+another format:
 
 ```python
 source_path = Path("human_male.ftl")
@@ -113,6 +114,170 @@ resource to its caller-facing lookup path; Model Animation records also identify
 the owning Animation. The Sound's logical resource identity remains in the
 imported resource. Output bundles work in the other direction: write their main
 bytes and returned image or audio files to the desired storage layout.
+
+### Resource I/O
+
+`pistoris.resource_io` provides live game-layout lookup and complete loose-file
+conversion when an application does not need to implement dependent-file
+resolution itself:
+
+```python
+from pathlib import Path
+
+import pistoris
+
+resources = pistoris.resource_io.Resources(
+    [Path("user-data"), Path("unpacked")],
+    write_mount=Path("output"),
+)
+
+catalog = resources.scan_catalog()
+for entry in catalog:
+    print(str(entry.selector), entry.provider_mask)
+
+for entry in catalog.models():
+    print(entry.selector)
+
+human = pistoris.paths.ModelSelector(pistoris.paths.ModelType.NPC, "human_base")
+loaded = resources.load_model(human)
+model = loaded.model
+same_model = resources.load_model(
+    "game/graph/obj3d/interactive/npc/human_base/human_base"
+)
+
+loose_model = resources.load_model_file(Path("editing/model.glb"))
+report = resources.write_model_file(loose_model.model, Path("editing/model.ftl"))
+```
+
+Earlier read mounts override later mounts. Mounted reads, listings, scans, and
+logical resource loads accept a `mount_mask=` bitmask; `0` searches nothing.
+`resources.mounts.read_mounts` exposes an immutable snapshot with the assigned
+single-bit IDs. Add project roots with `resources.mounts.add_read_mount()`, append the
+platform game and unpacked roots with `add_libertatis_mounts()`, and assign
+`write_mount` independently. Missing read roots emit `UserWarning` and are
+omitted and return `None`; accepted and repeated additions return their
+immutable `Mount` record. `libertatis_resource_root()` returns the platform
+default root without changing any mounts.
+
+Calls are live: `read()`, `list_directory()`, and `scan_catalog()` inspect the
+filesystem again. A returned catalog remains an immutable snapshot. Directory
+listing returns immediate children for mounted file browsers;
+`list_files(max_depth=...)` recursively lists visible files; catalog scanning
+returns only recognized semantic resources with canonical selectors. The
+catalog's `get(selector)` performs exact lookup. Its `models()`, `animations()`,
+`levels()`, `cinematics()`, and `ambiances()` methods return read-only,
+re-iterable filtered views of that snapshot. The
+`highest_priority_mount()` helper returns the immutable `Mount` record for the
+first selected provider, or `None` when the mask selects no configured mount.
+Symbolic links below mount roots are not followed for reads or writes.
+Supporting mount and lookup records live under `pistoris.resource_io.mounts`;
+catalog snapshot types live under `pistoris.resource_io.catalog`.
+Resource I/O failures expose their `pistoris.resource_io.Operation`, logical
+resource path, native filesystem path when resolution reached one, and
+selected mount mask through `PistorisError.location.mount_mask`. ASCII-case collisions
+within one native directory fail by default. Pass
+`recover_case_collisions=True` to the individual operation to warn and choose
+a deterministic native entry.
+
+`Resources.load_model()`, `load_animation()`, `load_level()`,
+`load_ambiance()`, and `load_cinematic()` use mounted logical paths, selectors,
+and accept `str` and `PathLike` for logical paths. Their matching
+`load_*_file()` methods use native filesystem paths and accept the same Python
+path forms. Explicit extensions select native, JSON, OBJ, or GLB conversion
+where the resource kind supports it. Extensionless mounted paths default to the
+native format. Native mounted resources find dependent files through the
+selected mounts. Filesystem inputs find sidecars only beside the primary file.
+A mounted JSON, OBJ, or GLB path
+uses mounts to discover the primary, then resolves its sidecars beside that
+physical file. This preserves mount-relative project entry points without
+mixing one loose project with dependencies from another mount.
+
+Model loading returns `pistoris.model.Import`: use `.model` for the editable
+Model and `.animations` for Animations embedded in GLB. Other Model formats
+return the same result type with an empty animation tuple, so callers do not
+need a format-dependent branch. `write_model()` accepts either the complete
+Import bundle or a Model. Passing the bundle preserves its animations when
+writing GLB; passing `.model` intentionally writes only the Model and permits
+conversion to non-GLB formats.
+
+Complete loaders expose the conversion settings relevant to their accepted
+formats as keyword-only arguments. `text_mode=` controls native text decoding.
+Model and Ambiance GLB input accepts `arx_units_per_glb_unit=`; Level GLB input
+also accepts `arx_offset=`. These names and defaults match the corresponding
+core `from_glb()` and native conversion methods.
+
+Mounted native Levels are DLF-primary: the binary DLF selects the mandatory FTS
+and optional same-stem LLF. A logical string ending in `.fts`, FTS JSON, or
+`.glb` instead selects that primary through the mounts and resolves its
+dependencies beside the physical file. Loose Levels are FTS-primary; DLF JSON
+and LLF JSON are companions, not primaries. Omitted `llf=` and `dlf=` paths are
+discovered beside it by default, independently accepting the binary or JSON
+encoding for each companion. The corresponding `write_*()` methods write
+mounted logical targets through `write_mount`; `write_*_file()` writes native
+filesystem targets. Loose Level writes derive omitted LLF and DLF destinations
+beside the primary; pass
+`outputs=OutputPart.PRIMARY` to omit them.
+Complete Model conversion also loads or writes its inventory icon. Complete
+Level conversion includes its minimap and loading screen.
+
+Writers emit every applicable file by default. Pass an `OutputPart` flag or
+combination through `outputs=` when a caller owns output policy. For example,
+`outputs=pistoris.resource_io.OutputPart.PRIMARY` emits only the requested
+target; structural companions, textures, audio, and images can be selected
+independently. A primary-only OBJ or native Level can intentionally be
+incomplete.
+
+Direct writers do not replace differing existing files unless the caller says
+how to handle them. The default `if_exists=ExistingFilePolicy.ERROR` raises
+`PistorisError` before any destination is changed and identifies the
+conflicting file. Use `ExistingFilePolicy.OVERWRITE` to replace all differing
+destinations in that call or `ExistingFilePolicy.PRESERVE` to keep them.
+Successful direct writes return an immutable
+`resource_io.output.WriteReport` with one status per destination.
+
+For per-file decisions, call the matching `prepare_*_write()` method. The
+returned mutable `WritePlan` owns the encoded outputs and resolved destinations.
+Use `preflight()` to inspect current statuses, assign `entry.if_exists` or
+`entry.selected_candidate` where needed, and call `execute()` to write it:
+
+```python
+plan = resources.prepare_model_file_write(model, Path("editing/model.ftl"))
+for entry in plan:
+    if entry.status is pistoris.resource_io.output.WriteStatus.NEEDS_EXISTING_FILE_POLICY:
+        entry.if_exists = pistoris.resource_io.ExistingFilePolicy.PRESERVE
+report = plan.execute()
+```
+
+`entry.if_exists` is `None` while the entry inherits `plan.default_if_exists`;
+assign `None` again to remove a per-entry override.
+
+Writer conversion settings mirror the direct resource methods. Native output
+accepts `text_mode=`; Model and Level native outputs accept `compress=`; Level
+also accepts `reconstruct_quads=`, `embed_lighting=`, and `signer=`. GLB output
+uses `arx_units_per_glb_unit=` for Model, Level, and Ambiance and `arx_offset=`
+for Level. Cinematic native output accepts `illustration_format=`. Options that
+do not apply to the selected target format should be omitted; explicitly
+passing one raises `ValueError`. Omitted options use that format's defaults.
+
+`OutputPart.TEXTURES` selects texture resources and their sidecars,
+`OutputPart.AUDIO` selects encoded audio data, and `OutputPart.IMAGES` selects
+non-texture images such as icons, minimaps, loading screens, and cinematic
+illustrations.
+
+FTS JSON carries `levelIdx`, so loading it gives the Level a canonical DLF
+`resource_path`. Writing loose Level JSON accepts `level_index=`; when omitted,
+the value is inferred from that canonical resource path. A Level loaded only
+from binary FTS has no such identity, so JSON output must receive the value
+explicitly:
+
+```python
+level = resources.load_level_file(Path("editing/fast.fts"))
+resources.write_level_file(level, Path("editing/fast.fts.json"), level_index=7)
+```
+
+The [Resource I/O API Guide](../../docs/RESOURCE_IO_API.md) defines mount
+priority, conflicts, live lookup, high-level hydration, and error semantics in
+detail.
 
 ### Types And Calling Conventions
 
@@ -239,26 +404,50 @@ selection = model.selections.add(pistoris.model.Selection(name="hands"))
 same_selection = model.selections["hands"]
 model.skeleton.bones[0].selections.add(selection)
 del model.selections["hands"]
-
-effect = cinematic.sfx.add("effects/door")
-same_effect = cinematic.sfx["effects/door"]
-del cinematic.sfx["effects/door"]
 ```
 
-Selections and languages use unique names; Cinematic sound paths are unique
-within their SFX or speech collection. Missing semantic identifiers raise
+Selections and languages use unique names. Missing semantic identifiers raise
 `KeyError`; lookup never creates an element. Membership accepts either a
 semantic key or a compatible live reference. Iteration yields live references.
 Internal indices may change when elements are removed, but live references
 continue to identify the same logical element until that element itself is
 removed or its collection is rebuilt.
 
+Sound collections are positional sequences because paths are mutable resource
+attributes rather than identities. `by_path()` provides explicit secondary
+lookup for Animation, Ambiance, and Cinematic sounds:
+
+```python
+cinematic.sfx.append(pistoris.Sound(path="effects/door"))
+effect = cinematic.sfx.by_path("effects/door")
+effect.path = "effects/open"
+del cinematic.sfx[effect.index]
+```
+
 ### Paths And Math
 
 Logical resource paths and selectors live under `pistoris.paths`. Model and
 Animation families use `ModelType` and `AnimationType` string enums instead of
-open-ended type strings; path records and inverse helpers preserve the typed
-family value.
+open-ended type strings. `ModelSelector`, `AnimationSelector`, `LevelSelector`,
+`CinematicSelector`, and `AmbianceSelector` are validated, immutable, and
+hashable semantic identities:
+
+```python
+human = pistoris.paths.ModelSelector(pistoris.paths.ModelType.NPC, "human_base")
+assert str(human) == "model:npc:human_base"
+assert human.to_path() == "game/graph/obj3d/interactive/npc/human_base/human_base.ftl"
+assert pistoris.paths.ModelSelector.parse(str(human)) == human
+assert pistoris.paths.ModelSelector.from_path(human.to_path()) == human
+```
+
+`ResourceSelector` is the annotation-only union of those concrete types.
+`selector_from_string()` and `selector_from_path()` return the applicable
+concrete selector. Per-type `from_path()` accepts only that resource's canonical
+primary path. A `LevelSelector` uses its DLF as the primary path and exposes
+`associated_llf()` and `associated_fts()` for its companion files; those
+companion paths do not identify a Level selector in reverse.
+Use the concrete selector's `.kind` property after parsing when its resource
+kind is needed.
 
 Mathematical values live under `pistoris.math`. `Vector2`, `Vector3`, `Angle`,
 `Color3`, `Quat`, `Rect`, `Aabb`,
@@ -379,11 +568,12 @@ language names to encodings. Assigning audio creates or replaces that
 encoding without exposing the Cinematic's internal sound and language IDs:
 
 ```python
-effect = cinematic.sfx.add("effects/door")
-effect.encoded_audio = encoded_audio
+cinematic.sfx.append(pistoris.Sound(path="effects/door", encoded_audio=encoded_audio))
+effect = cinematic.sfx[-1]
 
 language = cinematic.languages.add("english")
-line = cinematic.speech.add("npcs/guard/greeting")
+cinematic.speech.append(pistoris.cinematic.Speech(path="npcs/guard/greeting"))
+line = cinematic.speech[-1]
 line.encodings[language.name] = encoded_speech
 encoded_speech = line.encodings[language.name]
 del line.encodings[language.name]

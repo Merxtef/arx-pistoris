@@ -16,7 +16,6 @@
 #include "pipeline/execution_context.h"
 #include "resources/cinematic_sound_io.h"
 #include "resources/layout.h"
-#include "resources/output.h"
 #include "resources/resource_output.h"
 #include "resources/sound_io.h"
 #include "resources/texture_io.h"
@@ -60,9 +59,9 @@ bool writeCinematicFilesImpl(const void* primary_data, std::size_t primary_size,
                              std::span<const SoundFile> sounds, const ExecutionContext& execution,
                              const Invocation& invocation) {
   ResourceOutputPlan outputs;
-  outputs.reserveOutput(invocation.output);
+  const ResourceAssetId asset = outputs.addAsset(ResourceAssetKind::kCinematic, invocation.output.path);
+  outputs.addPrimary(invocation.output, primary_data, primary_size, asset);
   if (!illustrations.empty() || !sounds.empty()) {
-    const ResourceAssetId asset = outputs.addAsset(ResourceAssetKind::kCinematic, invocation.output.path);
     if (!addNativeTextureFileOutputs(outputs,
                                      execution.io(),
                                      invocation.texture_output,
@@ -80,8 +79,7 @@ bool writeCinematicFilesImpl(const void* primary_data, std::size_t primary_size,
       return false;
   }
   if (!execution.resourceOutputs().resolve(outputs)) return false;
-  return writeOutput(execution.io(), invocation.output, primary_data, primary_size) &&
-         execution.resourceOutputs().write(outputs);
+  return execution.resourceOutputs().write(outputs);
 }
 
 bool writeCinematicFiles(const void* primary_data, std::size_t primary_size,
@@ -120,12 +118,17 @@ bool writeCinFile(const pistoris::Cin& cinematic, std::span<const pistoris::Nati
 }
 
 bool writeCinNative(NativeCinematic& source, const ExecutionContext& execution, const Invocation& invocation) {
-  std::vector<pistoris::NativeTextureFile> illustrations;
-  if (invocation.texture_options.export_files)
-    loadNativeTextureFiles(source.cinematic, source.text_mode, execution.io(), invocation.textures, illustrations);
-  std::vector<pistoris::SoundFile> sounds;
-  if (invocation.sound_options.export_files)
-    loadNativeCinematicSoundFiles(source.cinematic, source.text_mode, execution.io(), invocation.sounds, sounds);
+  if (invocation.texture_options.export_files && invocation.texture_options.input_folder_specified)
+    loadNativeTextureFiles(
+        source.cinematic, source.text_mode, execution.io(), invocation.textures, source.illustration_files);
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified)
+    loadNativeCinematicSoundFiles(
+        source.cinematic, source.text_mode, execution.io(), invocation.sounds, source.sound_files);
+  const std::span<const pistoris::NativeTextureFile> illustrations =
+      invocation.texture_options.export_files ? source.illustration_files
+                                              : std::span<const pistoris::NativeTextureFile>{};
+  const std::span<const pistoris::SoundFile> sounds =
+      invocation.sound_options.export_files ? source.sound_files : std::span<const pistoris::SoundFile>{};
   return writeCinFile(source.cinematic, illustrations, sounds, execution, invocation);
 }
 

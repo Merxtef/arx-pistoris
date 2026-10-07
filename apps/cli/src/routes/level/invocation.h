@@ -53,7 +53,6 @@ struct Invocation final : RouteInvocation {
   std::vector<std::unique_ptr<pistoris::Model>> model_previews;
   LevelImageInput image_input;
   LevelImageOutput image_output;
-  LoadedLevelImages loaded_images;
   media::PreparedImage minimap_foreground;
   media::PreparedImage minimap_background;
   media::PreparedImage minimap_water;

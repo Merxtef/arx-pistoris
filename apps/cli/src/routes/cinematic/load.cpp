@@ -4,19 +4,29 @@
 #include "routes/cinematic/load.h"
 
 #include "arx_pistoris/cinematic.hpp"
+#include "arx_pistoris/cinematic/types.h"
 #include "arx_pistoris/native.hpp"
-#include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/native_bundle.hpp"
+#include "arx_pistoris/resource_io/resources.hpp"
+#include "arx_pistoris/sound.hpp"
+#include "arx_pistoris/texture.h"
 
 #include "console/diagnostics.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/service.h"
 #include "resources/cinematic_sound_io.h"
+#include "resources/input.h"
+#include "resources/native_bundle.h"
 #include "routes/cinematic/invocation.h"
 #include "routes/cinematic/state.h"
 #include "routes/conversion_failure.h"
 #include "routes/native_text.h"
 #include "routes/types.h"
 
+#include <initializer_list>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -29,50 +39,51 @@ bool inputFailure(const char* what, const Result& result, const ClassifiedPath& 
   return conversionInputFailure(DiagnosticCode::kCinematicInputFailed, what, input.path, result);
 }
 
-bool decodeCin(const ClassifiedPath& input, pistoris::Cin& out) {
-  auto result = pistoris::readCin(input.buffer);
-  if (!result) return inputFailure("CIN", result, input);
-  out = std::move(*result);
+bool loadNative(ClassifiedPath& input, const Invocation& invocation, IoService& io, NativeCinematic& out) {
+  const pistoris::NativeTextMode text_mode =
+      directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  auto loaded = io.resources().loadCinematicNativeBundle(
+      input.document, {.native_text_mode = text_mode, .suppress_related_resource_errors = false});
+  if (!loaded) return inputFailure("Cinematic native bundle", loaded, input);
+  out.cinematic = loaded->cinematic().carrier();
+  out.text_mode = loaded->cinematic().textMode();
+  if (!nativeTextureFiles(loaded->resources(),
+                          pistoris::resource_io::NativeResourceRole::kIllustration,
+                          ARX_RESOURCE_KIND_CINEMATIC,
+                          0,
+                          io,
+                          "Cinematic illustration image",
+                          out.illustration_files) ||
+      !nativeSoundFiles(loaded->resources(), ARX_RESOURCE_KIND_CINEMATIC, 0, io, "Cinematic sound", out.sound_files)) {
+    diagnostic(DiagnosticCode::kCinematicInputFailed, "Cinematic native bundle contains an invalid media reference");
+    return false;
+  }
   return true;
 }
 
-bool applyResourcePath(const ClassifiedPath& input, pistoris::Cinematic& out) {
-  pistoris::paths::CinematicPathView parsed;
-  if (!pistoris::paths::cinematicFromCin(input.path, parsed)) return true;
-  const auto result = out.setResourcePath(input.path);
-  return result || inputFailure("Cinematic resource identity", result, input);
-}
-
-bool loadNative(const ClassifiedPath& input, const Invocation& invocation, NativeCinematic& out) {
-  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
-  return decodeCin(input, out.cinematic);
-}
-
-bool loadNativeIntermediate(const ClassifiedPath& input, const Invocation& invocation, IntermediateCinematic& out) {
-  pistoris::Cin native;
-  if (!decodeCin(input, native)) return false;
-  auto converted = pistoris::Cinematic::importNative(
-      native, &out.illustration_sources, &out.sound_sources, invocation.native_text_mode);
-  if (!converted) return inputFailure("CIN Cinematic", converted, input);
-  if (!applyResourcePath(input, *converted)) return false;
+bool loadIntermediate(ClassifiedPath& input, const Invocation& invocation, IoService& io, IntermediateCinematic& out) {
+  const pistoris::resource_io::CinematicLoadOptions options = {.native_text_mode = invocation.native_text_mode};
+  auto converted = io.resources().loadCinematic(input.document, options);
+  if (!converted) return inputFailure("Cinematic", converted, input);
   out.cinematic = std::move(*converted);
-  out.sound_source_format = CinematicSoundSourceFormat::kCin;
-  return true;
-}
-
-bool loadGlbIntermediate(const ClassifiedPath& input, const Invocation&, IntermediateCinematic& out) {
-  auto converted = pistoris::Cinematic::importGlb(input.buffer, &out.sound_sources);
-  if (!converted) return inputFailure("GLB Cinematic", converted, input);
-  out.cinematic = std::move(*converted);
-  out.sound_source_format = CinematicSoundSourceFormat::kGlb;
+  out.illustration_sources.reserve(out.cinematic.textureCount());
+  for (const ArxTextureView illustration : out.cinematic.textures())
+    out.illustration_sources.emplace_back(illustration.path.data, illustration.path.size);
+  for (const pistoris::SoundKind kind : {pistoris::SoundKind::kEffect, pistoris::SoundKind::kSpeech}) {
+    for (const ArxCinematicSoundView& sound : out.cinematic.sounds(kind)) {
+      out.sound_sources.push_back({sound.handle, std::string(sound.path.data, sound.path.size)});
+    }
+  }
+  out.sound_source_format =
+      input.facts.format == Format::kGlb ? CinematicSoundSourceFormat::kGlb : CinematicSoundSourceFormat::kCin;
   return true;
 }
 
 }  // namespace
 
 const InputConverterDescriptor* inputConverterDescriptor(Route route) {
-  static constexpr InputConverterDescriptor kCin{loadNative, loadNativeIntermediate};
-  static constexpr InputConverterDescriptor kGlb{nullptr, loadGlbIntermediate};
+  static constexpr InputConverterDescriptor kCin{loadNative, loadIntermediate};
+  static constexpr InputConverterDescriptor kGlb{nullptr, loadIntermediate};
   switch (route.input) {
     case Format::kCin:
       return &kCin;
@@ -83,20 +94,20 @@ const InputConverterDescriptor* inputConverterDescriptor(Route route) {
   }
 }
 
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, bool native, CinematicInput& out) {
-  const ClassifiedPath& input = inputs[invocation.input];
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, IoService& io, bool native, CinematicInput& out) {
+  ClassifiedPath& input = inputs[invocation.input];
   if (native) {
     if (!converter.load_native) return false;
     NativeCinematic& loaded = out.emplace<NativeCinematic>();
-    if (converter.load_native(input, invocation, loaded)) return true;
+    if (converter.load_native(input, invocation, io, loaded)) return true;
     out.emplace<std::monostate>();
     return false;
   }
 
   if (!converter.load_intermediate) return false;
   IntermediateCinematic& loaded = out.emplace<IntermediateCinematic>();
-  if (converter.load_intermediate(input, invocation, loaded)) return true;
+  if (converter.load_intermediate(input, invocation, io, loaded)) return true;
   out.emplace<std::monostate>();
   return false;
 }

@@ -153,10 +153,10 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
       selectConversionPath(input_converter->load_native != nullptr,
                            invocation.output_converter->write_native != nullptr,
                            context.requires_intermediate || requires_game_sidecar_bake) == ConversionPath::kNative;
-  if (!loadInput(*input_converter, context.inputs, invocation, native, invocation.state)) return false;
+  if (!loadInput(*input_converter, context.inputs, invocation, context.io, native, invocation.state)) return false;
   IntermediateCinematic* intermediate = std::get_if<IntermediateCinematic>(&invocation.state);
   if (!intermediate) return true;
-  if (invocation.texture_options.export_files &&
+  if (invocation.texture_options.export_files && invocation.texture_options.input_folder_specified &&
       !loadTextureImages(intermediate->cinematic, context.io, invocation.textures, intermediate->illustration_sources))
     return false;
   intermediate->illustration_sources.clear();
@@ -165,7 +165,7 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
                               invocation.sounds,
                               intermediate->sound_sources,
                               intermediate->sound_source_format,
-                              invocation.sound_options.export_files))
+                              invocation.sound_options.export_files && invocation.sound_options.input_folder_specified))
     return false;
   intermediate->sound_sources.clear();
   return true;

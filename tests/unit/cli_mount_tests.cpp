@@ -14,6 +14,8 @@
 #include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/resource_mounts.hpp"
+#include "arx_pistoris/resource_io/status.h"
 #include "arx_pistoris/sound.hpp"
 #include "arx_pistoris/texture.hpp"
 
@@ -22,7 +24,6 @@
 #include "formats/classification.h"
 #include "formats/format.h"
 #include "image_helpers.h"
-#include "io/default_mounts.h"
 #include "io/path_location.h"
 #include "io/policy.h"
 #include "io/service.h"
@@ -198,14 +199,12 @@ TEST_SUITE("CLI mounts") {
   }
 
   TEST_CASE("Default game resource root is absolute or explicitly unavailable") {
-    std::filesystem::path root;
-    std::string error;
-    if (cli::defaultGameResourceRoot(root, error)) {
-      CHECK(root.is_absolute());
-      CHECK(error.empty());
+    auto root = pistoris::resource_io::libertatisResourceRoot();
+    if (root) {
+      CHECK(root->is_absolute());
     } else {
-      CHECK(root.empty());
-      CHECK_FALSE(error.empty());
+      REQUIRE(root.error());
+      CHECK(root.code() == ARX_RESOURCE_IO_STAT_FAILED);
     }
   }
 
@@ -217,21 +216,17 @@ TEST_SUITE("CLI mounts") {
     {
       ScopedEnvironmentOverride data_home("XDG_DATA_HOME", "relative-data");
       ScopedEnvironmentOverride home("HOME", temp.path().string().c_str());
-      std::filesystem::path root;
-      std::string error;
-      REQUIRE(cli::defaultGameResourceRoot(root, error));
-      CHECK(root == temp.path() / ".local" / "share" / "arx");
-      CHECK(error.empty());
+      auto root = pistoris::resource_io::libertatisResourceRoot();
+      REQUIRE(root);
+      CHECK(*root == temp.path() / ".local" / "share" / "arx");
     }
 
     {
       ScopedEnvironmentOverride data_home("XDG_DATA_HOME", "relative-data");
       ScopedEnvironmentOverride home("HOME", "relative-home");
-      std::filesystem::path root;
-      std::string error;
-      CHECK_FALSE(cli::defaultGameResourceRoot(root, error));
-      CHECK(root.empty());
-      CHECK_FALSE(error.empty());
+      auto root = pistoris::resource_io::libertatisResourceRoot();
+      CHECK_FALSE(root);
+      CHECK(root.code() == ARX_RESOURCE_IO_STAT_FAILED);
     }
   }
 #endif
@@ -296,9 +291,9 @@ TEST_SUITE("CLI mounts") {
     writeBytes(temp.path() / "level[map][offset_4_-2].png", makeSolidTestBmp(2, 1));
     cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, mountPaths(temp.path()));
     const cli::ClassifiedPath input{
+        .document = {},
         .path = (temp.path() / "level.fts").string(),
         .location = {.path = (temp.path() / "level.fts").string(), .address = cli::PathAddress::kAbsolute},
-        .buffer = {},
         .facts = {.format = cli::Format::kFts},
         .positional_index = 0,
         .resource_kind = ARX_RESOURCE_KIND_NONE,
@@ -336,11 +331,11 @@ TEST_SUITE("CLI mounts") {
         .loading_screen_stem = {},
     };
     cli::level::GeneratedLevelImages generated;
+    cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, {});
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kLevel, "copy.fts");
     REQUIRE(cli::level::addDirectLevelImageOutputs(plan, input, output, images, generated, asset));
-    REQUIRE(plan.resolve(false, false));
-    cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, {});
+    REQUIRE(plan.resolve(io, false, false));
     REQUIRE(plan.write(io));
 
     CHECK(readBytes(temp.path() / "copy[map][offset_4_-2].bmp") == minimap);
@@ -364,7 +359,7 @@ TEST_SUITE("CLI mounts") {
     cli::ResourceOutputPlan loose_plan;
     const cli::ResourceAssetId loose_asset = loose_plan.addAsset(cli::ResourceAssetKind::kLevel, "loose.fts");
     REQUIRE(cli::level::addDirectLevelImageOutputs(loose_plan, {}, output, images, loose_generated, loose_asset));
-    REQUIRE(loose_plan.resolve(false, false));
+    REQUIRE(loose_plan.resolve(io, false, false));
     REQUIRE(loose_plan.write(io));
     ArxImageInfo info{};
     REQUIRE(pistoris::binary::inspectEncodedImage(readBytes(temp.path() / "map.png"), info) == ARX_OK);
@@ -378,7 +373,7 @@ TEST_SUITE("CLI mounts") {
     cli::ResourceOutputPlan game_plan;
     const cli::ResourceAssetId game_asset = game_plan.addAsset(cli::ResourceAssetKind::kLevel, "level:1");
     REQUIRE(cli::level::addDirectLevelImageOutputs(game_plan, game_input, output, images, game_generated, game_asset));
-    REQUIRE(game_plan.resolve(false, false));
+    REQUIRE(game_plan.resolve(io, false, false));
     REQUIRE(game_plan.write(io));
     CHECK(readBytes(temp.path() / "preserved.bmp") == minimap);
   }
@@ -404,7 +399,7 @@ TEST_SUITE("CLI mounts") {
     cli::ResourceOutputPlan normal_plan;
     const cli::ResourceAssetId normal_asset = normal_plan.addAsset(cli::ResourceAssetKind::kLevel, "level:9");
     REQUIRE(cli::level::addDirectLevelImageOutputs(normal_plan, input, normal, images, normal_generated, normal_asset));
-    REQUIRE(normal_plan.resolve(false, false));
+    REQUIRE(normal_plan.resolve(io, false, false));
     REQUIRE(normal_plan.write(io));
 
     ArxImageInfo info{};
@@ -428,7 +423,7 @@ TEST_SUITE("CLI mounts") {
     const cli::ResourceAssetId fullscreen_asset = fullscreen_plan.addAsset(cli::ResourceAssetKind::kLevel, "level:10");
     REQUIRE(cli::level::addDirectLevelImageOutputs(
         fullscreen_plan, input, fullscreen, images, fullscreen_generated, fullscreen_asset));
-    REQUIRE(fullscreen_plan.resolve(false, false));
+    REQUIRE(fullscreen_plan.resolve(io, false, false));
     REQUIRE(fullscreen_plan.write(io));
 
     REQUIRE(pistoris::binary::inspectEncodedImage(readBytes(temp.path() / "loading10.png"), info) == ARX_OK);
@@ -451,11 +446,11 @@ TEST_SUITE("CLI mounts") {
                                 .address = cli::PathAddress::kAbsolute},
     };
     cli::level::GeneratedLevelImages generated;
+    cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, {});
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kLevel, "level.glb");
     REQUIRE(cli::level::addIntermediateLevelImageOutputs(plan, output, level, generated, asset));
-    REQUIRE(plan.resolve(false, false));
-    cli::IoService io(cli::OverwriteMode::kAlwaysYes, false, {});
+    REQUIRE(plan.resolve(io, false, false));
     REQUIRE(plan.write(io));
 
     ArxImageInfo info{};
@@ -599,10 +594,10 @@ TEST_SUITE("CLI mounts") {
 
     cli::IoService io(cli::OverwriteMode::kAsk, false, mountPaths(temp.path()));
     cli::ClassifiedPath input{
+        .document = {},
         .path = "game/graph/obj3d/interactive/items/weapons/sword/sword.ftl",
         .location = {.path = "game/graph/obj3d/interactive/items/weapons/sword/sword.ftl",
                      .address = cli::PathAddress::kMountRelative},
-        .buffer = {},
         .facts = {.format = cli::Format::kFtl, .kind = cli::PayloadKind::kFtl},
         .positional_index = 0,
         .resource_kind = ARX_RESOURCE_KIND_MODEL,
@@ -659,7 +654,7 @@ TEST_SUITE("CLI mounts") {
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kModel, output.path);
     REQUIRE(cli::addInventoryIconOutput(plan, descriptor, icon, ARX_IMAGE_FORMAT_BMP, asset));
-    REQUIRE(plan.resolve(false, false));
+    REQUIRE(plan.resolve(io, false, false));
     REQUIRE(plan.write(io));
     const std::vector<std::uint8_t> projected_png = readBytes(shield_stem.string() + ".png");
     const std::vector<std::uint8_t> projected_bmp = readBytes(shield_stem.string() + ".bmp");
@@ -686,7 +681,7 @@ TEST_SUITE("CLI mounts") {
         converted_plan.addAsset(cli::ResourceAssetKind::kModel, converted_output.path);
     REQUIRE(
         cli::addInventoryIconOutput(converted_plan, converted_descriptor, tga, ARX_IMAGE_FORMAT_TGA, converted_asset));
-    REQUIRE(converted_plan.resolve(false, false));
+    REQUIRE(converted_plan.resolve(io, false, false));
     REQUIRE(converted_plan.write(io));
     const std::vector<std::uint8_t> converted = readBytes(temp.path() / "graph" / "obj3d" / "interactive" / "items" /
                                                           "weapons" / "dagger" / "dagger[icon].bmp");
@@ -723,9 +718,9 @@ TEST_SUITE("CLI mounts") {
     cli::IoService io(cli::OverwriteMode::kAsk, false, {});
     const std::string model_path = (temp.path() / "sword.glb").string();
     const cli::ClassifiedPath input{
+        .document = {},
         .path = model_path,
         .location = {.path = model_path, .address = cli::PathAddress::kAbsolute},
-        .buffer = {},
         .facts = {.format = cli::Format::kGlb, .kind = cli::PayloadKind::kGlb},
         .positional_index = 0,
         .resource_kind = ARX_RESOURCE_KIND_MODEL,
@@ -751,7 +746,7 @@ TEST_SUITE("CLI mounts") {
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kModel, output.path);
     REQUIRE(cli::addInventoryIconOutput(plan, output_descriptor, icon, ARX_IMAGE_FORMAT_TGA, asset));
-    REQUIRE(plan.resolve(false, false));
+    REQUIRE(plan.resolve(io, false, false));
     REQUIRE(plan.write(io));
     CHECK(readBytes(temp.path() / "copy[icon].tga") == icon);
   }
@@ -1195,7 +1190,7 @@ TEST_SUITE("CLI mounts") {
   }
 #endif
 
-  TEST_CASE("Classified inputs retain primary resource layout") {
+  TEST_CASE("Classified inputs distinguish mounted native files from loose external formats") {
     TemporaryDirectory temp;
     writeBytes(temp.path() / "model.ftl", {0xff});
     const std::string json_text = R"({"$schema":"https://arx-tools.github.io/schemas/ftl.schema.json"})";

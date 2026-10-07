@@ -189,6 +189,8 @@ def add_collection_imports(source: str) -> str:
         "Sequence",
     }
     required = {name for name in available if re.search(rf"\b{name}\b", source)}
+    if not required:
+        return source
     match = re.search(r"^from collections\.abc import (?P<names>[^\n]+)$", source, re.MULTILINE)
     if match:
         names = sorted(set(match.group("names").split(", ")) | required)
@@ -196,8 +198,19 @@ def add_collection_imports(source: str) -> str:
     return f"from collections.abc import {', '.join(sorted(required))}\n" + source
 
 
+def qualify_property_decorators(source: str) -> str:
+    qualified = re.sub(r"^(?P<indent>\s*)@property$", r"\g<indent>@builtins.property", source, flags=re.MULTILINE)
+    if qualified == source or re.search(r"^import builtins$", qualified, re.MULTILINE):
+        return qualified
+    first_import = re.search(r"^(?!from __future__)(?:from|import) ", qualified, re.MULTILINE)
+    if first_import is None:
+        return "import builtins\n" + qualified
+    return qualified[: first_import.start()] + "import builtins\n" + qualified[first_import.start() :]
+
+
 def normalize(path: Path, original: str, inputs: dict[str, str], outputs: dict[str, str]) -> None:
     source = original
+    source = qualify_property_decorators(source)
     source = CLASS.sub(iterable_inputs, source)
     source = collection_setter_inputs(source, inputs)
     source = collection_output_types(source, module_name(path), outputs)

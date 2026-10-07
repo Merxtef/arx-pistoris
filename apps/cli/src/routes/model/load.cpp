@@ -9,15 +9,19 @@
 #include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/native_bundle.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.hpp"
+#include "arx_pistoris/texture.hpp"
 
 #include "base/bytes.h"
 #include "console/diagnostics.h"
 #include "console/logging.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/service.h"
 #include "resources/model_input.h"
+#include "resources/native_bundle.h"
 #include "resources/sidecar_io.h"
 #include "routes/conversion_failure.h"
 #include "routes/model/invocation.h"
@@ -46,39 +50,19 @@ bool inputFailure(const char* what, const Result& result, std::string_view path 
 bool decodeTea(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Tea& out) {
   switch (input.facts.format) {
     case Format::kTea: {
-      auto result = pistoris::readTea(input.buffer);
+      auto result = pistoris::readTea(input.document.data);
       if (!result) return inputFailure("TEA", result, input.path);
       out = std::move(*result);
       return true;
     }
     case Format::kJson: {
-      auto result = pistoris::fromTeaJson(byteStringView(input.buffer), text_mode);
+      auto result = pistoris::fromTeaJson(byteStringView(input.document.data), text_mode);
       if (!result) return inputFailure("TEA", result, input.path);
       out = std::move(*result);
       return true;
     }
     default:
       diagnostic(DiagnosticCode::kModelUnsupportedExtra, "Unsupported extra animation format: %s", input.path.c_str());
-      return false;
-  }
-}
-
-bool decodeFtl(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Ftl& out) {
-  switch (input.facts.format) {
-    case Format::kFtl: {
-      auto result = pistoris::readFtl(input.buffer);
-      if (!result) return inputFailure(formatName(input.facts.format), result, input.path);
-      out = std::move(*result);
-      return true;
-    }
-    case Format::kJson: {
-      auto result = pistoris::fromFtlJson(byteStringView(input.buffer), text_mode);
-      if (!result) return inputFailure(formatName(input.facts.format), result, input.path);
-      out = std::move(*result);
-      return true;
-    }
-    default:
-      diagnostic(DiagnosticCode::kModelUnsupportedInput, "Unsupported Model input format: %s", input.path.c_str());
       return false;
   }
 }
@@ -97,19 +81,47 @@ bool applyAnimationResourcePath(const ClassifiedPath& input, pistoris::Animation
   return result || inputFailure("Animation resource identity", result, input.path);
 }
 
-bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, NativeModelFiles& out) {
+bool loadNative(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, IoService& io,
+                NativeModelFiles& out) {
   const ClassifiedPath& input = inputs[invocation.input];
-  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
-  if (!decodeFtl(input, out.text_mode, out.ftl)) return false;
-  out.animations.reserve(invocation.extras.size());
-  for (const std::size_t index : invocation.extras) {
+  std::vector<pistoris::resource_io::ResourceDocument> animations;
+  animations.reserve(invocation.extras.size());
+  for (const std::size_t index : invocation.extras) animations.push_back(std::move(inputs[index].document));
+  const pistoris::NativeTextMode text_mode =
+      directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  auto loaded = io.resources().loadModelNativeBundle(
+      input.document, animations, {.native_text_mode = text_mode, .suppress_related_resource_errors = false});
+  if (!loaded) return inputFailure("Model native bundle", loaded, input.path);
+
+  out.ftl = loaded->model().carrier();
+  out.text_mode = loaded->model().textMode();
+  if (!nativeTextureFiles(loaded->resources(),
+                          pistoris::resource_io::NativeResourceRole::kTexture,
+                          ARX_RESOURCE_KIND_MODEL,
+                          0,
+                          io,
+                          "Model texture image",
+                          out.texture_files)) {
+    diagnostic(DiagnosticCode::kModelInputFailed, "Model native bundle contains an invalid texture reference");
+    return false;
+  }
+  out.animations.reserve(loaded->animations().size());
+  for (std::size_t animation_index = 0; animation_index < loaded->animations().size(); ++animation_index) {
+    const auto& member = loaded->animations()[animation_index];
     NativeAnimationFile animation;
-    animation.text_mode =
-        directCarrierTextMode(inputs[index].facts.format, invocation.output.format, invocation.native_text_mode);
-    if (!decodeTea(inputs[index], animation.text_mode, animation.tea)) return false;
-    animation.input = index;
-    pistoris::paths::AnimationPathView parsed;
-    if (pistoris::paths::animationFromTea(inputs[index].path, parsed)) animation.resource_path = inputs[index].path;
+    animation.tea = member.carrier();
+    animation.resource_path = member.source().logical_path;
+    animation.input = invocation.extras[animation_index];
+    animation.text_mode = member.textMode();
+    if (!nativeSoundFiles(loaded->resources(),
+                          ARX_RESOURCE_KIND_ANIMATION,
+                          animation_index,
+                          io,
+                          "Animation sound",
+                          animation.sound_files)) {
+      diagnostic(DiagnosticCode::kModelInputFailed, "Model native bundle contains an invalid sound reference");
+      return false;
+    }
     out.animations.push_back(std::move(animation));
   }
   return true;
@@ -123,6 +135,11 @@ bool nativeToIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoc
   if (!applyModelResourcePath(inputs[invocation.input], *model)) return false;
   out.model = std::move(*model);
   out.texture_source_paths = std::move(texture_source_paths);
+  for (const pistoris::NativeTextureFile& texture : native.texture_files) {
+    const auto loaded =
+        out.model.setTextureImage(texture.source_texture, {texture.encoded_image.data(), texture.encoded_image.size()});
+    if (!loaded) return inputFailure("Model texture", loaded, texture.resource_path);
+  }
 
   out.animations.reserve(native.animations.size());
   out.sound_sources.reserve(native.animations.size());
@@ -141,6 +158,11 @@ bool nativeToIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoc
       if (!identity)
         return inputFailure("Animation resource identity", identity, native.animations[index].resource_path);
     }
+    for (const pistoris::SoundFile& sound : native.animations[index].sound_files) {
+      const auto loaded =
+          animation->setSoundData(sound.source_sound, {sound.encoded_audio.data(), sound.encoded_audio.size()});
+      if (!loaded) return inputFailure("Animation sound", loaded, sound.path);
+    }
     out.animations.push_back(std::move(*animation));
     out.sound_sources.push_back(std::move(sound_sources));
     const std::size_t input = native.animations[index].input;
@@ -150,18 +172,18 @@ bool nativeToIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoc
   return true;
 }
 
-bool loadNativeIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
-                            const ModelOptions&, IntermediateModel& out) {
+bool loadNativeIntermediate(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, const ModelOptions&,
+                            IoService& io, IntermediateModel& out) {
   NativeModelFiles native;
-  return loadNative(inputs, invocation, native) && nativeToIntermediate(inputs, invocation, native, out);
+  return loadNative(inputs, invocation, io, native) && nativeToIntermediate(inputs, invocation, native, out);
 }
 
-bool loadObjIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, const ModelOptions&,
-                         IntermediateModel& out) {
+bool loadObjIntermediate(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, const ModelOptions&,
+                         IoService& io, IntermediateModel& out) {
   const ClassifiedPath& input = inputs[invocation.input];
   ConvertedModelInput converted;
   if (!convertModelInput(input,
-                         invocation.obj_material_libraries,
+                         io,
                          {.glb = {}, .native_text_mode = invocation.native_text_mode},
                          DiagnosticCode::kModelInputFailed,
                          "OBJ Model",
@@ -189,12 +211,12 @@ bool loadObjIntermediate(const std::vector<ClassifiedPath>& inputs, const Invoca
   return true;
 }
 
-bool loadGlbIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
-                         const ModelOptions& options, IntermediateModel& out) {
+bool loadGlbIntermediate(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, const ModelOptions& options,
+                         IoService& io, IntermediateModel& out) {
   const ClassifiedPath& input = inputs[invocation.input];
   ConvertedModelInput converted;
   if (!convertModelInput(input,
-                         {},
+                         io,
                          {.glb = options.glb_import, .native_text_mode = invocation.native_text_mode},
                          DiagnosticCode::kModelInputFailed,
                          "GLB Model",
@@ -250,19 +272,19 @@ const InputConverterDescriptor* inputConverterDescriptor(Route route) {
   }
 }
 
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, const ModelOptions& options, bool native, ModelInput& out) {
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, const ModelOptions& options, IoService& io, bool native, ModelInput& out) {
   if (native) {
     if (!converter.load_native) return false;
     NativeModelFiles& loaded = out.emplace<NativeModelFiles>();
-    if (converter.load_native(inputs, invocation, loaded)) return true;
+    if (converter.load_native(inputs, invocation, io, loaded)) return true;
     out.emplace<std::monostate>();
     return false;
   }
 
   if (!converter.load_intermediate) return false;
   IntermediateModel& loaded = out.emplace<IntermediateModel>();
-  if (converter.load_intermediate(inputs, invocation, options, loaded)) return true;
+  if (converter.load_intermediate(inputs, invocation, options, io, loaded)) return true;
   out.emplace<std::monostate>();
   return false;
 }

@@ -153,6 +153,18 @@ bool cli::IoService::writePath(const PathLocation& location, const void* data, s
                                                          : writeFile(location.path.c_str(), data, size);
 }
 
+bool cli::IoService::allowOverwrite(const char* path) {
+  switch (state_.overwrite) {
+    case OverwriteMode::kAsk:
+      return askOverwrite(state_, path);
+    case OverwriteMode::kAlwaysYes:
+      return true;
+    case OverwriteMode::kAlwaysNo:
+      return false;
+  }
+  return false;
+}
+
 bool cli::IoService::writeNativeFile(const std::filesystem::path& path, const void* data, std::size_t size) {
   const std::string display_path = io_detail::pathToUtf8(path);
   std::string error;
@@ -185,20 +197,7 @@ bool cli::IoService::writeNativeFile(const std::filesystem::path& path, const vo
   }
 
   if (target_exists) {
-    bool overwrite = false;
-    switch (state_.overwrite) {
-      case cli::OverwriteMode::kAsk:
-        overwrite = askOverwrite(state_, display_path.c_str());
-        break;
-      case cli::OverwriteMode::kAlwaysYes:
-        overwrite = true;
-        break;
-      case cli::OverwriteMode::kAlwaysNo:
-        overwrite = false;
-        break;
-    }
-
-    if (!overwrite) {
+    if (!allowOverwrite(display_path.c_str())) {
       log(ARX_LOG_INFO, "skipped existing output: %s", display_path.c_str());
       return true;
     }

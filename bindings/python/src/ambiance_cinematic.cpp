@@ -6,6 +6,7 @@
 #include "resource_state.h"
 #include "resource_types.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -13,10 +14,12 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
 #include <nanobind/stl/vector.h>
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -623,6 +626,9 @@ struct AmbianceSoundAccess {
   static ElementDisplayLabel displayLabel(const Owner& owner, std::size_t, std::size_t index) {
     return {"path", copyString(owner.sounds()[index].path)};
   }
+  static std::size_t positionForPath(const Owner& owner, std::size_t, std::string_view path) {
+    return ambianceSoundIndex(owner, canonicalResourcePath(path));
+  }
   static std::size_t compact(Owner& owner, std::size_t) {
     const std::size_t removed = unwrap(owner.compactSounds());
     owner.tracking.sounds.invalidate();
@@ -862,7 +868,7 @@ std::size_t languagePosition(const PythonCinematic& cinematic, LanguageId langua
   return position;
 }
 
-std::size_t soundEncodingPosition(const PythonCinematic& cinematic, SoundHandle sound, LanguageId language) {
+std::size_t soundEncodingPosition(const Cinematic& cinematic, SoundHandle sound, LanguageId language) {
   const auto encodings = cinematic.soundEncodings();
   for (std::size_t position = 0; position < encodings.size(); ++position) {
     if (encodings[position].sound == sound && encodings[position].language == language) return position;
@@ -880,26 +886,67 @@ std::size_t ambianceKeyCount(const PythonAmbiance& ambiance, AmbianceTrackIndex 
 template <SoundKind Kind>
 struct CinematicSoundAccess {
   using Owner = PythonCinematic;
-  using Value = CinematicSoundValue;
-  using AddValue = std::string;
-  using Key = std::string;
+  using Value = std::conditional_t<Kind == SoundKind::kEffect, Sound, CinematicSpeechValue>;
+  static constexpr const char* collection_value_name =  // NOLINT(readability-identifier-naming)
+      Kind == SoundKind::kEffect ? "pistoris.Sound" : "pistoris.cinematic.Speech";
   static std::size_t size(const Owner& owner, std::size_t) { return owner.soundCount(Kind); }
   static CollectionTracker& tracker(Owner& owner, std::size_t) { return owner.tracking.sounds[soundKindIndex(Kind)]; }
   static Value get(const Owner& owner, std::size_t, std::size_t index) {
     const auto value = owner.sounds(Kind)[index];
-    return {copyString(value.path)};
+    Value result;
+    result.path = copyString(value.path);
+    const SoundHandle sound = cinematicSoundHandle(Kind, static_cast<SoundIndex>(index));
+    if constexpr (Kind == SoundKind::kEffect) {
+      const std::size_t position = soundEncodingPosition(owner, sound, kSoundEffects);
+      if (position != owner.soundEncodingCount()) {
+        const auto audio = owner.soundEncodings()[position].encoded_audio;
+        result.encoded_audio.assign(audio.data, audio.data + audio.size);
+      }
+    } else {
+      for (const auto language : owner.languages()) {
+        const std::size_t position = soundEncodingPosition(owner, sound, language.id);
+        if (position == owner.soundEncodingCount()) continue;
+        const auto audio = owner.soundEncodings()[position].encoded_audio;
+        result.encodings.push_back(
+            {copyString(language.name), std::vector<std::uint8_t>(audio.data, audio.data + audio.size)});
+      }
+    }
+    return result;
   }
   static void set(Owner& owner, std::size_t, std::size_t index, const Value& value) {
-    unwrap(owner.setSoundPath(cinematicSoundHandle(Kind, static_cast<SoundIndex>(index)),
-                              canonicalResourcePath(value.path)));
+    Cinematic updated(owner);
+    const SoundHandle sound = cinematicSoundHandle(Kind, static_cast<SoundIndex>(index));
+    unwrap(updated.setSoundPath(sound, canonicalResourcePath(value.path)));
+    if constexpr (Kind == SoundKind::kEffect) {
+      unwrap(updated.clearSoundData(sound, kSoundEffects));
+      if (!value.encoded_audio.empty()) {
+        unwrap(updated.setSoundData(sound, kSoundEffects, audioView(value.encoded_audio)));
+      }
+    } else {
+      for (const auto language : updated.languages()) unwrap(updated.clearSoundData(sound, language.id));
+      for (const auto& encoding : value.encodings) {
+        const LanguageId language = cinematicLanguageByName(updated, encoding.language);
+        unwrap(updated.setSoundData(sound, language, audioView(encoding.encoded_audio)));
+      }
+    }
+    commitCinematic(owner, std::move(updated));
   }
-  static Key add(Owner& owner, std::size_t, const AddValue& path) {
-    const SoundHandle handle = unwrap(owner.addSound(Kind, canonicalResourcePath(path)));
-    SoundIndex index = kNoSound;
-    checkStatus(soundHandleIndex(handle, index));
-    return copyString(owner.sounds(Kind)[index].path);
+  static void append(Owner& owner, std::size_t, const Value& value) {
+    Cinematic updated(owner);
+    const SoundHandle sound = unwrap(updated.addSound(Kind, canonicalResourcePath(value.path)));
+    if constexpr (Kind == SoundKind::kEffect) {
+      if (!value.encoded_audio.empty()) {
+        unwrap(updated.setSoundData(sound, kSoundEffects, audioView(value.encoded_audio)));
+      }
+    } else {
+      for (const auto& encoding : value.encodings) {
+        const LanguageId language = cinematicLanguageByName(updated, encoding.language);
+        unwrap(updated.setSoundData(sound, language, audioView(encoding.encoded_audio)));
+      }
+    }
+    commitCinematic(owner, std::move(updated));
   }
-  static std::size_t positionForKey(const Owner& owner, std::size_t, const Key& path) {
+  static std::size_t positionForPath(const Owner& owner, std::size_t, std::string_view path) {
     const std::string canonical = canonicalResourcePath(path);
     const auto sounds = owner.sounds(Kind);
     for (std::size_t index = 0; index < sounds.size(); ++index) {
@@ -907,8 +954,7 @@ struct CinematicSoundAccess {
     }
     throwMissingKey(canonical);
   }
-  static void removeKey(Owner& owner, std::size_t, const Key& path) {
-    const std::size_t index = positionForKey(owner, 0, path);
+  static void remove(Owner& owner, std::size_t, std::size_t index) {
     const SoundHandle handle = cinematicSoundHandle(Kind, static_cast<SoundIndex>(index));
     unwrap(owner.removeSound(handle));
     owner.tracking.sounds[soundKindIndex(Kind)].remove(index);
@@ -926,6 +972,26 @@ struct CinematicSoundAccess {
 
 using CinematicSoundEffectAccess = CinematicSoundAccess<SoundKind::kEffect>;
 using CinematicSpeechAccess = CinematicSoundAccess<SoundKind::kSpeech>;
+
+std::vector<CinematicSpeechEncodingValue> cinematicSpeechEncodings(nb::handle mapping) {
+  if (mapping.is_none()) return {};
+  if (!PyMapping_Check(mapping.ptr())) throw nb::type_error("encodings must be a mapping from language names to bytes");
+  std::vector<CinematicSpeechEncodingValue> result;
+  const nb::object items = nb::borrow<nb::object>(mapping).attr("items")();
+  for (nb::handle item : nb::cast<nb::iterable>(items)) {
+    const nb::tuple pair = nb::cast<nb::tuple>(item);
+    const std::string language = canonicalLowerIdentifier(nb::cast<std::string>(pair[0]));
+    const auto audio = byteSpan(pair[1]);
+    if (audio.size() == 0) throw nb::value_error("encoded_audio cannot be empty; delete the language to clear it");
+    const auto found = std::ranges::find(result, language, &CinematicSpeechEncodingValue::language);
+    if (found == result.end()) {
+      result.push_back({language, std::vector<std::uint8_t>(audio.begin(), audio.end())});
+    } else {
+      found->encoded_audio.assign(audio.begin(), audio.end());
+    }
+  }
+  return result;
+}
 
 struct CinematicLanguageAccess {
   using Owner = PythonCinematic;
@@ -962,11 +1028,14 @@ struct CinematicLanguageAccess {
 
 class CinematicSpeechEncodingMap {
  public:
-  explicit CinematicSpeechEncodingMap(ElementRef<CinematicSpeechAccess> speech) : speech_(std::move(speech)) {}
+  explicit CinematicSpeechEncodingMap(ElementRef<CinematicSpeechAccess> speech) : backing_(std::move(speech)) {}
+  CinematicSpeechEncodingMap(nb::object owner, std::vector<CinematicSpeechEncodingValue>* encodings)
+      : backing_(DetachedBacking{std::move(owner), encodings}) {}
 
   [[nodiscard]] std::size_t size() const {
+    if (const auto* detached = std::get_if<DetachedBacking>(&backing_)) return detached->encodings->size();
     std::size_t result = 0;
-    const auto& owner = speech_.owner();
+    const auto& owner = speech().owner();
     const SoundHandle sound = handle();
     for (const auto language : owner.languages()) {
       if (soundEncodingPosition(owner, sound, language.id) != owner.soundEncodingCount()) ++result;
@@ -975,7 +1044,11 @@ class CinematicSpeechEncodingMap {
   }
   [[nodiscard]] nb::iterator iterator() const {
     nb::list result;
-    const auto& owner = speech_.owner();
+    if (const auto* detached = std::get_if<DetachedBacking>(&backing_)) {
+      for (const auto& encoding : *detached->encodings) result.append(encoding.language);
+      return nb::iter(result);
+    }
+    const auto& owner = speech().owner();
     const SoundHandle sound = handle();
     for (const auto language : owner.languages()) {
       if (soundEncodingPosition(owner, sound, language.id) != owner.soundEncodingCount()) {
@@ -985,39 +1058,77 @@ class CinematicSpeechEncodingMap {
     return nb::iter(result);
   }
   [[nodiscard]] nb::bytes at(std::string_view name) const {
+    if (const auto* detached = std::get_if<DetachedBacking>(&backing_)) {
+      const std::string canonical = canonicalLowerIdentifier(name);
+      for (const auto& encoding : *detached->encodings)
+        if (encoding.language == canonical) return toBytes(encoding.encoded_audio);
+      throwMissingKey(canonical);
+    }
     const auto found = position(name);
     if (!found) throwMissingKey(std::string(name));
-    const auto audio = speech_.owner().soundEncodings()[*found].encoded_audio;
+    const auto audio = speech().owner().soundEncodings()[*found].encoded_audio;
     return toBytes({audio.data, audio.size});
   }
   void set(std::string_view name, nb::handle data) {
-    const LanguageId language = cinematicLanguageByName(speech_.owner(), name);
     const auto audio = byteSpan(data);
-    unwrap(speech_.owner().setSoundData(handle(), language, {audio.data(), audio.size()}));
+    if (audio.size() == 0) throw nb::value_error("encoded_audio cannot be empty; delete the language to clear it");
+    if (auto* detached = std::get_if<DetachedBacking>(&backing_)) {
+      const std::string canonical = canonicalLowerIdentifier(name);
+      for (auto& encoding : *detached->encodings) {
+        if (encoding.language != canonical) continue;
+        encoding.encoded_audio.assign(audio.begin(), audio.end());
+        return;
+      }
+      detached->encodings->push_back({canonical, std::vector<std::uint8_t>(audio.begin(), audio.end())});
+      return;
+    }
+    const LanguageId language = cinematicLanguageByName(speech().owner(), name);
+    unwrap(speech().owner().setSoundData(handle(), language, {audio.data(), audio.size()}));
   }
   void remove(std::string_view name) {
+    if (auto* detached = std::get_if<DetachedBacking>(&backing_)) {
+      const std::string canonical = canonicalLowerIdentifier(name);
+      const auto found = std::ranges::find(*detached->encodings, canonical, &CinematicSpeechEncodingValue::language);
+      if (found == detached->encodings->end()) throwMissingKey(canonical);
+      detached->encodings->erase(found);
+      return;
+    }
     if (!position(name)) throwMissingKey(std::string(name));
-    unwrap(speech_.owner().clearSoundData(handle(), cinematicLanguageByName(speech_.owner(), name)));
+    unwrap(speech().owner().clearSoundData(handle(), cinematicLanguageByName(speech().owner(), name)));
   }
   void clear() {
+    if (auto* detached = std::get_if<DetachedBacking>(&backing_)) {
+      detached->encodings->clear();
+      return;
+    }
     std::vector<std::string> names;
     for (nb::handle name : iterator()) names.push_back(nb::cast<std::string>(name));
     for (const std::string& name : names) remove(name);
   }
 
  private:
+  struct DetachedBacking {
+    nb::object owner;
+    std::vector<CinematicSpeechEncodingValue>* encodings = nullptr;
+  };
+  [[nodiscard]] const ElementRef<CinematicSpeechAccess>& speech() const {
+    return std::get<ElementRef<CinematicSpeechAccess>>(backing_);
+  }
+  [[nodiscard]] ElementRef<CinematicSpeechAccess>& speech() {
+    return std::get<ElementRef<CinematicSpeechAccess>>(backing_);
+  }
   [[nodiscard]] SoundHandle handle() const {
-    return cinematicSoundHandle(SoundKind::kSpeech, static_cast<SoundIndex>(speech_.index()));
+    return cinematicSoundHandle(SoundKind::kSpeech, static_cast<SoundIndex>(speech().index()));
   }
   [[nodiscard]] std::optional<std::size_t> position(std::string_view name) const {
-    const auto& owner = speech_.owner();
+    const auto& owner = speech().owner();
     const auto language = owner.findLanguage(canonicalLowerIdentifier(name));
     if (!language) return std::nullopt;
     const std::size_t found = soundEncodingPosition(owner, handle(), *language);
     return found == owner.soundEncodingCount() ? std::nullopt : std::optional<std::size_t>{found};
   }
 
-  ElementRef<CinematicSpeechAccess> speech_;
+  std::variant<ElementRef<CinematicSpeechAccess>, DetachedBacking> backing_;
 };
 
 nb::object cinematicIllustrationReference(const std::shared_ptr<PythonCinematic>& owner,
@@ -1764,12 +1875,57 @@ void bindCinematicReferences(nb::module_& module) {
       nb::sig("def add(self, keyframe: CinematicKeyframe, *, illustration: CinematicIllustrationRef) -> "
               "CinematicKeyframeRef"));
 
-  auto sound_effect = bindElementCollection<CinematicSoundEffectAccess>(module,
-                                                                        "CinematicSoundEffectRef",
-                                                                        "CinematicSoundEffectCollection",
-                                                                        "pistoris.cinematic.SoundEffectRef",
-                                                                        {.reference_property = nullptr});
-  bindElementField(sound_effect, "path", &CinematicSoundValue::path);
+  auto speech_encodings = nb::class_<CinematicSpeechEncodingMap>(
+      module, "CinematicSpeechEncodingMap", "A live mapping from language names to encoded speech audio.");
+  speech_encodings.def("__len__", &CinematicSpeechEncodingMap::size)
+      .def("__getitem__",
+           &CinematicSpeechEncodingMap::at,
+           nb::arg("language"),
+           nb::sig("def __getitem__(self, language: str, /) -> bytes"))
+      .def("__setitem__", &CinematicSpeechEncodingMap::set, nb::arg("language"), nb::arg("encoded_audio"))
+      .def("__delitem__", &CinematicSpeechEncodingMap::remove, nb::arg("language"))
+      .def("clear", &CinematicSpeechEncodingMap::clear)
+      .def("__iter__", &CinematicSpeechEncodingMap::iterator, nb::sig("def __iter__(self) -> Iterator[str]"))
+      .def("__repr__", [](const CinematicSpeechEncodingMap& self) {
+        nb::dict result;
+        for (nb::handle name : self.iterator()) result[name] = self.at(nb::cast<std::string>(name));
+        return std::string(nb::repr(result).c_str());
+      });
+  registerMutableMapping(speech_encodings);
+  registerMappingValueEquality(speech_encodings);
+
+  auto speech_value = nb::class_<CinematicSpeechValue>(module, "CinematicSpeech");
+  speech_value
+      .def(
+          "__init__",
+          [](CinematicSpeechValue* self, const std::string& path, nb::handle encodings) {
+            std::string canonical_path = canonicalResourcePath(path);
+            auto canonical_encodings = cinematicSpeechEncodings(encodings);
+            new (self) CinematicSpeechValue{std::move(canonical_path), std::move(canonical_encodings)};
+          },
+          nb::kw_only(),
+          nb::arg("path") = "",
+          nb::arg("encodings").none() = nb::none(),
+          nb::sig("def __init__(self, *, path: str = '', encodings: Mapping[str, object] | None = None) -> None"))
+      .def_prop_rw(
+          "path",
+          [](const CinematicSpeechValue& value) { return value.path; },
+          [](CinematicSpeechValue& value, std::string_view path) { value.path = canonicalResourcePath(path); })
+      .def_prop_rw(
+          "encodings",
+          [](nb::handle owner) {
+            auto& value = nb::cast<CinematicSpeechValue&>(owner);
+            return CinematicSpeechEncodingMap(nb::borrow<nb::object>(owner), &value.encodings);
+          },
+          [](CinematicSpeechValue& value, nb::handle encodings) {
+            value.encodings = cinematicSpeechEncodings(encodings);
+          },
+          nb::for_getter(nb::sig("def encodings(self) -> CinematicSpeechEncodingMap")),
+          nb::for_setter(nb::sig("def encodings(self, value: Mapping[str, object], /) -> None")));
+
+  auto sound_effect = bindElementCollection<CinematicSoundEffectAccess>(
+      module, "CinematicSoundEffectRef", "CinematicSoundEffectCollection", "pistoris.cinematic.SoundEffectRef");
+  bindElementField(sound_effect, "path", &Sound::path);
   sound_effect.def_prop_rw(
       "encoded_audio",
       [](const ElementRef<CinematicSoundEffectAccess>& self) -> nb::object {
@@ -1792,33 +1948,11 @@ void bindCinematicReferences(nb::module_& module) {
       nb::for_setter(nb::arg("value").none()),
       nb::for_setter(nb::sig("def encoded_audio(self, value: object | None, /) -> None")));
 
-  auto speech = bindElementCollection<CinematicSpeechAccess>(module,
-                                                             "CinematicSpeechRef",
-                                                             "CinematicSpeechCollection",
-                                                             "pistoris.cinematic.SpeechRef",
-                                                             {.reference_property = nullptr});
-  bindElementField(speech, "path", &CinematicSoundValue::path);
+  auto speech = bindElementCollection<CinematicSpeechAccess>(
+      module, "CinematicSpeechRef", "CinematicSpeechCollection", "pistoris.cinematic.SpeechRef");
+  bindElementField(speech, "path", &CinematicSpeechValue::path);
   speech.def_prop_ro("encodings",
                      [](const ElementRef<CinematicSpeechAccess>& self) { return CinematicSpeechEncodingMap(self); });
-
-  auto speech_encodings = nb::class_<CinematicSpeechEncodingMap>(
-      module, "CinematicSpeechEncodingMap", "A live mapping from registered language names to encoded speech audio.");
-  speech_encodings.def("__len__", &CinematicSpeechEncodingMap::size)
-      .def("__getitem__",
-           &CinematicSpeechEncodingMap::at,
-           nb::arg("language"),
-           nb::sig("def __getitem__(self, language: str, /) -> bytes"))
-      .def("__setitem__", &CinematicSpeechEncodingMap::set, nb::arg("language"), nb::arg("encoded_audio"))
-      .def("__delitem__", &CinematicSpeechEncodingMap::remove, nb::arg("language"))
-      .def("clear", &CinematicSpeechEncodingMap::clear)
-      .def("__iter__", &CinematicSpeechEncodingMap::iterator, nb::sig("def __iter__(self) -> Iterator[str]"))
-      .def("__repr__", [](const CinematicSpeechEncodingMap& self) {
-        nb::dict result;
-        for (nb::handle name : self.iterator()) result[name] = self.at(nb::cast<std::string>(name));
-        return std::string(nb::repr(result).c_str());
-      });
-  registerMutableMapping(speech_encodings);
-  registerMappingValueEquality(speech_encodings);
 
   auto language = bindElementCollection<CinematicLanguageAccess>(module,
                                                                  "CinematicLanguageRef",

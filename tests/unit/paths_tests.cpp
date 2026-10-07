@@ -6,11 +6,13 @@
 #include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <ostream>  // IWYU pragma: keep
 #include <span>
 #include <string>
+#include <string_view>
 
 TEST_SUITE("paths") {
   TEST_CASE("Portable emitted filenames validate and sanitize through the public path API") {
@@ -495,6 +497,57 @@ TEST_SUITE("paths") {
     ambiance = {"unchanged"};
     CHECK_FALSE(pistoris::paths::ambianceFromAmb("sfx/ambiance/cave/water#deep.amb", ambiance));
     CHECK(ambiance.name == "unchanged");
+  }
+
+  TEST_CASE("Owning resource selectors parse and rebuild every resource kind") {
+    constexpr std::array<std::string_view, 5> kSelectors = {"level:17",
+                                                            "model:npc:human_base:tweaks/red",
+                                                            "anim:fix_inter:lever",
+                                                            "cinematic:intro",
+                                                            "ambiance:cave/water"};
+    for (std::string_view selector : kSelectors) {
+      pistoris::paths::ResourceSelector resource;
+      REQUIRE(pistoris::paths::parseResourceSelector(selector, resource));
+      std::string rebuilt;
+      REQUIRE(pistoris::paths::resourceSelector(resource, rebuilt));
+      CHECK(rebuilt == selector);
+    }
+
+    pistoris::paths::ResourceSelector unchanged;
+    unchanged.kind = ARX_RESOURCE_KIND_CINEMATIC;
+    unchanged.name = "unchanged";
+    CHECK_FALSE(pistoris::paths::parseResourceSelector("level:not-a-number", unchanged));
+    CHECK(unchanged.kind == ARX_RESOURCE_KIND_CINEMATIC);
+    CHECK(unchanged.name == "unchanged");
+    CHECK_FALSE(pistoris::paths::parseResourceSelector("texture:stone", unchanged));
+    CHECK(unchanged.kind == ARX_RESOURCE_KIND_CINEMATIC);
+    CHECK(unchanged.name == "unchanged");
+
+    pistoris::paths::ResourceSelector invalid;
+    std::string unchanged_text = "unchanged";
+    CHECK_FALSE(pistoris::paths::resourceSelector(invalid, unchanged_text));
+    CHECK(unchanged_text == "unchanged");
+
+    const auto check_incoherent = [](const pistoris::paths::ResourceSelector& resource) {
+      std::string text = "unchanged";
+      CHECK_FALSE(pistoris::paths::resourceSelector(resource, text));
+      CHECK(text == "unchanged");
+    };
+    REQUIRE(pistoris::paths::parseResourceSelector("level:17", invalid));
+    invalid.name = "ignored";
+    check_incoherent(invalid);
+    REQUIRE(pistoris::paths::parseResourceSelector("model:npc:human_base", invalid));
+    invalid.animation_type = pistoris::paths::AnimationPathType::kNpc;
+    check_incoherent(invalid);
+    REQUIRE(pistoris::paths::parseResourceSelector("anim:npc:human_male_wait", invalid));
+    invalid.tweak = "ignored";
+    check_incoherent(invalid);
+    REQUIRE(pistoris::paths::parseResourceSelector("cinematic:intro", invalid));
+    invalid.level = 1;
+    check_incoherent(invalid);
+    REQUIRE(pistoris::paths::parseResourceSelector("ambiance:cave", invalid));
+    invalid.model_type = pistoris::paths::ModelPathType::kNpc;
+    check_incoherent(invalid);
   }
 
   TEST_CASE("Resource search locations expose canonical roots and bounded depths") {

@@ -102,6 +102,8 @@ def main() -> None:
             "mypy",
             "--strict",
             "--no-error-summary",
+            "--cache-dir",
+            str(workspace / "mypy-cache"),
             str(ROOT / "tests/python/typecheck_api.py"),
             env=clean_environment,
         )

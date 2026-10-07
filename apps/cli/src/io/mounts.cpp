@@ -1,14 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // SPDX-FileCopyrightText: 2026 Merxtef
 
+#include "arx_pistoris/base/result.hpp"
+#include "arx_pistoris/base/status.h"
 #include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/resource_io/catalog.hpp"
+#include "arx_pistoris/resource_io/location.hpp"
+#include "arx_pistoris/resource_io/output.hpp"
+#include "arx_pistoris/resource_io/resource_mounts.hpp"
+#include "arx_pistoris/resource_io/resources.hpp"
+#include "arx_pistoris/resource_io/status.h"
+#include "arx_pistoris/runtime.hpp"
 #include "arx_pistoris/runtime/types.h"
 
 #include "base/ascii.h"
 #include "base/resource_path.h"
 #include "console/diagnostics.h"
 #include "console/logging.h"
-#include "io/default_mounts.h"
 #include "io/files_internal.h"
 #include "io/native_path.h"
 #include "io/path_location.h"
@@ -17,7 +25,6 @@
 #include "media/encoded.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -26,7 +33,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -64,369 +70,139 @@ bool resourcePathComponents(std::string_view path, std::vector<std::string>& out
   return !out.empty();
 }
 
-std::string joinResourcePath(std::span<const std::string> components) {
-  std::string out;
-  for (const std::string& component : components) {
-    if (!out.empty()) out.push_back('/');
-    out += component;
-  }
-  return out;
-}
-
-bool normalizeMount(std::string_view requested, std::filesystem::path& normalized, bool& exists, std::string& error) {
-  if (requested.empty()) {
-    error = "mount path is empty";
-    return false;
-  }
-  std::filesystem::path root;
-  if (!cli::io_detail::pathFromUtf8(requested, root, error) || !cli::io_detail::validateNativePathSyntax(root, error)) {
-    return false;
-  }
-
-  if (!cli::io_detail::resolveProspectiveNativePath(root, normalized, exists, error)) return false;
-  if (exists) {
-    std::error_code ec;
-    if (!std::filesystem::is_directory(normalized, ec)) {
-      error = ec ? ec.message() : "mount path is not a directory";
-      return false;
-    }
-  }
-  return true;
-}
-
 }  // namespace
 
 namespace cli {
 
 struct IoService::MountState {
-  struct DirectoryListing {
-    bool readable = false;
-    bool failed = false;
-    std::unordered_map<std::string, std::filesystem::path> entries;
-  };
-
   MountState(const std::vector<std::string>& requested_mounts, std::string_view requested_write_mount,
              bool auto_mount) {
-    configureWriteMount(requested_write_mount.empty() ? std::string_view{"."} : requested_write_mount);
-    if (requested_mounts.empty()) {
-      addReadMount(".", false);
-    } else {
-      for (const std::string& requested : requested_mounts) addReadMount(requested, false);
+    std::vector<std::filesystem::path> reads;
+    reads.reserve(requested_mounts.size());
+    if (requested_mounts.empty()) reads.emplace_back(".");
+    for (const std::string& requested : requested_mounts) {
+      std::filesystem::path path;
+      std::string error;
+      if (!io_detail::pathFromUtf8(requested, path, error)) {
+        diagnostic(DiagnosticCode::kIoStatFailed, "Invalid mount '%s': %s", requested.c_str(), error.c_str());
+        return;
+      }
+      reads.push_back(std::move(path));
     }
-    if (auto_mount) addDefaultReadMounts();
-  }
-
-  bool configureWriteMount(std::string_view requested) {
-    bool exists = false;
+    const std::string_view requested_write =
+        requested_write_mount.empty() ? std::string_view{"."} : requested_write_mount;
+    std::filesystem::path write;
     std::string error;
-    std::filesystem::path normalized;
-    if (!normalizeMount(requested, normalized, exists, error)) {
+    if (!io_detail::pathFromUtf8(requested_write, write, error)) {
       diagnostic(DiagnosticCode::kIoStatFailed,
                  "Invalid write mount '%.*s': %s",
-                 static_cast<int>(requested.size()),
-                 requested.data(),
+                 static_cast<int>(requested_write.size()),
+                 requested_write.data(),
                  error.c_str());
-      valid = false;
-      write_root_valid = false;
-      return false;
+      return;
     }
-    write_root = std::move(normalized);
-    write_root_valid = true;
-    if (!exists) {
-      log(ARX_LOG_INFO,
-          "write mount not found; will create on actual write: %.*s",
-          static_cast<int>(requested.size()),
-          requested.data());
+    configure(std::move(reads), write);
+    if (!valid || !auto_mount) return;
+
+    pistoris::resource_io::MountValidationReport report;
+    auto added = resources.mounts().addLibertatisMounts(&report);
+    logValidation(report);
+    if (added) return;
+    if (added.code() == ARX_RESOURCE_IO_STAT_FAILED) {
+      log(ARX_LOG_WARN, "automatic game mounts are unavailable");
+      return;
+    }
+    failConfiguration(added);
+  }
+
+  static void logValidation(const pistoris::resource_io::MountValidationReport& report) {
+    for (const pistoris::resource_io::MountValidationMessage& message : report.messages) {
+      const std::string display = io_detail::pathToUtf8(message.path);
+      switch (message.kind) {
+        case pistoris::resource_io::MountValidationKind::kMissingReadMount:
+          log(ARX_LOG_WARN, "mount not found; excluding from reads: %s", display.c_str());
+          break;
+        case pistoris::resource_io::MountValidationKind::kDuplicateReadMount:
+          log(ARX_LOG_INFO, "duplicate mount ignored: %s", display.c_str());
+          break;
+        case pistoris::resource_io::MountValidationKind::kProspectiveWriteMount:
+          log(ARX_LOG_INFO, "write mount not found; will create on actual write: %s", display.c_str());
+          break;
+      }
+    }
+  }
+
+  template <class T>
+  void failConfiguration(const pistoris::resource_io::ResourceIoResult<T>& result) {
+    const auto* error = result.error();
+    const std::string description =
+        error ? pistoris::resource_io::describeError(*error) : std::string(pistoris::errorString(result.code()));
+    diagnostic(DiagnosticCode::kIoStatFailed, "Invalid resource mounts: %s", description.c_str());
+    valid = false;
+  }
+
+  void configure(std::vector<std::filesystem::path> reads, std::filesystem::path write) {
+    pistoris::resource_io::MountValidationReport report;
+    auto opened = pistoris::resource_io::ResourceMounts::open(
+        {.read_mounts = std::move(reads), .write_mount = std::move(write)}, &report);
+    logValidation(report);
+    if (!opened) {
+      failConfiguration(opened);
+      return;
+    }
+    resources = pistoris::resource_io::Resources(std::move(*opened));
+    valid = true;
+  }
+
+  bool useDefaultGameWriteMount() {
+    pistoris::resource_io::MountValidationReport report;
+    auto changed = resources.mounts().setLibertatisWriteMount(&report);
+    logValidation(report);
+    if (!changed) {
+      const auto* error = changed.error();
+      const std::string description =
+          error ? pistoris::resource_io::describeError(*error) : std::string(pistoris::errorString(changed.code()));
+      diagnostic(DiagnosticCode::kDefaultGameRootUnavailable,
+                 "Automatic game write mount is unavailable: %s",
+                 description.c_str());
+      return false;
     }
     return true;
   }
 
-  void addReadMount(std::string_view requested, bool automatic) {
-    std::filesystem::path normalized;
-    bool exists = false;
-    std::string error;
-    if (!normalizeMount(requested, normalized, exists, error)) {
-      if (automatic) {
-        log(ARX_LOG_WARN,
-            "automatic mount is invalid; excluding from reads: %.*s (%s)",
-            static_cast<int>(requested.size()),
-            requested.data(),
-            error.c_str());
-      } else {
-        diagnostic(DiagnosticCode::kIoStatFailed,
-                   "Invalid mount '%.*s': %s",
-                   static_cast<int>(requested.size()),
-                   requested.data(),
-                   error.c_str());
-        valid = false;
-      }
-      return;
-    }
-    if (!exists) {
-      log(automatic ? ARX_LOG_INFO : ARX_LOG_WARN,
-          automatic ? "automatic mount not found; excluding from reads: %.*s"
-                    : "mount not found; excluding from reads: %.*s",
-          static_cast<int>(requested.size()),
-          requested.data());
-      return;
-    }
-
-    std::error_code ec;
-    for (const std::filesystem::path& existing : roots) {
-      ec.clear();
-      if (std::filesystem::equivalent(existing, normalized, ec) && !ec) {
-        log(ARX_LOG_INFO, "duplicate mount ignored: %.*s", static_cast<int>(requested.size()), requested.data());
-        return;
-      }
-    }
-    roots.push_back(std::move(normalized));
-  }
-
-  void addDefaultReadMounts() {
-    std::filesystem::path game_root;
-    std::string error;
-    if (!defaultGameResourceRoot(game_root, error)) {
-      log(ARX_LOG_WARN, "automatic game mounts are unavailable: %s", error.c_str());
-      return;
-    }
-    addReadMount(io_detail::pathToUtf8(game_root), true);
-    addReadMount(io_detail::pathToUtf8(game_root / "unpacked"), true);
-  }
-
-  bool useDefaultGameWriteMount() {
-    std::filesystem::path game_root;
-    std::string error;
-    if (!defaultGameResourceRoot(game_root, error)) {
-      diagnostic(
-          DiagnosticCode::kDefaultGameRootUnavailable, "Automatic game write mount is unavailable: %s", error.c_str());
-      return false;
-    }
-    return configureWriteMount(io_detail::pathToUtf8(game_root));
-  }
-
   ResourceReadResult find(std::string_view resource_path, std::filesystem::path& out) {
-    std::vector<std::string> components;
-    if (!resourcePathComponents(resource_path, components)) return ResourceReadResult::kInvalidPath;
-
-    bool degraded = false;
-    for (const std::filesystem::path& root : roots) {
-      std::filesystem::path current = root;
-      bool found = true;
-      for (std::size_t index = 0; index < components.size(); ++index) {
-        const DirectoryListing& directory = listing(current);
-        if (directory.failed) {
-          degraded = true;
-          found = false;
-          break;
-        }
-        auto entry = directory.entries.find(asciiLower(components[index]));
-        if (!directory.readable || entry == directory.entries.end()) {
-          found = false;
-          break;
-        }
-        current = entry->second;
-
-        if (index + 1 != components.size()) {
-          std::error_code ec;
-          if (!std::filesystem::is_directory(current, ec)) {
-            if (ec) {
-              degraded = true;
-              const std::string display = io_detail::pathToUtf8(current);
-              log(ARX_LOG_WARN, "cannot inspect mounted path %s: %s", display.c_str(), ec.message().c_str());
-            }
-            found = false;
-            break;
-          }
-        }
-      }
-      if (!found) continue;
-
-      std::error_code ec;
-      if (std::filesystem::is_regular_file(current, ec)) {
-        if (degraded) {
-          const std::string display = io_detail::pathToUtf8(current);
-          log(ARX_LOG_WARN,
-              "using lower-priority mounted resource after an inspection failure: %.*s -> %s",
-              static_cast<int>(resource_path.size()),
-              resource_path.data(),
-              display.c_str());
-        }
-        out = std::move(current);
-        return ResourceReadResult::kSuccess;
-      }
-      if (ec) {
-        degraded = true;
-        const std::string display = io_detail::pathToUtf8(current);
-        log(ARX_LOG_WARN, "cannot inspect mounted path %s: %s", display.c_str(), ec.message().c_str());
-      }
+    auto resolved = resources.mounts().resolve(resource_path);
+    if (resolved) {
+      out = std::move(resolved->native_path);
+      return ResourceReadResult::kSuccess;
     }
-    return degraded ? ResourceReadResult::kReadFailed : ResourceReadResult::kNotFound;
+    const ArxReturnCode code = resolved.code();
+    if (code == ARX_RESOURCE_IO_INVALID_PATH) return ResourceReadResult::kInvalidPath;
+    if (code == ARX_RESOURCE_IO_NOT_FOUND) return ResourceReadResult::kNotFound;
+    return ResourceReadResult::kReadFailed;
   }
 
   ResourceEnumerationResult enumerate(std::string_view base_path, std::uint32_t max_depth,
                                       std::vector<std::string>& out) {
     out.clear();
-    std::vector<std::string> components;
-    if (!base_path.empty() && !resourcePathComponents(base_path, components))
-      return ResourceEnumerationResult::kInvalidPath;
-    if (max_depth == 0) return ResourceEnumerationResult::kSuccess;
-
-    struct PendingDirectory {
-      std::filesystem::path native_path;
-      std::string logical_path;
-      std::uint32_t depth = 0;
-    };
-
-    std::unordered_map<std::string, std::string> selected;
-    const std::string logical_base = joinResourcePath(components);
-    for (const std::filesystem::path& root : roots) {
-      std::filesystem::path native_base = root;
-      bool found = true;
-      for (const std::string& component : components) {
-        const DirectoryListing& directory = listing(native_base);
-        if (directory.failed) {
-          out.clear();
-          return ResourceEnumerationResult::kReadFailed;
-        }
-        auto entry = directory.entries.find(asciiLower(component));
-        if (!directory.readable || entry == directory.entries.end()) {
-          found = false;
-          break;
-        }
-        native_base = entry->second;
-        std::error_code ec;
-        if (!std::filesystem::is_directory(native_base, ec)) {
-          if (ec) {
-            out.clear();
-            return ResourceEnumerationResult::kReadFailed;
-          }
-          found = false;
-          break;
-        }
-      }
-      if (!found) continue;
-
-      std::vector<PendingDirectory> pending = {{native_base, logical_base, 0}};
-      while (!pending.empty()) {
-        PendingDirectory current = std::move(pending.back());
-        pending.pop_back();
-        const DirectoryListing& directory = listing(current.native_path);
-        if (directory.failed) {
-          out.clear();
-          return ResourceEnumerationResult::kReadFailed;
-        }
-        if (!directory.readable) continue;
-
-        for (const auto& [unused, native_path] : directory.entries) {
-          const std::string name = io_detail::pathToUtf8(native_path.filename());
-          std::string logical_path = current.logical_path;
-          if (!logical_path.empty()) logical_path.push_back('/');
-          logical_path += name;
-
-          std::error_code ec;
-          if (std::filesystem::is_directory(native_path, ec)) {
-            if (current.depth + 1 < max_depth) {
-              pending.push_back({native_path, std::move(logical_path), current.depth + 1});
-            }
-            continue;
-          }
-          if (ec) {
-            out.clear();
-            return ResourceEnumerationResult::kReadFailed;
-          }
-          if (!std::filesystem::is_regular_file(native_path, ec)) {
-            if (ec) {
-              out.clear();
-              return ResourceEnumerationResult::kReadFailed;
-            }
-            continue;
-          }
-          selected.try_emplace(asciiLower(logical_path), std::move(logical_path));
-        }
-      }
-    }
-
-    out.reserve(selected.size());
-    for (auto& [unused, logical_path] : selected) out.push_back(std::move(logical_path));
+    auto files = resources.mounts().enumerate(base_path, max_depth);
+    if (!files)
+      return files.code() == ARX_RESOURCE_IO_INVALID_PATH ? ResourceEnumerationResult::kInvalidPath
+                                                          : ResourceEnumerationResult::kReadFailed;
+    out.reserve(files->size());
+    for (auto& file : *files) out.push_back(std::move(file.logical_path));
     return ResourceEnumerationResult::kSuccess;
   }
 
-  DirectoryListing& listing(const std::filesystem::path& directory) {
-    const std::filesystem::path key = directory.lexically_normal();
-    auto [cached, inserted] = listings.try_emplace(key);
-    if (!inserted) return cached->second;
-
-    DirectoryListing& result = cached->second;
-    std::error_code ec;
-    std::filesystem::directory_iterator it(directory, ec);
-    if (ec) {
-      if (ec != std::errc::no_such_file_or_directory && ec != std::errc::not_a_directory) {
-        result.failed = true;
-        const std::string display = io_detail::pathToUtf8(directory);
-        log(ARX_LOG_WARN, "cannot inspect mounted directory: %s", display.c_str());
-      }
-      return result;
-    }
-    result.readable = true;
-
-    const std::filesystem::directory_iterator end;
-    for (; it != end; it.increment(ec)) {
-      if (ec) {
-        result.failed = true;
-        const std::string display = io_detail::pathToUtf8(directory);
-        log(ARX_LOG_WARN, "cannot finish inspecting mounted directory: %s", display.c_str());
-        break;
-      }
-
-      const std::filesystem::path candidate = it->path();
-      const std::string actual_name = io_detail::pathToUtf8(candidate.filename());
-      const std::string resource_name = asciiLower(actual_name);
-      auto [entry, unique] = result.entries.emplace(resource_name, candidate);
-      if (unique || entry->second == candidate) continue;
-
-      const std::string previous_name = io_detail::pathToUtf8(entry->second.filename());
-      if (actual_name < previous_name) entry->second = candidate;
-      const std::string display = io_detail::pathToUtf8(directory);
-      log(ARX_LOG_WARN,
-          "case-insensitive mount collision in %s: %s and %s",
-          display.c_str(),
-          previous_name.c_str(),
-          actual_name.c_str());
-    }
-    return result;
-  }
-
   bool outputPath(std::string_view resource_path, std::filesystem::path& out) {
-    if (!write_root_valid) return false;
-
-    std::vector<std::string> components;
-    if (!resourcePathComponents(resource_path, components)) return false;
-
-    std::filesystem::path current = write_root;
-    for (std::size_t index = 0; index < components.size(); ++index) {
-      const DirectoryListing& directory = listing(current);
-      auto existing = directory.entries.find(asciiLower(components[index]));
-      if (directory.readable && existing != directory.entries.end()) {
-        current = existing->second;
-        continue;
-      }
-      for (; index < components.size(); ++index) {
-        std::filesystem::path native_component;
-        std::string error;
-        if (!io_detail::pathFromUtf8(components[index], native_component, error)) return false;
-        current /= native_component;
-      }
-      break;
-    }
-    out = std::move(current);
+    auto resolved = resources.mounts().resolveWritePath(resource_path);
+    if (!resolved) return false;
+    out = std::move(*resolved);
     return true;
   }
 
-  std::vector<std::filesystem::path> roots;
-  std::unordered_map<std::filesystem::path, DirectoryListing> listings;
-  std::filesystem::path write_root;
-  bool valid = true;
-  bool write_root_valid = false;
+  pistoris::resource_io::Resources resources;
+  bool valid = false;
 };
 
 IoService::IoService(OverwriteMode overwrite, bool dry_run, const std::vector<std::string>& read_mounts,
@@ -685,11 +461,82 @@ ResourceReadResult IoService::readAudio(const PathLocation& base, std::string_vi
   return ResourceReadResult::kNotFound;
 }
 
-bool IoService::hasReadMounts() const noexcept { return !mounts_->roots.empty(); }
+bool IoService::hasReadMounts() const noexcept { return !mounts_->resources.mounts().readMounts().empty(); }
 
 ResourceEnumerationResult IoService::enumerateResources(std::string_view base_path, std::uint32_t max_depth,
                                                         std::vector<std::string>& out) {
   return mounts_->enumerate(base_path, max_depth, out);
+}
+
+pistoris::resource_io::ResourceIoResult<pistoris::resource_io::ResourceCatalog> IoService::scanCatalog() const {
+  return mounts_->resources.scanCatalog();
+}
+
+pistoris::resource_io::Resources& IoService::resources() noexcept { return mounts_->resources; }
+
+const pistoris::resource_io::Resources& IoService::resources() const noexcept { return mounts_->resources; }
+
+bool IoService::executeWritePlan(pistoris::resource_io::ResourceWritePlan& plan) {
+  auto preflight = plan.preflight();
+  if (!preflight) {
+    const auto* error = preflight.error();
+    diagnostic(DiagnosticCode::kResourceOutputInvalid,
+               "Cannot inspect resource outputs: %s",
+               error ? pistoris::resource_io::describeError(*error).c_str()
+                     : pistoris::resource_io::errorString(preflight.code()));
+    return false;
+  }
+
+  if (state_.dry_run) {
+    for (const auto& entry : plan.entries()) {
+      const std::string display = io_detail::pathToUtf8(entry.nativePath());
+      if (entry.status() == pistoris::resource_io::ResourceWriteStatus::kNeedsCandidate) continue;
+      if (entry.status() == pistoris::resource_io::ResourceWriteStatus::kAlreadyCurrent) {
+        log(ARX_LOG_INFO, "dry-run: output already current: %s", display.c_str());
+      } else {
+        log(ARX_LOG_INFO, "dry-run: would write resource output to: %s", display.c_str());
+      }
+    }
+    return true;
+  }
+
+  for (auto& entry : plan.entries()) {
+    if (entry.status() == pistoris::resource_io::ResourceWriteStatus::kNeedsCandidate) {
+      diagnostic(DiagnosticCode::kResourceOutputCollision,
+                 "Resource output candidate was not selected: %s",
+                 io_detail::pathToUtf8(entry.nativePath()).c_str());
+      return false;
+    }
+    if (entry.status() != pistoris::resource_io::ResourceWriteStatus::kNeedsExistingFilePolicy) continue;
+    const std::string display = io_detail::pathToUtf8(entry.nativePath());
+    const bool overwrite = allowOverwrite(display.c_str());
+    entry.setExistingFilePolicy(overwrite ? pistoris::resource_io::ExistingFilePolicy::kOverwrite
+                                          : pistoris::resource_io::ExistingFilePolicy::kPreserve);
+  }
+
+  auto written = plan.execute();
+  if (!written) {
+    const auto* error = written.error();
+    diagnostic(DiagnosticCode::kResourceOutputInvalid,
+               "Cannot write resource outputs: %s",
+               error ? pistoris::resource_io::describeError(*error).c_str()
+                     : pistoris::resource_io::errorString(written.code()));
+    return false;
+  }
+  for (const auto& entry : plan.entries()) {
+    const std::string display = io_detail::pathToUtf8(entry.nativePath());
+    switch (entry.status()) {
+      case pistoris::resource_io::ResourceWriteStatus::kWritten:
+        log(ARX_LOG_INFO, "written: %s", display.c_str());
+        break;
+      case pistoris::resource_io::ResourceWriteStatus::kPreserved:
+        log(ARX_LOG_INFO, "skipped existing output: %s", display.c_str());
+        break;
+      default:
+        break;
+    }
+  }
+  return true;
 }
 
 ResourceEnumerationResult IoService::enumerateFiles(const PathLocation& directory, std::uint32_t max_depth,

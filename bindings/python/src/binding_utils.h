@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arx_pistoris/pistoris.hpp"
+#include "arx_pistoris/resource_io/location.hpp"
 
 #include "paths/entity_class.h"
 #include "utils/identifier.h"
@@ -14,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <filesystem>
 #include <initializer_list>
 #include <nanobind/nanobind.h>
 #include <optional>
@@ -181,9 +183,12 @@ struct ErrorLocation {
   std::optional<std::string> property;
   std::optional<std::string> field;
   std::optional<std::string> resource_path;
+  std::optional<std::filesystem::path> native_path;
   std::optional<std::string> source_path;
   std::optional<std::string> json_pointer;
   std::optional<std::string> binary_region;
+  std::optional<resource_io::ResourceIoOperation> operation;
+  std::optional<std::uint64_t> mount_mask;
 };
 
 inline std::optional<std::string> optionalString(std::string_view value) {
@@ -351,6 +356,16 @@ ErrorLocation normalizeLocation(const NativeBinaryLocation<Element>& location) {
 template <class... Locations>
 ErrorLocation normalizeLocation(const std::variant<Locations...>& location) {
   return std::visit([](const auto& value) { return normalizeLocation(value); }, location);
+}
+
+inline ErrorLocation normalizeLocation(const resource_io::ResourceIoLocation& location) {
+  ErrorLocation result = location.content_location ? normalizeLocation(*location.content_location) : ErrorLocation{};
+  if (result.domain.empty()) result.domain = "resource_io";
+  result.resource_path = optionalString(location.resource_path);
+  if (!location.native_path.empty()) result.native_path = location.native_path;
+  result.operation = location.operation;
+  result.mount_mask = location.mount_mask;
+  return result;
 }
 
 template <class Location>

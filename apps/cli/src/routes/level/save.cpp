@@ -17,12 +17,10 @@
 #include "console/diagnostics.h"
 #include "console/logging.h"
 #include "formats/format.h"
-#include "io/service.h"
 #include "modules/module.h"
 #include "pipeline/execution_context.h"
 #include "resources/layout.h"
 #include "resources/level_image_io.h"
-#include "resources/output.h"
 #include "resources/resource_output.h"
 #include "resources/selector.h"
 #include "resources/texture_io.h"
@@ -63,37 +61,29 @@ bool outputFailure(const char* what, const Result& result) {
   return conversionOutputFailure(DiagnosticCode::kLevelOutputFailed, what, result);
 }
 
-bool writeBytes(IoService& io, const OutputTarget& target, const std::vector<std::uint8_t>& data) {
-  return writeOutput(io, target, data.data(), data.size());
+bool sameTarget(const OutputTarget& left, const OutputTarget& right) noexcept {
+  return left.address == right.address && left.path == right.path;
 }
 
-bool writeText(IoService& io, const OutputTarget& target, const std::string& data) {
-  return writeOutput(io, target, data.data(), data.size());
+void addLevelData(ResourceOutputPlan& plan, const OutputTarget& target, std::vector<std::uint8_t> data,
+                  ResourceAssetId asset, const Invocation& invocation) {
+  if (sameTarget(target, invocation.output))
+    plan.addPrimaryOwned(target, std::move(data), asset);
+  else
+    plan.addOwned(ResourceFileKind::kData, target, std::move(data), asset);
 }
 
-void reserveLevelOutputs(ResourceOutputPlan& plan, const Invocation& invocation) {
-  switch (invocation.output.format) {
-    case Format::kFts:
-    case Format::kDlf:
-      plan.reserveOutput(invocation.native_output.fts);
-      plan.reserveOutput(invocation.native_output.llf);
-      plan.reserveOutput(invocation.native_output.dlf);
-      break;
-    case Format::kJson:
-      plan.reserveOutput(invocation.json_output.fts);
-      plan.reserveOutput(invocation.json_output.llf);
-      plan.reserveOutput(invocation.json_output.dlf);
-      break;
-    default:
-      plan.reserveOutput(invocation.output);
-      break;
-  }
+bool writeSingleLevelOutput(std::vector<std::uint8_t> data, const ExecutionContext& execution,
+                            const Invocation& invocation) {
+  ResourceOutputPlan plan;
+  const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
+  plan.addPrimaryOwned(invocation.output, std::move(data), asset);
+  return execution.resourceOutputs().resolve(plan) && execution.resourceOutputs().write(plan);
 }
 
 bool prepareRawResourceOutputs(ResourceOutputPlan& plan, std::span<const pistoris::NativeTextureFile> texture_files,
-                               GeneratedLevelImages& generated, const ExecutionContext& execution,
-                               const Invocation& invocation) {
-  reserveLevelOutputs(plan, invocation);
+                               const LoadedLevelImages& images, GeneratedLevelImages& generated,
+                               const ExecutionContext& execution, const Invocation& invocation) {
   const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
   if (!addNativeTextureFileOutputs(plan,
                                    execution.io(),
@@ -105,17 +95,15 @@ bool prepareRawResourceOutputs(ResourceOutputPlan& plan, std::span<const pistori
     return false;
   }
   if (!invocation.options.dlf_only &&
-      !addDirectLevelImageOutputs(
-          plan, invocation.image_input, invocation.image_output, invocation.loaded_images, generated, asset))
+      !addDirectLevelImageOutputs(plan, invocation.image_input, invocation.image_output, images, generated, asset))
     return false;
-  return execution.resourceOutputs().resolve(plan);
+  return true;
 }
 
 bool prepareProjectedResourceOutputs(ResourceOutputPlan& plan,
                                      std::span<const pistoris::NativeTextureFile> texture_files,
                                      const pistoris::Level& level, GeneratedLevelImages& generated,
                                      const ExecutionContext& execution, const Invocation& invocation) {
-  reserveLevelOutputs(plan, invocation);
   const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
   if (!addNativeTextureFileOutputs(plan,
                                    execution.io(),
@@ -130,13 +118,7 @@ bool prepareProjectedResourceOutputs(ResourceOutputPlan& plan,
       !addIntermediateLevelImageOutputs(plan, invocation.image_output, level, generated, asset)) {
     return false;
   }
-  return execution.resourceOutputs().resolve(plan);
-}
-
-template <typename Result>
-bool writeJsonResult(IoService& io, const OutputTarget& target, Result&& json, const char* description) {
-  if (!json) return outputFailure(description, json);
-  return writeText(io, target, *json);
+  return true;
 }
 
 void logDetachedLayout(const NativeOutput& output) {
@@ -201,62 +183,60 @@ bool bakeNativeBundle(IntermediateLevel& source, const Invocation& invocation, N
   return true;
 }
 
-bool writeBinaryFiles(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
-  IoService& io = execution.io();
+bool addBinaryFiles(ResourceOutputPlan& plan, NativeLevelFiles& files, const Invocation& invocation) {
+  const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
   if (files.fts) {
     auto bytes = pistoris::writeFts(*files.fts, invocation.format.compress);
     if (!bytes) return outputFailure("FTS output", bytes);
-    if (!writeBytes(io, invocation.native_output.fts, *bytes)) return false;
+    addLevelData(plan, invocation.native_output.fts, std::move(*bytes), asset, invocation);
   }
   if (files.llf) {
     const pistoris::LlfWriteOptions options{invocation.options.signer};
     auto bytes = pistoris::writeLlf(*files.llf, options, invocation.format.compress);
     if (!bytes) return outputFailure("LLF output", bytes);
-    if (!writeBytes(io, invocation.native_output.llf, *bytes)) return false;
+    addLevelData(plan, invocation.native_output.llf, std::move(*bytes), asset, invocation);
   }
   if (files.dlf) {
     const pistoris::DlfWriteOptions options{nullptr, invocation.options.signer};
     auto bytes = pistoris::writeDlf(*files.dlf, options, invocation.format.compress);
     if (!bytes) return outputFailure("DLF output", bytes);
-    if (!writeBytes(io, invocation.native_output.dlf, *bytes)) return false;
+    addLevelData(plan, invocation.native_output.dlf, std::move(*bytes), asset, invocation);
   }
   if (files.fts) logDetachedLayout(invocation.native_output);
   return true;
 }
 
-bool writeJsonFiles(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
+bool addJsonFiles(ResourceOutputPlan& plan, NativeLevelFiles& files, const Invocation& invocation) {
   if (files.dlf) applyLevelNumber(invocation.json_output.level, *files.dlf);
 
-  IoService& io = execution.io();
-  if (files.fts &&
-      !writeJsonResult(
-          io,
-          invocation.json_output.fts,
-          pistoris::toFtsJson(*files.fts, invocation.json_output.level, invocation.format.pretty, files.text_mode),
-          "FTS JSON output")) {
-    return false;
+  const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
+  if (files.fts) {
+    auto json =
+        pistoris::toFtsJson(*files.fts, invocation.json_output.level, invocation.format.pretty, files.text_mode);
+    if (!json) return outputFailure("FTS JSON output", json);
+    addLevelData(
+        plan, invocation.json_output.fts, std::vector<std::uint8_t>(json->begin(), json->end()), asset, invocation);
   }
-  if (files.llf &&
-      !writeJsonResult(io,
-                       invocation.json_output.llf,
-                       pistoris::toLlfJson(*files.llf, invocation.format.pretty, invocation.options.signer),
-                       "LLF JSON output")) {
-    return false;
+  if (files.llf) {
+    auto json = pistoris::toLlfJson(*files.llf, invocation.format.pretty, invocation.options.signer);
+    if (!json) return outputFailure("LLF JSON output", json);
+    addLevelData(
+        plan, invocation.json_output.llf, std::vector<std::uint8_t>(json->begin(), json->end()), asset, invocation);
   }
-  if (files.dlf &&
-      !writeJsonResult(
-          io,
-          invocation.json_output.dlf,
-          pistoris::toDlfJson(*files.dlf, invocation.format.pretty, invocation.options.signer, files.text_mode),
-          "DLF JSON output")) {
-    return false;
+  if (files.dlf) {
+    auto json = pistoris::toDlfJson(*files.dlf, invocation.format.pretty, invocation.options.signer, files.text_mode);
+    if (!json) return outputFailure("DLF JSON output", json);
+    addLevelData(
+        plan, invocation.json_output.dlf, std::vector<std::uint8_t>(json->begin(), json->end()), asset, invocation);
   }
   return true;
 }
 
 void prepareNativeTextureOutput(const NativeLevelFiles& files, const ExecutionContext& execution,
                                 const Invocation& invocation, std::vector<pistoris::NativeTextureFile>& texture_files) {
-  if (invocation.texture_options.export_files && files.fts)
+  if (!invocation.texture_options.export_files || !files.fts) return;
+  texture_files = files.texture_files;
+  if (invocation.texture_options.input_folder_specified)
     loadNativeTextureFiles(*files.fts, files.text_mode, execution.io(), invocation.textures, texture_files);
 }
 
@@ -265,8 +245,10 @@ bool writeNativeBinaryNative(NativeLevelFiles& files, const ExecutionContext& ex
   prepareNativeTextureOutput(files, execution, invocation, texture_files);
   GeneratedLevelImages generated;
   ResourceOutputPlan resources;
-  if (!prepareRawResourceOutputs(resources, texture_files, generated, execution, invocation)) return false;
-  return writeBinaryFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
+  if (!prepareRawResourceOutputs(resources, texture_files, files.images, generated, execution, invocation) ||
+      !addBinaryFiles(resources, files, invocation) || !execution.resourceOutputs().resolve(resources))
+    return false;
+  return execution.resourceOutputs().write(resources);
 }
 
 bool writeNativeBinaryIntermediate(IntermediateLevel& source, const ExecutionContext& execution,
@@ -285,7 +267,8 @@ bool writeNativeBinaryIntermediate(IntermediateLevel& source, const ExecutionCon
   ResourceOutputPlan resources;
   if (!prepareProjectedResourceOutputs(resources, texture_files, source.level, projected, execution, invocation))
     return false;
-  return writeBinaryFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
+  if (!addBinaryFiles(resources, files, invocation) || !execution.resourceOutputs().resolve(resources)) return false;
+  return execution.resourceOutputs().write(resources);
 }
 
 bool writeJsonNative(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
@@ -293,8 +276,10 @@ bool writeJsonNative(NativeLevelFiles& files, const ExecutionContext& execution,
   prepareNativeTextureOutput(files, execution, invocation, texture_files);
   GeneratedLevelImages generated;
   ResourceOutputPlan resources;
-  if (!prepareRawResourceOutputs(resources, texture_files, generated, execution, invocation)) return false;
-  return writeJsonFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
+  if (!prepareRawResourceOutputs(resources, texture_files, files.images, generated, execution, invocation) ||
+      !addJsonFiles(resources, files, invocation) || !execution.resourceOutputs().resolve(resources))
+    return false;
+  return execution.resourceOutputs().write(resources);
 }
 
 bool writeJsonIntermediate(IntermediateLevel& source, const ExecutionContext& execution, const Invocation& invocation,
@@ -313,7 +298,8 @@ bool writeJsonIntermediate(IntermediateLevel& source, const ExecutionContext& ex
   ResourceOutputPlan resources;
   if (!prepareProjectedResourceOutputs(resources, texture_files, source.level, projected, execution, invocation))
     return false;
-  return writeJsonFiles(files, execution, invocation) && execution.resourceOutputs().write(resources);
+  if (!addJsonFiles(resources, files, invocation) || !execution.resourceOutputs().resolve(resources)) return false;
+  return execution.resourceOutputs().write(resources);
 }
 
 bool writeDebugCellsNative(NativeLevelFiles& files, const ExecutionContext& execution, const Invocation& invocation) {
@@ -325,7 +311,7 @@ bool writeDebugCellsNative(NativeLevelFiles& files, const ExecutionContext& exec
   const ArxReturnCode rc =
       pistoris::level_debug::exportFtsCellsDebugGlb(*files.fts, out, invocation.options.glb_export);
   if (rc != ARX_OK) return outputFailure("GLB output", rc);
-  return writeOutput(execution.io(), invocation.output, out.data(), out.size());
+  return writeSingleLevelOutput(std::move(out), execution, invocation);
 }
 
 bool writeDebugCellsIntermediate(IntermediateLevel& source, const ExecutionContext& execution,
@@ -342,7 +328,7 @@ bool writeDebugCellsIntermediate(IntermediateLevel& source, const ExecutionConte
   const ArxReturnCode rc =
       pistoris::level_debug::exportFtsCellsDebugGlb(bundle->fts, out, invocation.options.glb_export);
   if (rc != ARX_OK) return outputFailure("GLB output", rc);
-  return writeOutput(execution.io(), invocation.output, out.data(), out.size());
+  return writeSingleLevelOutput(std::move(out), execution, invocation);
 }
 
 bool writeNavigationIntermediate(IntermediateLevel& source, const ExecutionContext& execution,
@@ -352,7 +338,7 @@ bool writeNavigationIntermediate(IntermediateLevel& source, const ExecutionConte
   const ArxReturnCode rc =
       pistoris::level_debug::exportNavigationDebugGlb(source.level, out, navigation, invocation.options.glb_export);
   if (rc != ARX_OK) return outputFailure("GLB output", rc);
-  return writeOutput(execution.io(), invocation.output, out.data(), out.size());
+  return writeSingleLevelOutput(std::move(out), execution, invocation);
 }
 
 bool writeRoomDistancesIntermediate(IntermediateLevel& source, const ExecutionContext& execution,
@@ -362,7 +348,7 @@ bool writeRoomDistancesIntermediate(IntermediateLevel& source, const ExecutionCo
   const ArxReturnCode rc = pistoris::level_debug::exportRoomDistanceDebugGlb(
       source.level, out, room_distances, invocation.options.glb_export);
   if (rc != ARX_OK) return outputFailure("GLB output", rc);
-  return writeOutput(execution.io(), invocation.output, out.data(), out.size());
+  return writeSingleLevelOutput(std::move(out), execution, invocation);
 }
 
 bool writeGlbIntermediate(IntermediateLevel& source, const ExecutionContext& execution, const Invocation& invocation,
@@ -379,8 +365,10 @@ bool writeGlbIntermediate(IntermediateLevel& source, const ExecutionContext& exe
   GeneratedLevelImages projected;
   ResourceOutputPlan resources;
   if (!prepareProjectedResourceOutputs(resources, {}, source.level, projected, execution, invocation)) return false;
-  return writeOutput(execution.io(), invocation.output, out->data(), out->size()) &&
-         execution.resourceOutputs().write(resources);
+  const ResourceAssetId asset = resources.addAsset(ResourceAssetKind::kLevel, invocation.output.path);
+  resources.addPrimaryOwned(invocation.output, std::move(*out), asset);
+  if (!execution.resourceOutputs().resolve(resources)) return false;
+  return execution.resourceOutputs().write(resources);
 }
 
 }  // namespace

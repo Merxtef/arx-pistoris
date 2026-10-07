@@ -61,9 +61,21 @@ struct ResourceSearchLocation {
   std::uint32_t max_discovery_depth = 0;
 };
 
+// Owning semantic identity for a resource selector. Fields not used by kind are empty/default.
+struct ResourceSelector {
+  ArxResourceKind kind = ARX_RESOURCE_KIND_NONE;
+  ModelPathType model_type = ModelPathType::kNone;
+  AnimationPathType animation_type = AnimationPathType::kNone;
+  std::string name;
+  std::string tweak;
+  std::uint32_t level = 0;
+};
+
 // --- Common ---
 
 [[nodiscard]] ArxResourceKind resourceSelectorKind(std::string_view selector) noexcept;
+[[nodiscard]] bool parseResourceSelector(std::string_view selector, ResourceSelector& out);
+[[nodiscard]] bool resourceSelector(const ResourceSelector& resource, std::string& out);
 
 // Cross-platform policy for converter-emitted filename components
 // Resource identities and host paths unchanged

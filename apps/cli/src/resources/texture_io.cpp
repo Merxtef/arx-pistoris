@@ -44,6 +44,7 @@ namespace {
 
 struct TextureLookup {
   std::string path;
+  std::string external_image_extension;
   bool has_encoded_image = false;
 };
 
@@ -61,8 +62,11 @@ void copyTextureLookups(const Asset& asset, std::vector<TextureLookup>& out) {
 
   out.clear();
   out.reserve(projected.size());
-  for (const ArxTextureView& texture : projected)
-    out.push_back({std::string(stringView(texture.path)), texture.encoded_image.size != 0});
+  for (const ArxTextureView& texture : projected) {
+    out.push_back({std::string(stringView(texture.path)),
+                   std::string(stringView(texture.external_image_extension)),
+                   texture.encoded_image.size != 0});
+  }
 }
 
 std::string_view fixedStringView(const char* value, std::size_t capacity) {
@@ -191,6 +195,26 @@ bool loadTextures(std::span<const TextureLookup> textures, std::span<const std::
     }
 
     for (std::size_t index = 0; index < textures.size(); ++index) {
+      if (loaded[index] || textures[index].path.empty() || textures[index].external_image_extension.empty()) continue;
+      const std::string path = textures[index].path + textures[index].external_image_extension;
+      const TextureLoadResult result = tryLoadTexture(
+          io,
+          input.source_base,
+          path,
+          input.source_lookup,
+          owner,
+          path,
+          [&](std::vector<std::uint8_t> encoded, std::string_view selected_path) {
+            return apply(
+                static_cast<pistoris::TextureIndex>(index), selectedExtension(selected_path), std::move(encoded));
+          });
+      if (result == TextureLoadResult::kLoaded) {
+        loaded[index] = true;
+        ++loaded_count;
+      }
+    }
+
+    for (std::size_t index = 0; index < textures.size(); ++index) {
       if (loaded[index] || textures[index].path.empty()) continue;
       const TextureLoadResult result = tryLoadTexture(
           io,
@@ -291,7 +315,7 @@ void loadNativePaths(const Range& native_paths, PathOf&& path_of, IoService& io,
     const bool inserted =
         textures_by_path.emplace(identity, static_cast<pistoris::TextureIndex>(textures.size())).second;
     if (inserted) {
-      textures.push_back({std::move(logical_path), false});
+      textures.push_back({std::move(logical_path), {}, false});
       source_paths.push_back(std::move(utf8_path));
     }
   }

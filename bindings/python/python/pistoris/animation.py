@@ -64,7 +64,7 @@ _install_record_semantics(
     globals(),
     {
         "GroupTransform": ("rotation", "translation", "scale"),
-        "Keyframe": ("frame", "root_translation", "root_rotation", "footstep", "sound"),
+        "Keyframe": ("frame", "root_translation", "root_rotation", "footstep", "sound_path"),
         "Frame": ("keyframe", "group_transforms"),
         "ConversionReport": ("converted", "skipped"),
         "SoundSource": ("animation", "source"),

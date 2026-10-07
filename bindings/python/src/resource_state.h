@@ -318,6 +318,14 @@ using PythonAmbiance = TrackedResource<Ambiance, AmbianceTracking>;
 using PythonCinematic = TrackedResource<Cinematic, CinematicTracking>;
 using PythonLevel = TrackedResource<Level, LevelTracking>;
 
+struct ModelImportOutput {
+  std::shared_ptr<PythonModel> model;
+  std::vector<std::shared_ptr<PythonAnimation>> animations;
+  std::vector<std::string> texture_source_paths;
+  std::vector<AnimationSoundSourceReference> sound_sources;
+  std::optional<ArxAnimationConversionReport> animation_report;
+};
+
 struct ModelFaceAccess {
   using Owner = PythonModel;
   using Value = ModelFace;
@@ -911,6 +919,16 @@ nb::class_<ElementRef<Access>> bindElementCollection(nb::module_& module, const 
           return self.at(static_cast<std::int64_t>(Access::positionForName(*self.owner(), self.context(), name)));
         },
         nb::arg("name"));
+  }
+  if constexpr (requires(const typename Access::Owner& owner, std::size_t context, std::string_view path) {
+                  Access::positionForPath(owner, context, path);
+                }) {
+    collection.def(
+        "by_path",
+        [](const ElementCollection<Access>& self, std::string_view path) {
+          return self.at(static_cast<std::int64_t>(Access::positionForPath(*self.owner(), self.context(), path)));
+        },
+        nb::arg("path"));
   }
   if constexpr (requires(typename Access::Owner& owner, std::size_t context) { Access::clear(owner, context); }) {
     collection.def("clear",

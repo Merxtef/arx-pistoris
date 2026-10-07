@@ -17,5 +17,6 @@ void bindLevel(nb::module_& module);
 void bindModelAnimation(nb::module_& module);
 void bindAmbianceCinematic(nb::module_& module);
 void bindResources(nb::module_& module);
+void bindResourceIo(nb::module_& module);
 
 }  // namespace pistoris::python

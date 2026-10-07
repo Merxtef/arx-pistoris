@@ -266,14 +266,6 @@ void bindOwnedMedia(nb::module_& module) {
   nb::class_<SoundSourceReferenceValue>(module, "SoundSourceReference")
       .def_ro("sound_path", &SoundSourceReferenceValue::sound_path)
       .def_ro("source_path", &SoundSourceReferenceValue::source_path);
-  nb::class_<CinematicSoundValue>(module, "CinematicSound")
-      .def(nb::new_([](const std::string& path) { return new CinematicSoundValue{canonicalResourcePath(path)}; }),
-           nb::kw_only(),
-           nb::arg("path") = "")
-      .def_prop_rw(
-          "path",
-          [](const CinematicSoundValue& value) { return value.path; },
-          [](CinematicSoundValue& value, std::string_view path) { value.path = canonicalResourcePath(path); });
   nb::class_<CinematicSoundSourceReferenceValue>(module, "CinematicSoundSourceReference")
       .def_ro("kind", &CinematicSoundSourceReferenceValue::kind)
       .def_ro("sound_path", &CinematicSoundSourceReferenceValue::sound_path)
@@ -529,25 +521,25 @@ void bindAnimationAmbianceValues(nb::module_& module) {
                        ArxVector3 root_translation,
                        ArxQuat root_rotation,
                        bool footstep,
-                       const std::optional<std::string>& sound) {
+                       const std::optional<std::string>& sound_path) {
              return new AnimationKeyframeValue{
-                 frame, root_translation, root_rotation, footstep, canonicalOptionalResourcePath(sound)};
+                 frame, root_translation, root_rotation, footstep, canonicalOptionalResourcePath(sound_path)};
            }),
            nb::kw_only(),
            nb::arg("frame") = 0,
            nb::arg("root_translation") = ArxVector3{},
            nb::arg("root_rotation") = ArxQuat{},
            nb::arg("footstep") = false,
-           nb::arg("sound") = nb::none())
+           nb::arg("sound_path") = nb::none())
       .def_rw("frame", &AnimationKeyframeValue::frame)
       .def_rw("root_translation", &AnimationKeyframeValue::root_translation)
       .def_rw("root_rotation", &AnimationKeyframeValue::root_rotation)
       .def_rw("footstep", &AnimationKeyframeValue::footstep)
       .def_prop_rw(
-          "sound",
+          "sound_path",
           [](const AnimationKeyframeValue& value) { return value.sound; },
-          [](AnimationKeyframeValue& value, const std::optional<std::string>& sound) {
-            value.sound = canonicalOptionalResourcePath(sound);
+          [](AnimationKeyframeValue& value, const std::optional<std::string>& sound_path) {
+            value.sound = canonicalOptionalResourcePath(sound_path);
           });
   nb::class_<AnimationFrame>(module, "AnimationFrame")
       .def(nb::new_([](AnimationKeyframeValue keyframe, std::vector<ArxAnimationGroupTransform> group_transforms) {
@@ -646,11 +638,11 @@ void bindAnimationAmbianceValues(nb::module_& module) {
       .def_rw("z", &ArxAmbiancePositionedKey::z);
   auto panned_track = nb::class_<AmbiancePannedTrackValue>(module, "AmbiancePannedTrack");
   panned_track
-      .def(nb::new_([](const std::optional<std::string>& sound, std::vector<ArxAmbiancePannedKey> keys) {
-             return new AmbiancePannedTrackValue{canonicalOptionalResourcePath(sound), std::move(keys)};
+      .def(nb::new_([](const std::optional<std::string>& sound_path, std::vector<ArxAmbiancePannedKey> keys) {
+             return new AmbiancePannedTrackValue{canonicalOptionalResourcePath(sound_path), std::move(keys)};
            }),
            nb::kw_only(),
-           nb::arg("sound") = nb::none(),
+           nb::arg("sound_path") = nb::none(),
            nb::arg("keys") = nb::tuple())
       .def_prop_rw(
           "keys",
@@ -659,19 +651,19 @@ void bindAnimationAmbianceValues(nb::module_& module) {
           nb::for_getter(nb::sig("def keys(self) -> tuple[AmbiancePannedKey, ...]")),
           nb::for_setter(nb::sig("def keys(self, value: Sequence[AmbiancePannedKey], /) -> None")))
       .def_prop_rw(
-          "sound",
+          "sound_path",
           [](const AmbiancePannedTrackValue& value) { return value.sound; },
-          [](AmbiancePannedTrackValue& value, const std::optional<std::string>& sound) {
-            value.sound = canonicalOptionalResourcePath(sound);
+          [](AmbiancePannedTrackValue& value, const std::optional<std::string>& sound_path) {
+            value.sound = canonicalOptionalResourcePath(sound_path);
           });
 
   auto positioned_track = nb::class_<AmbiancePositionedTrackValue>(module, "AmbiancePositionedTrack");
   positioned_track
-      .def(nb::new_([](const std::optional<std::string>& sound, std::vector<ArxAmbiancePositionedKey> keys) {
-             return new AmbiancePositionedTrackValue{canonicalOptionalResourcePath(sound), std::move(keys)};
+      .def(nb::new_([](const std::optional<std::string>& sound_path, std::vector<ArxAmbiancePositionedKey> keys) {
+             return new AmbiancePositionedTrackValue{canonicalOptionalResourcePath(sound_path), std::move(keys)};
            }),
            nb::kw_only(),
-           nb::arg("sound") = nb::none(),
+           nb::arg("sound_path") = nb::none(),
            nb::arg("keys") = nb::tuple())
       .def_prop_rw(
           "keys",
@@ -682,10 +674,10 @@ void bindAnimationAmbianceValues(nb::module_& module) {
           nb::for_getter(nb::sig("def keys(self) -> tuple[AmbiancePositionedKey, ...]")),
           nb::for_setter(nb::sig("def keys(self, value: Sequence[AmbiancePositionedKey], /) -> None")))
       .def_prop_rw(
-          "sound",
+          "sound_path",
           [](const AmbiancePositionedTrackValue& value) { return value.sound; },
-          [](AmbiancePositionedTrackValue& value, const std::optional<std::string>& sound) {
-            value.sound = canonicalOptionalResourcePath(sound);
+          [](AmbiancePositionedTrackValue& value, const std::optional<std::string>& sound_path) {
+            value.sound = canonicalOptionalResourcePath(sound_path);
           });
 }
 

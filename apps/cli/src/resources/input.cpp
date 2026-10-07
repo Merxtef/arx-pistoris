@@ -3,19 +3,23 @@
 
 #include "resources/input.h"
 
+#include "arx_pistoris/paths.hpp"
 #include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/document.hpp"
+#include "arx_pistoris/resource_io/location.hpp"
+#include "arx_pistoris/resource_io/status.h"
 
 #include "console/diagnostics.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/native_path.h"
 #include "io/path_location.h"
 #include "io/service.h"
 #include "resources/layout.h"
-#include "resources/read_diagnostics.h"
 #include "resources/selector.h"
 
 #include <cstddef>
-#include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <span>
 #include <string>
@@ -52,19 +56,61 @@ bool validateClassification(const ClassifiedPath& input) {
   return true;
 }
 
-bool appendClassified(std::string path, PathLocation location, std::vector<std::uint8_t> buffer,
+bool appendClassified(pistoris::resource_io::ResourceDocument document, std::string path, PathLocation location,
                       std::size_t positional_index, ArxResourceKind resource_kind,
                       std::optional<ResourceLayout> explicit_layout, std::vector<ClassifiedPath>& out) {
-  ClassifiedPath input{.path = std::move(path),
+  ClassifiedPath input{.document = std::move(document),
+                       .path = std::move(path),
                        .location = std::move(location),
-                       .buffer = std::move(buffer),
                        .positional_index = positional_index,
                        .resource_kind = resource_kind};
-  input.facts = classifyInput(input.buffer, input.path);
+  input.facts = classifyInput(input.document.data, input.path);
   input.layout = explicit_layout.value_or(primaryResourceLayout(input.facts.format, input.location.address));
   if (!validateClassification(input)) return false;
   out.push_back(std::move(input));
   return true;
+}
+
+bool appendDocument(pistoris::resource_io::ResourceDocument document, std::size_t positional_index,
+                    std::vector<ClassifiedPath>& out) {
+  const ResourceLayout layout =
+      document.layout == pistoris::resource_io::ResourceLayout::kGame ? ResourceLayout::kGame : ResourceLayout::kLoose;
+  const PathAddress address = document.address == pistoris::resource_io::ResourceAddress::kLogical
+                                  ? PathAddress::kMountRelative
+                                  : PathAddress::kAbsolute;
+  std::string path = document.logical_path.empty() ? document.requested_path : document.logical_path;
+  PathLocation location{.path = std::move(path), .address = address};
+  const std::string display_path = location.path;
+  const ArxResourceKind selector_kind = document.selector_kind;
+  return appendClassified(
+      std::move(document), display_path, std::move(location), positional_index, selector_kind, layout, out);
+}
+
+template <class Result>
+bool documentReadFailure(std::string_view display_path, const Result& result) {
+  if (result.code() == ARX_RESOURCE_IO_NOT_FOUND) {
+    diagnostic(DiagnosticCode::kResourceNotFound,
+               "Input not found: %.*s",
+               static_cast<int>(display_path.size()),
+               display_path.data());
+    return false;
+  }
+  if (result.code() == ARX_RESOURCE_IO_INVALID_PATH) {
+    diagnostic(DiagnosticCode::kResourcePathInvalid,
+               "Input path is invalid: %.*s",
+               static_cast<int>(display_path.size()),
+               display_path.data());
+    return false;
+  }
+  const auto* error = result.error();
+  const std::string detail = error ? pistoris::resource_io::describeError(*error)
+                                   : std::string(pistoris::resource_io::errorString(result.code()));
+  diagnostic(DiagnosticCode::kResourceReadFailed,
+             "Cannot read input '%.*s': %s",
+             static_cast<int>(display_path.size()),
+             display_path.data(),
+             detail.c_str());
+  return false;
 }
 
 bool loadRawInput(const char* argument, std::size_t positional_index, IoService& io, std::vector<ClassifiedPath>& out) {
@@ -74,50 +120,36 @@ bool loadRawInput(const char* argument, std::size_t positional_index, IoService&
     diagnostic(DiagnosticCode::kIoPathInvalid, "Invalid input path '%s': %s", argument, error.c_str());
     return false;
   }
-  std::vector<std::uint8_t> buffer;
-  ResourceReadResult result = io.readPath(location, buffer);
-  if (result != ResourceReadResult::kSuccess) {
-    reportRequiredReadFailure(result, "Input file", argument);
+  if (location.address == PathAddress::kMountRelative) {
+    auto document = io.resources().readDocument(location.path);
+    if (!document) return documentReadFailure(argument, document);
+    return appendDocument(std::move(*document), positional_index, out);
+  }
+
+  std::filesystem::path native;
+  if (!io_detail::pathFromUtf8(location.path, native, error)) {
+    diagnostic(DiagnosticCode::kIoPathInvalid, "Invalid input path '%s': %s", argument, error.c_str());
     return false;
   }
-  std::string path = location.path;
-  return appendClassified(std::move(path),
-                          std::move(location),
-                          std::move(buffer),
-                          positional_index,
-                          ARX_RESOURCE_KIND_NONE,
-                          std::nullopt,
-                          out);
+  auto document = io.resources().readDocumentFile(native);
+  if (!document) return documentReadFailure(argument, document);
+  return appendDocument(std::move(*document), positional_index, out);
 }
 
 bool loadSelectedResource(const ResourceSelector& selector, std::size_t positional_index, IoService& io,
                           std::vector<ClassifiedPath>& out) {
-  std::vector<std::uint8_t> buffer;
-  if (!readRequiredResource(io, selector.logical_path, buffer)) return false;
-  return appendClassified(selector.logical_path,
-                          {.path = selector.logical_path, .address = PathAddress::kMountRelative},
-                          std::move(buffer),
-                          positional_index,
-                          selector.kind,
-                          ResourceLayout::kGame,
-                          out);
+  pistoris::paths::ResourceSelector parsed{.kind = selector.kind,
+                                           .model_type = selector.model_type,
+                                           .animation_type = selector.animation_type,
+                                           .name = selector.name,
+                                           .tweak = selector.tweak,
+                                           .level = selector.level};
+  auto document = io.resources().readDocument(parsed);
+  if (!document) return documentReadFailure(selector.logical_path, document);
+  return appendDocument(std::move(*document), positional_index, out);
 }
 
 }  // namespace
-
-bool readRequiredResource(IoService& io, std::string_view path, std::vector<std::uint8_t>& out) {
-  const ResourceReadResult result = io.readResource(path, out);
-  if (result == ResourceReadResult::kSuccess) return true;
-  reportRequiredReadFailure(result, "Mounted resource", path);
-  return false;
-}
-
-bool appendClassifiedInput(std::string path, PathLocation location, std::vector<std::uint8_t> buffer,
-                           std::size_t positional_index, ArxResourceKind resource_kind, ResourceLayout layout,
-                           std::vector<ClassifiedPath>& out) {
-  return appendClassified(
-      std::move(path), std::move(location), std::move(buffer), positional_index, resource_kind, layout, out);
-}
 
 bool loadClassifiedInputs(std::span<const char* const> arguments, IoService& io, std::vector<ClassifiedPath>& out) {
   out.clear();

@@ -12,27 +12,24 @@
 #include <optional>
 #include <vector>
 
+namespace cli {
+class IoService;
+}
+
 namespace cli::level {
 
 struct InputConverterDescriptor {
-  struct DecodedDlfInput {
-    pistoris::Dlf dlf;
-    std::optional<pistoris::Llf> embedded_lighting;
-  };
-
-  using NativeLoader = bool (*)(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
-                                DecodedDlfInput* decoded_dlf, NativeLevelFiles& out);
-  using IntermediateLoader = bool (*)(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
-                                      const LevelOptions& options, DecodedDlfInput* decoded_dlf,
-                                      IntermediateLevel& out);
+  using NativeLoader = bool (*)(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, IoService& io,
+                                NativeLevelFiles& out);
+  using IntermediateLoader = bool (*)(std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+                                      const LevelOptions& options, IoService& io, IntermediateLevel& out);
 
   NativeLoader load_native = nullptr;
   IntermediateLoader load_intermediate = nullptr;
 };
 
 const InputConverterDescriptor* inputConverterDescriptor(Route route);
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, const LevelOptions& options,
-               InputConverterDescriptor::DecodedDlfInput* decoded_dlf, bool native, LevelInput& out);
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, const LevelOptions& options, IoService& io, bool native, LevelInput& out);
 
 }  // namespace cli::level

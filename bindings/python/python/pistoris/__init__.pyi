@@ -6,6 +6,7 @@ from . import math as math
 from . import model as model
 from . import native as native
 from . import paths as paths
+from . import resource_io as resource_io
 from ._core import (
     Ambiance as Ambiance,
     Animation as Animation,

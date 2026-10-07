@@ -14,10 +14,14 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(pistoris.__name__, "pistoris")
         self.assertEqual(pistoris.native.__name__, "pistoris.native")
         self.assertIs(pistoris.native, import_module("pistoris.native"))
-        for name in ("model", "animation", "ambiance", "cinematic", "level"):
+        for name in ("model", "animation", "ambiance", "cinematic", "level", "resource_io"):
             module = getattr(pistoris, name)
             self.assertEqual(module.__name__, f"pistoris.{name}")
             self.assertIs(module, import_module(f"pistoris.{name}"))
+        for name in ("catalog", "mounts", "output"):
+            module = getattr(pistoris.resource_io, name)
+            self.assertEqual(module.__name__, f"pistoris.resource_io.{name}")
+            self.assertIs(module, import_module(f"pistoris.resource_io.{name}"))
         for name in ("amb", "cin", "dlf", "ftl", "fts", "llf", "tea"):
             module = getattr(pistoris.native, name)
             self.assertEqual(module.__name__, f"pistoris.native.{name}")
@@ -34,6 +38,10 @@ class ImportTests(unittest.TestCase):
         root_stub = (public_stubs / "__init__.pyi").read_text(encoding="utf-8")
         model_stub = (public_stubs / "model.pyi").read_text(encoding="utf-8")
         paths_stub = (public_stubs / "paths.pyi").read_text(encoding="utf-8")
+        resource_io_stub = (public_stubs / "resource_io" / "__init__.pyi").read_text(encoding="utf-8")
+        resource_io_catalog_stub = (public_stubs / "resource_io" / "catalog.pyi").read_text(encoding="utf-8")
+        resource_io_mounts_stub = (public_stubs / "resource_io" / "mounts.pyi").read_text(encoding="utf-8")
+        resource_io_output_stub = (public_stubs / "resource_io" / "output.pyi").read_text(encoding="utf-8")
 
         self.assertIn("def vertices(self) -> ModelVertexCollection: ...", resource_stub)
         self.assertIn("def __getitem__(self, index: int) -> ModelVertexRef: ...", resource_stub)
@@ -110,12 +118,35 @@ class ImportTests(unittest.TestCase):
         self.assertIn("def __iter__(self) -> Iterator[float]: ...", math_stub)
         self.assertIn("class ModelType(StrEnum):", paths_stub)
         self.assertIn("class AnimationType(StrEnum):", paths_stub)
+        self.assertIn("class ModelSelector:", paths_stub)
         self.assertIn("def __init__(self, type: ModelType, name: str, tweak: str = \"\") -> None: ...", paths_stub)
+        self.assertIn("def to_path(self) -> str: ...", paths_stub)
+        self.assertIn("def from_path(path: str | PathLike[str]) -> ModelSelector: ...", paths_stub)
         self.assertIn("def animation_directory(type: ModelType) -> str: ...", paths_stub)
         self.assertIn("def animation_directory(type: AnimationType) -> str: ...", paths_stub)
         self.assertIn("def model_search_location(type: ModelType) -> SearchLocation: ...", paths_stub)
+        self.assertIn("def selector_from_string(selector: str) -> ResourceSelector:", paths_stub)
+        self.assertIn("def selector_from_path(path: str | PathLike[str]) -> ResourceSelector:", paths_stub)
+        self.assertIn("class Catalog(Sequence[Entry[ResourceSelector]]):", resource_io_catalog_stub)
+        self.assertIn("def models(self) -> View[ModelSelector]: ...", resource_io_catalog_stub)
+        self.assertIn("class WritePlan(Sequence[WriteEntry]):", resource_io_output_stub)
+        self.assertIn("import builtins", resource_stub)
+        self.assertIn("@builtins.property", resource_stub)
+        self.assertIn("from .._core.resource_io import Operation as Operation", resource_io_stub)
+        self.assertNotIn("class Operation(Enum):", resource_io_stub)
+        self.assertIn("class DirectoryEntryKind(Enum):", resource_io_mounts_stub)
+        self.assertNotIn("class DirectoryEntryKind(Enum):", resource_io_stub)
+        self.assertRegex(
+            resource_io_stub,
+            r"def load_model\(\s*self,\s*source: str \| PathLike\[str\] \| ModelSelector,",
+        )
+        self.assertRegex(
+            resource_io_stub,
+            r"def load_model_file\(\s*self,\s*source: str \| PathLike\[str\],",
+        )
+        self.assertNotIn("std::", resource_io_stub)
         self.assertIn(
-            "from collections.abc import Collection, Iterable, Iterator, MutableMapping, MutableSet, Sequence",
+            "from collections.abc import Collection, Iterable, Iterator, Mapping, MutableMapping, MutableSet, Sequence",
             resource_stub,
         )
         self.assertIn("def __iter__(self) -> Iterator[ModelVertexRef]: ...", resource_stub)
@@ -200,19 +231,20 @@ class ImportTests(unittest.TestCase):
         )
         self.assertNotIn("def panned_keys(", resource_stub)
         self.assertNotIn("def positioned_keys(", resource_stub)
-        self.assertIn("def __getitem__(self, key: str) -> CinematicSoundEffectRef: ...", resource_stub)
-        self.assertIn("def __getitem__(self, key: str) -> CinematicSpeechRef: ...", resource_stub)
+        self.assertIn("def __getitem__(self, index: int) -> CinematicSoundEffectRef: ...", resource_stub)
+        self.assertIn("def __getitem__(self, index: int) -> CinematicSpeechRef: ...", resource_stub)
         self.assertIn("def __getitem__(self, key: str) -> ModelSelectionRef: ...", resource_stub)
         self.assertIn("def __getitem__(self, key: str) -> CinematicLanguageRef: ...", resource_stub)
         self.assertIn("class ModelSelectionCollection(Collection[ModelSelectionRef]):", resource_stub)
-        self.assertIn("class CinematicSoundEffectCollection(Collection[CinematicSoundEffectRef]):", resource_stub)
-        self.assertIn("class CinematicSpeechCollection(Collection[CinematicSpeechRef]):", resource_stub)
+        self.assertIn("class CinematicSoundEffectCollection(Sequence[CinematicSoundEffectRef]):", resource_stub)
+        self.assertIn("class CinematicSpeechCollection(Sequence[CinematicSpeechRef]):", resource_stub)
         self.assertIn("class CinematicLanguageCollection(Collection[CinematicLanguageRef]):", resource_stub)
-        self.assertNotIn("def by_path(", resource_stub)
+        self.assertIn("def by_path(self, path: str) -> AnimationSoundRef: ...", resource_stub)
+        self.assertIn("def by_path(self, path: str) -> AmbianceSoundRef: ...", resource_stub)
+        self.assertIn("def by_path(self, path: str) -> CinematicSoundEffectRef: ...", resource_stub)
+        self.assertIn("def by_path(self, path: str) -> CinematicSpeechRef: ...", resource_stub)
         for collection in (
             "ModelSelectionCollection",
-            "CinematicSoundEffectCollection",
-            "CinematicSpeechCollection",
             "CinematicLanguageCollection",
         ):
             collection_stub = resource_stub.split(f"class {collection}(", 1)[1].split("\nclass ", 1)[0]
@@ -221,6 +253,11 @@ class ImportTests(unittest.TestCase):
         self.assertNotIn("def set_sound_data(self, sound_handle: int, language_id: int", resource_stub)
         self.assertNotIn("def clear_sound_data(self, sound_handle: int, language_id: int", resource_stub)
         self.assertIn("class CinematicSpeechEncodingMap(MutableMapping[str, bytes]):", resource_stub)
+        self.assertIn("class CinematicSpeech:", resource_stub)
+        self.assertIn(
+            "def __init__(self, *, path: str = '', encodings: Mapping[str, object] | None = None) -> None: ...",
+            resource_stub,
+        )
         self.assertNotIn("CinematicSoundEncoding", resource_stub)
         self.assertIn("def room_1(self) -> RoomRef | None: ...", resource_stub)
         self.assertNotIn("SOUND_EFFECTS_LANGUAGE_ID", root_stub)

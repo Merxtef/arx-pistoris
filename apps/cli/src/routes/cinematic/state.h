@@ -7,6 +7,8 @@
 #include "arx_pistoris/cinematic/sound.hpp"
 #include "arx_pistoris/native/cin.hpp"
 #include "arx_pistoris/native/text.hpp"
+#include "arx_pistoris/sound.hpp"
+#include "arx_pistoris/texture.hpp"
 
 #include "resources/cinematic_sound_io.h"
 
@@ -18,6 +20,8 @@ namespace cli::cinematic {
 
 struct NativeCinematic {
   pistoris::Cin cinematic;
+  std::vector<pistoris::NativeTextureFile> illustration_files;
+  std::vector<pistoris::SoundFile> sound_files;
   pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 

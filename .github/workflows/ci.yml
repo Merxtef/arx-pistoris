@@ -231,7 +231,7 @@ jobs:
             artifact: windows-arm64
             setup_llvm: false
           - name: macOS ARM64
-            os: macos-14
+            os: macos-15
             artifact: macos-arm64
             setup_llvm: false
           - name: Linux x64
@@ -292,15 +292,15 @@ jobs:
             artifact: windows-arm64
             python: '3.14'
           - name: macOS ARM64
-            os: macos-14
+            os: macos-15
             artifact: macos-arm64
             python: '3.12'
           - name: macOS ARM64
-            os: macos-14
+            os: macos-15
             artifact: macos-arm64
             python: '3.13'
           - name: macOS ARM64
-            os: macos-14
+            os: macos-15
             artifact: macos-arm64
             python: '3.14'
           - name: Linux x64

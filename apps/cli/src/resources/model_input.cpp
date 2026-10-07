@@ -3,22 +3,23 @@
 
 #include "resources/model_input.h"
 
+#include "arx_pistoris/animation.hpp"
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/model.hpp"
-#include "arx_pistoris/model/obj.hpp"
-#include "arx_pistoris/native.hpp"
-#include "arx_pistoris/native/text.hpp"
-#include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/resource_io/resources.hpp"
+#include "arx_pistoris/sound.h"
+#include "arx_pistoris/texture.h"
 
-#include "base/bytes.h"
 #include "console/diagnostics.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/service.h"
+#include "resources/input.h"
 #include "routes/conversion_failure.h"
 
-#include <span>
+#include <cstddef>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 namespace cli {
 namespace {
@@ -29,12 +30,27 @@ bool conversionFailure(DiagnosticCode code, std::string_view description, const 
   return conversionInputFailure(code, description, input.path, result);
 }
 
-bool applyResourcePath(const ClassifiedPath& input, std::string_view description, DiagnosticCode failure_code,
-                       pistoris::Model& model) {
-  pistoris::paths::ModelPathView parsed;
-  if (!pistoris::paths::modelFromFtl(input.path, parsed)) return true;
-  const auto result = model.setResourcePath(input.path);
-  return result || conversionFailure(failure_code, description, input, result);
+bool loadModelResource(const ClassifiedPath& input, IoService& io, const ModelInputConversionOptions& options,
+                       DiagnosticCode failure_code, std::string_view description, ConvertedModelInput& out) {
+  const pistoris::resource_io::ModelLoadOptions load_options = {.glb = options.glb,
+                                                                .native_text_mode = options.native_text_mode};
+  auto loaded = io.resources().loadModel(input.document, load_options);
+  if (!loaded) return conversionFailure(failure_code, description, input, loaded);
+  out.model = std::move(loaded->model);
+  out.animations = std::move(loaded->animations);
+  out.texture_source_paths.reserve(out.model.textureCount());
+  for (const ArxTextureView texture : out.model.textures())
+    out.texture_source_paths.emplace_back(texture.path.data, texture.path.size);
+  for (std::size_t animation_index = 0; animation_index < out.animations.size(); ++animation_index) {
+    const pistoris::Animation& animation = out.animations[animation_index];
+    for (std::size_t sound_index = 0; sound_index < animation.soundCount(); ++sound_index) {
+      const ArxSoundView sound = animation.sounds()[sound_index];
+      out.sound_sources.push_back(
+          {animation_index,
+           {static_cast<pistoris::SoundIndex>(sound_index), std::string(sound.path.data, sound.path.size)}});
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -52,54 +68,10 @@ bool isModelInput(FileFacts facts) noexcept {
   }
 }
 
-bool convertModelInput(const ClassifiedPath& input, std::span<const ModelMaterialLibraryInput> material_libraries,
-                       const ModelInputConversionOptions& options, DiagnosticCode failure_code,
-                       std::string_view description, ConvertedModelInput& out) {
+bool convertModelInput(const ClassifiedPath& input, IoService& io, const ModelInputConversionOptions& options,
+                       DiagnosticCode failure_code, std::string_view description, ConvertedModelInput& out) {
   ConvertedModelInput converted;
-  switch (input.facts.format) {
-    case Format::kFtl: {
-      auto native = pistoris::readFtl(input.buffer);
-      if (!native) return conversionFailure(failure_code, description, input, native);
-      auto imported = pistoris::Model::importNative(*native, &converted.texture_source_paths, options.native_text_mode);
-      if (!imported) return conversionFailure(failure_code, description, input, imported);
-      converted.model = std::move(*imported);
-      break;
-    }
-    case Format::kJson: {
-      auto native = pistoris::fromFtlJson(byteStringView(input.buffer), pistoris::NativeTextMode::kUtf8);
-      if (!native) return conversionFailure(failure_code, description, input, native);
-      auto imported =
-          pistoris::Model::importNative(*native, &converted.texture_source_paths, pistoris::NativeTextMode::kUtf8);
-      if (!imported) return conversionFailure(failure_code, description, input, imported);
-      converted.model = std::move(*imported);
-      break;
-    }
-    case Format::kObj: {
-      std::vector<pistoris::ObjMaterialLibraryView> libraries;
-      libraries.reserve(material_libraries.size());
-      for (const ModelMaterialLibraryInput& library : material_libraries)
-        libraries.push_back({library.path, byteStringView(library.data)});
-      auto imported =
-          pistoris::Model::importObj(byteStringView(input.buffer), libraries, &converted.texture_source_paths);
-      if (!imported) return conversionFailure(failure_code, description, input, imported);
-      converted.model = std::move(*imported);
-      break;
-    }
-    case Format::kGlb: {
-      auto imported = pistoris::Model::importGlbWithAnimations(
-          input.buffer, options.glb, nullptr, &converted.texture_source_paths, &converted.sound_sources);
-      if (!imported) return conversionFailure(failure_code, description, input, imported);
-      converted.model = std::move(imported->model);
-      converted.animations = std::move(imported->animations);
-      break;
-    }
-    default:
-      diagnostic(
-          failure_code, "Unsupported %.*s input format", static_cast<int>(description.size()), description.data());
-      return false;
-  }
-
-  if (!applyResourcePath(input, description, failure_code, converted.model)) return false;
+  if (!loadModelResource(input, io, options, failure_code, description, converted)) return false;
   out.model.swap(converted.model);
   out.animations = std::move(converted.animations);
   out.sound_sources = std::move(converted.sound_sources);

@@ -26,4 +26,5 @@ NB_MODULE(_core, module) {
   bindSection("paths", pistoris::python::bindPaths, module);
   bindSection("native", pistoris::python::bindNative, module);
   bindSection("resource", pistoris::python::bindResources, module);
+  bindSection("resource I/O", pistoris::python::bindResourceIo, module);
 }

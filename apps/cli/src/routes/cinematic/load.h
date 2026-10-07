@@ -9,11 +9,16 @@
 
 #include <vector>
 
+namespace cli {
+class IoService;
+}
+
 namespace cli::cinematic {
 
 struct InputConverterDescriptor {
-  using NativeLoader = bool (*)(const ClassifiedPath& input, const Invocation& invocation, NativeCinematic& out);
-  using IntermediateLoader = bool (*)(const ClassifiedPath& input, const Invocation& invocation,
+  using NativeLoader = bool (*)(ClassifiedPath& input, const Invocation& invocation, IoService& io,
+                                NativeCinematic& out);
+  using IntermediateLoader = bool (*)(ClassifiedPath& input, const Invocation& invocation, IoService& io,
                                       IntermediateCinematic& out);
 
   NativeLoader load_native = nullptr;
@@ -21,7 +26,7 @@ struct InputConverterDescriptor {
 };
 
 const InputConverterDescriptor* inputConverterDescriptor(Route route);
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, bool native, CinematicInput& out);
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, IoService& io, bool native, CinematicInput& out);
 
 }  // namespace cli::cinematic
