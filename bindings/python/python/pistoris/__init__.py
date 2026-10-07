@@ -8,6 +8,7 @@ from . import math as math
 from . import model as model
 from . import native as native
 from . import paths as paths
+from . import resource_io as resource_io
 from ._core import (
     Ambiance,
     Animation,
@@ -72,6 +73,7 @@ __all__ = [
     "model",
     "native",
     "paths",
+    "resource_io",
     "utf8_to_latin1",
 ]
 
@@ -105,9 +107,12 @@ _install_record_semantics(
             "property",
             "field",
             "resource_path",
+            "native_path",
             "source_path",
             "json_pointer",
             "binary_region",
+            "operation",
+            "mount_mask",
         ),
         "Texture": ("path", "encoded_image", "external_image_extension"),
         "TextureFile": ("source_path", "path", "encoded_image"),

@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Merxtef
 
 cmake_minimum_required(VERSION 3.26)
-project(arx-pistoris VERSION 0.6.0 LANGUAGES C CXX)
+project(arx-pistoris VERSION 0.6.1 LANGUAGES C CXX)
 
 if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
   message(FATAL_ERROR "arx-pistoris requires macOS 14.0 or newer")
@@ -20,6 +20,8 @@ include(GNUInstallDirs)
 set(ARX_PISTORIS_CORE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libs/core")
 set(ARX_PISTORIS_CORE_INCLUDE_DIR "${ARX_PISTORIS_CORE_DIR}/include")
 set(ARX_PISTORIS_CORE_SOURCE_DIR "${ARX_PISTORIS_CORE_DIR}/src")
+set(ARX_PISTORIS_RESOURCE_IO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libs/resource_io")
+set(ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR "${ARX_PISTORIS_RESOURCE_IO_DIR}/include")
 set(ARX_PISTORIS_CLI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/apps/cli")
 set(ARX_PISTORIS_CLI_SOURCE_DIR "${ARX_PISTORIS_CLI_DIR}/src")
 
@@ -281,6 +283,7 @@ if(ARX_BUILD_PYTHON_BINDINGS)
 endif()
 
 add_subdirectory(libs/core)
+add_subdirectory(libs/resource_io)
 if(ARX_BUILD_CLI)
   add_subdirectory(apps/cli)
 endif()
@@ -310,6 +313,16 @@ file(GLOB_RECURSE ARX_PUBLIC_CPP_HEADERS CONFIGURE_DEPENDS
   RELATIVE "${ARX_PISTORIS_CORE_INCLUDE_DIR}"
   "${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.hpp"
 )
+file(GLOB_RECURSE ARX_RESOURCE_IO_PUBLIC_C_HEADERS CONFIGURE_DEPENDS
+  RELATIVE "${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}"
+  "${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}/arx_pistoris/*.h"
+)
+file(GLOB_RECURSE ARX_RESOURCE_IO_PUBLIC_CPP_HEADERS CONFIGURE_DEPENDS
+  RELATIVE "${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}"
+  "${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}/arx_pistoris/*.hpp"
+)
+list(APPEND ARX_PUBLIC_C_HEADERS ${ARX_RESOURCE_IO_PUBLIC_C_HEADERS})
+list(APPEND ARX_PUBLIC_CPP_HEADERS ${ARX_RESOURCE_IO_PUBLIC_CPP_HEADERS})
 set(ARX_HEADER_CHECK_DIR "${CMAKE_CURRENT_BINARY_DIR}/header-self-containment")
 set(ARX_HEADER_CHECK_SOURCES)
 foreach(header IN LISTS ARX_PUBLIC_C_HEADERS)
@@ -325,7 +338,10 @@ foreach(header IN LISTS ARX_PUBLIC_CPP_HEADERS)
   list(APPEND ARX_HEADER_CHECK_SOURCES "${source}")
 endforeach()
 add_library(arx_pistoris_header_self_containment OBJECT ${ARX_HEADER_CHECK_SOURCES})
-target_include_directories(arx_pistoris_header_self_containment PRIVATE ${ARX_PISTORIS_CORE_INCLUDE_DIR})
+target_include_directories(arx_pistoris_header_self_containment PRIVATE
+  ${ARX_PISTORIS_CORE_INCLUDE_DIR}
+  ${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}
+)
 target_compile_features(arx_pistoris_header_self_containment PRIVATE c_std_11 cxx_std_20)
 target_compile_definitions(arx_pistoris_header_self_containment PRIVATE
   $<$<COMPILE_LANGUAGE:CXX>:ARX_PISTORIS_CPP_API>
@@ -336,7 +352,7 @@ set_target_properties(arx_pistoris_header_self_containment PROPERTIES C_CLANG_TI
 
 # Unit tests: static wrapper + component sources on include paths (internal headers)
 add_executable(arx_pistoris_unit_tests ${ARX_UNIT_TEST_SRCS} ${ARX_UNIT_MODULE_TEST_SRCS})
-target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cpp doctest nlohmann_json)
+target_link_libraries(arx_pistoris_unit_tests PRIVATE arx_pistoris_cpp arx_pistoris_resource_io doctest nlohmann_json)
 target_compile_definitions(arx_pistoris_unit_tests PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
 target_include_directories(arx_pistoris_unit_tests PRIVATE
   ${ARX_PISTORIS_CORE_SOURCE_DIR}
@@ -523,6 +539,9 @@ if(CLANG_FORMAT)
     ${ARX_PISTORIS_CORE_SOURCE_DIR}/*.cpp    ${ARX_PISTORIS_CORE_SOURCE_DIR}/*.h
     ${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.h
     ${ARX_PISTORIS_CORE_INCLUDE_DIR}/arx_pistoris/*.hpp
+    ${ARX_PISTORIS_RESOURCE_IO_DIR}/src/*.cpp ${ARX_PISTORIS_RESOURCE_IO_DIR}/src/*.h
+    ${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}/arx_pistoris/*.h
+    ${ARX_PISTORIS_RESOURCE_IO_INCLUDE_DIR}/arx_pistoris/*.hpp
     ${CMAKE_SOURCE_DIR}/tests/*.c    ${CMAKE_SOURCE_DIR}/tests/*.cpp  ${CMAKE_SOURCE_DIR}/tests/*.h
     ${ARX_PISTORIS_CLI_SOURCE_DIR}/*.cpp    ${ARX_PISTORIS_CLI_SOURCE_DIR}/*.h
     ${CMAKE_SOURCE_DIR}/bindings/python/src/*.cpp ${CMAKE_SOURCE_DIR}/bindings/python/src/*.h

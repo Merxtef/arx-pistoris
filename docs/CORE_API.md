@@ -1,12 +1,13 @@
-# API Guide
+# Core API Guide
 
-This guide is for C and C++ callers integrating the Pistoris library. CLI
-filesystem behavior is documented separately in the [CLI Guide](CLI.md).
+This guide is for C and C++ callers integrating the in-memory Pistoris core.
+Mounted filesystem lookup is documented in the
+[Resource I/O API Guide](RESOURCE_IO_API.md); CLI policy is documented in the
+[CLI Guide](CLI.md).
 
-Pistoris exposes a C++20 API and a C ABI. Both accept in-memory input and
-return carriers, handles, or encoded buffers in memory. They do not open files,
-discover sidecars, resolve mounts, create directories, or apply overwrite
-policy.
+Pistoris exposes a C++20 API and a C ABI. Core operations accept in-memory
+input and return carriers, handles, or encoded buffers in memory. They do not
+open source references or choose filesystem layouts.
 
 The API is pre-1.0. Source and ABI compatibility are not promised between
 minor releases.
@@ -29,19 +30,21 @@ native bytes <-> native carrier <-> editing class <-> authoring projection
   preserving native layout. GLB covers Level, Model, Ambiance, and Cinematic,
   with Animation authored through Model GLB. OBJ covers static Models only.
 
-Images and audio remain explicit sidecars. Import overloads with source outputs
-return caller-facing lookup references. Native imports provide canonical
+Images and audio remain explicit sidecars in core conversions. Import
+overloads with source outputs return caller-facing lookup references. Native
+imports provide canonical
 logical resource paths; external formats may preserve their authored lookup
 spelling. Bake and export results return encoded sidecar files for the caller
-to place. The library does not infer mounts or open those paths. A direct
+to place. Core conversions do not infer mounts or open those paths. A direct
 native-carrier conversion avoids an editing-class rebuild; generation,
 validation, rebasing, GLB, and OBJ work on the semantic resource and can
 therefore canonicalize native structure.
 
 Logical resource paths identify game resources and use portable `/`
-separators. Filesystem paths belong to the caller. The CLI is the supplied
-filesystem consumer: it resolves logical paths through mounts or relative to
-loose inputs and writes returned sidecars into the selected output layout.
+separators. Filesystem paths belong to the caller. The companion resource-I/O
+library can resolve canonical game layouts; the CLI also resolves paths
+relative to loose inputs and writes returned sidecars into the selected output
+layout.
 
 ## Build Targets and Headers
 
@@ -335,7 +338,6 @@ Public code ranges are grouped by concern:
 | `4000-4999` | Animation |
 | `5000-5999` | Ambiance |
 | `6000-6999` | Cinematic |
-| `7000-9999` | reserved intermediate formats |
 | `10000+` | external formats |
 
 Use symbolic values rather than depending on a numeric assignment in pre-1.0
@@ -503,7 +505,7 @@ bytes retains the detected image format as the hint.
 
 Native import supplies the canonical lookup identity, but no physical suffix
 hint or image bytes. The native format does not preserve which file extension
-won the engine's lookup. The library does not search for or read referenced
+won the engine's lookup. Core import does not search for or read referenced
 image files. A caller can attach encoded image data with `setTextureImage`
 before baking. `setTexturePath` and `setTextureExternalImageExtension` update
 those fields without copying the encoded image payload.
@@ -1169,8 +1171,8 @@ Native sample names enter Animation as
 lowercase logical `sfx/*.wav` paths. An optional `SoundSourceReference` vector
 reports each distinct decoded, canonical native lookup path for caller-owned
 file discovery; case and separator aliases may map to one Sound. GLB import
-instead reports the authored format path. The library does not search the
-filesystem.
+instead reports the authored format path. Core Animation import does not search
+the filesystem.
 
 Animation resource identity is optional. `setResourcePath` accepts an Animation
 selector or any portable logical `.tea` path. Selectors expand to registered
@@ -1367,8 +1369,8 @@ Invalid relative path structure rejects the atomic operation.
 Native and GLB imports can return `SoundSourceReference` values that map each
 normalized Sound index to a caller lookup path. GLB returns the authored path;
 native input returns the canonical path used by the engine, which may omit a
-lookup suffix. The mapping is not retained by Ambiance. The library never
-searches for sound files.
+lookup suffix. The mapping is not retained by Ambiance. Core Ambiance import
+does not search for sound files.
 
 `bakeNativeBundle` emits AMB plus optional sound files. Encoded audio is
 decoded and written as PCM16 WAV. Positioned tracks, nonzero panning, and
@@ -1476,7 +1478,8 @@ A valid resource selector aliases the registered full resource path produced by
 its helper. For example, `model:npc:human_base` identifies the same resource as
 its registered Model path. Selectors cover only these registered layouts;
 editing-class identities may use any normalized portable logical path with the
-expected native-format extension. Filesystem mounts are a CLI concern.
+expected native-format extension. Filesystem lookup belongs to the companion
+resource-I/O library or to the caller; the CLI builds its policy on that layer.
 
 Editing-class setters expand selectors before applying the same normalization
 used for literal paths. Stored identities are lowercase relative paths with
@@ -1516,6 +1519,18 @@ empty path for other classes, and rejects malformed class paths.
 `resourceSelectorKind` and `arx_pistoris_path_resource_selector_kind`
 classify the reserved selector prefix. They do not validate the selector
 payload; use the corresponding `*FromSelector` parser for that.
+
+C++ also exposes the owning `ResourceSelector` semantic record.
+`parseResourceSelector` validates the complete selector and fills only the
+fields used by its `kind`; it leaves the output unchanged on failure.
+`resourceSelector` performs the inverse operation and rejects an incoherent
+record. Python instead exposes immutable concrete `ModelSelector`,
+`AnimationSelector`, `LevelSelector`, `CinematicSelector`, and
+`AmbianceSelector` values. `ResourceSelector` is their annotation-only union;
+`selector_from_string()` and `selector_from_path()` return a concrete value,
+while `str(selector)` and `selector.to_path()` serialize it. The C API keeps
+format-specific selector parsers and builders instead of an owning tagged
+record.
 
 C string builders use caller-provided buffers. Query the required character
 count first, then provide space for that count plus the trailing NUL. Inverse

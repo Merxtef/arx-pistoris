@@ -21,6 +21,7 @@ struct NativeAmbiance {
   NativeAmbiance& operator=(NativeAmbiance&&) = delete;
 
   pistoris::Amb ambiance;
+  std::vector<pistoris::SoundFile> sound_files;
   pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 

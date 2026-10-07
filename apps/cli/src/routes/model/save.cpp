@@ -25,7 +25,6 @@
 #include "modules/module.h"
 #include "pipeline/execution_context.h"
 #include "resources/inventory_icon_io.h"
-#include "resources/output.h"
 #include "resources/resource_output.h"
 #include "resources/selector.h"
 #include "resources/sidecar_io.h"
@@ -57,39 +56,21 @@ bool outputFailure(const char* what, const Result& result) {
   return conversionOutputFailure(DiagnosticCode::kModelOutputFailed, what, result);
 }
 
-bool writeAnimationFiles(std::span<const AnimationWriteEntry> animations, const ExecutionContext& execution,
-                         const Invocation& invocation, bool json) {
-  bool success = true;
-  for (const AnimationWriteEntry& output : animations) {
-    const NativeAnimationFile& animation = *output.file;
-    if (json) {
-      auto text = pistoris::toTeaJson(animation.tea, invocation.format.pretty, animation.text_mode);
-      if (!text) {
-        outputFailure("TEA JSON output", text);
-        success = false;
-        continue;
-      }
-      if (!writeOutput(execution.io(), *output.target, text->data(), text->size())) success = false;
-      continue;
-    }
-
-    auto bytes = pistoris::writeTea(animation.tea);
-    if (!bytes) {
-      outputFailure("TEA output", bytes);
-      success = false;
-      continue;
-    }
-    if (!writeOutput(execution.io(), *output.target, bytes->data(), bytes->size())) success = false;
-  }
-  return success;
-}
-
-bool addAnimationSoundOutputs(ResourceOutputPlan& plan, std::span<const AnimationWriteEntry> animations,
-                              const ExecutionContext& execution, const Invocation& invocation) {
+bool addAnimationOutputs(ResourceOutputPlan& plan, std::span<const AnimationWriteEntry> animations,
+                         const ExecutionContext& execution, const Invocation& invocation, bool json) {
   for (const AnimationWriteEntry& output : animations) {
     const NativeAnimationFile& animation = *output.file;
     const std::string& identity = animation.resource_path.empty() ? output.target->path : animation.resource_path;
     const ResourceAssetId asset = plan.addAsset(ResourceAssetKind::kAnimation, identity);
+    if (json) {
+      auto text = pistoris::toTeaJson(animation.tea, invocation.format.pretty, animation.text_mode);
+      if (!text) return outputFailure("TEA JSON output", text);
+      plan.addPrimaryOwned(*output.target, std::vector<std::uint8_t>(text->begin(), text->end()), asset);
+    } else {
+      auto bytes = pistoris::writeTea(animation.tea);
+      if (!bytes) return outputFailure("TEA output", bytes);
+      plan.addPrimaryOwned(*output.target, std::move(*bytes), asset);
+    }
     if (!addSoundFileOutputs(plan,
                              execution.io(),
                              invocation.sound_output,
@@ -104,12 +85,6 @@ bool addAnimationSoundOutputs(ResourceOutputPlan& plan, std::span<const Animatio
 
 bool resolveResourceOutputs(ResourceOutputPlan& plan, const ExecutionContext& execution) {
   return execution.resourceOutputs().resolve(plan);
-}
-
-void reserveNativeModelOutputs(ResourceOutputPlan& plan, const Invocation& invocation,
-                               std::span<const AnimationWriteEntry> animations) {
-  plan.reserveOutput(invocation.output);
-  for (const AnimationWriteEntry& output : animations) plan.reserveOutput(*output.target);
 }
 
 bool compactAnimationSounds(pistoris::Animation& animation) {
@@ -262,8 +237,8 @@ bool writeFtlFiles(const pistoris::Ftl& ftl, std::span<const AnimationWriteEntry
   auto bytes = pistoris::writeFtl(ftl, invocation.format.compress);
   if (!bytes) return outputFailure("FTL output", bytes);
   ResourceOutputPlan resource_outputs;
-  reserveNativeModelOutputs(resource_outputs, invocation, animations);
   const ResourceAssetId model_asset = resource_outputs.addAsset(ResourceAssetKind::kModel, invocation.output.path);
+  resource_outputs.addPrimaryOwned(invocation.output, std::move(*bytes), model_asset);
   if (!addNativeTextureFileOutputs(resource_outputs,
                                    execution.io(),
                                    invocation.texture_output,
@@ -273,30 +248,34 @@ bool writeFtlFiles(const pistoris::Ftl& ftl, std::span<const AnimationWriteEntry
                                    "Model") ||
       !addInventoryIconOutput(
           resource_outputs, invocation.inventory_icon_output, inventory_icon, inventory_icon_format, model_asset) ||
-      !addAnimationSoundOutputs(resource_outputs, animations, execution, invocation) ||
+      !addAnimationOutputs(resource_outputs, animations, execution, invocation, false) ||
       !resolveResourceOutputs(resource_outputs, execution))
     return false;
-  if (!writeOutput(execution.io(), invocation.output, bytes->data(), bytes->size())) return false;
-  return writeAnimationFiles(animations, execution, invocation, false) &&
-         execution.resourceOutputs().write(resource_outputs);
+  return execution.resourceOutputs().write(resource_outputs);
 }
 
 void prepareNativeFtlOutput(const NativeModelFiles& files, const ExecutionContext& execution,
                             const Invocation& invocation, std::vector<pistoris::NativeTextureFile>& texture_files) {
-  if (invocation.texture_options.export_files)
+  if (!invocation.texture_options.export_files) return;
+  texture_files = files.texture_files;
+  if (invocation.texture_options.input_folder_specified)
     loadNativeTextureFiles(files.ftl, files.text_mode, execution.io(), invocation.textures, texture_files);
 }
 
 void prepareNativeSoundOutput(std::span<AnimationWriteEntry> animations, const ExecutionContext& execution,
                               const Invocation& invocation) {
-  if (!invocation.sound_options.export_files) return;
+  if (!invocation.sound_options.export_files) {
+    for (const AnimationWriteEntry& output : animations) output.file->sound_files.clear();
+    return;
+  }
   for (const AnimationWriteEntry& output : animations) {
     NativeAnimationFile& animation = *output.file;
-    loadNativeSoundFiles(animation.tea,
-                         animation.text_mode,
-                         execution.io(),
-                         invocation.sound_inputs[animation.input],
-                         animation.sound_files);
+    if (invocation.sound_options.input_folder_specified)
+      loadNativeSoundFiles(animation.tea,
+                           animation.text_mode,
+                           execution.io(),
+                           invocation.sound_inputs[animation.input],
+                           animation.sound_files);
   }
 }
 
@@ -337,8 +316,9 @@ bool writeJsonNative(NativeModelFiles& files, const ExecutionContext& execution,
   auto text = pistoris::toFtlJson(files.ftl, invocation.format.pretty, files.text_mode);
   if (!text) return outputFailure("FTL JSON output", text);
   ResourceOutputPlan resource_outputs;
-  reserveNativeModelOutputs(resource_outputs, invocation, animations);
   const ResourceAssetId model_asset = resource_outputs.addAsset(ResourceAssetKind::kModel, invocation.output.path);
+  resource_outputs.addPrimaryOwned(
+      invocation.output, std::vector<std::uint8_t>(text->begin(), text->end()), model_asset);
   if (!addNativeTextureFileOutputs(resource_outputs,
                                    execution.io(),
                                    invocation.texture_output,
@@ -351,12 +331,10 @@ bool writeJsonNative(NativeModelFiles& files, const ExecutionContext& execution,
                               files.inventory_icon,
                               files.inventory_icon_format,
                               model_asset) ||
-      !addAnimationSoundOutputs(resource_outputs, animations, execution, invocation) ||
+      !addAnimationOutputs(resource_outputs, animations, execution, invocation, true) ||
       !resolveResourceOutputs(resource_outputs, execution))
     return false;
-  if (!writeOutput(execution.io(), invocation.output, text->data(), text->size())) return false;
-  return writeAnimationFiles(animations, execution, invocation, true) &&
-         execution.resourceOutputs().write(resource_outputs);
+  return execution.resourceOutputs().write(resource_outputs);
 }
 
 bool writeJsonIntermediate(IntermediateModel& source, const ExecutionContext& execution, const Invocation& invocation) {
@@ -373,10 +351,11 @@ bool writeJsonIntermediate(IntermediateModel& source, const ExecutionContext& ex
   auto text = pistoris::toFtlJson(files.ftl, invocation.format.pretty, files.text_mode);
   if (!text) return outputFailure("FTL JSON output", text);
   ResourceOutputPlan resource_outputs;
-  reserveNativeModelOutputs(resource_outputs, invocation, animations);
   std::string identity(source.model.resourcePath());
   if (identity.empty()) identity = invocation.output.path;
   const ResourceAssetId model_asset = resource_outputs.addAsset(ResourceAssetKind::kModel, std::move(identity));
+  resource_outputs.addPrimaryOwned(
+      invocation.output, std::vector<std::uint8_t>(text->begin(), text->end()), model_asset);
   std::vector<std::uint8_t> rendered_icon;
   if (!addNativeTextureFileOutputs(resource_outputs,
                                    execution.io(),
@@ -391,12 +370,10 @@ bool writeJsonIntermediate(IntermediateModel& source, const ExecutionContext& ex
                               invocation.options.inventory_icon_render,
                               rendered_icon,
                               model_asset) ||
-      !addAnimationSoundOutputs(resource_outputs, animations, execution, invocation) ||
+      !addAnimationOutputs(resource_outputs, animations, execution, invocation, true) ||
       !resolveResourceOutputs(resource_outputs, execution))
     return false;
-  if (!writeOutput(execution.io(), invocation.output, text->data(), text->size())) return false;
-  return writeAnimationFiles(animations, execution, invocation, true) &&
-         execution.resourceOutputs().write(resource_outputs);
+  return execution.resourceOutputs().write(resource_outputs);
 }
 
 bool writeObjIntermediate(IntermediateModel& source, const ExecutionContext& execution, const Invocation& invocation) {
@@ -411,11 +388,13 @@ bool writeObjIntermediate(IntermediateModel& source, const ExecutionContext& exe
   if (!object) return outputFailure("OBJ output", object);
 
   ResourceOutputPlan resource_outputs;
-  resource_outputs.reserveOutput(invocation.output);
-  if (!object->mtl.empty()) resource_outputs.reserveOutput(invocation.obj_mtl_output);
   std::string identity(source.model.resourcePath());
   if (identity.empty()) identity = invocation.output.path;
   const ResourceAssetId asset = resource_outputs.addAsset(ResourceAssetKind::kModel, std::move(identity));
+  resource_outputs.addPrimary(invocation.output, object->text.data(), object->text.size(), asset);
+  if (!object->mtl.empty())
+    resource_outputs.add(
+        ResourceFileKind::kData, invocation.obj_mtl_output, object->mtl.data(), object->mtl.size(), asset);
   std::vector<std::uint8_t> rendered_icon;
   if (!addInventoryIconOutput(resource_outputs,
                               invocation.inventory_icon_output,
@@ -433,10 +412,6 @@ bool writeObjIntermediate(IntermediateModel& source, const ExecutionContext& exe
       !resolveResourceOutputs(resource_outputs, execution))
     return false;
 
-  if (!writeOutput(execution.io(), invocation.output, object->text.data(), object->text.size())) return false;
-  if (!object->mtl.empty() &&
-      !writeOutput(execution.io(), invocation.obj_mtl_output, object->mtl.data(), object->mtl.size()))
-    return false;
   return execution.resourceOutputs().write(resource_outputs);
 }
 
@@ -457,10 +432,10 @@ bool writeGlbIntermediate(IntermediateModel& source, const ExecutionContext& exe
     bundle.glb = std::move(*exported);
   }
   ResourceOutputPlan resource_outputs;
-  resource_outputs.reserveOutput(invocation.output);
   std::string model_identity(source.model.resourcePath());
   if (model_identity.empty()) model_identity = invocation.output.path;
   const ResourceAssetId model_asset = resource_outputs.addAsset(ResourceAssetKind::kModel, std::move(model_identity));
+  resource_outputs.addPrimary(invocation.output, bundle.glb.data(), bundle.glb.size(), model_asset);
   std::vector<std::uint8_t> rendered_icon;
   if (!addInventoryIconOutput(resource_outputs,
                               invocation.inventory_icon_output,
@@ -493,8 +468,7 @@ bool writeGlbIntermediate(IntermediateModel& source, const ExecutionContext& exe
       return false;
   }
   if (!resolveResourceOutputs(resource_outputs, execution)) return false;
-  return writeOutput(execution.io(), invocation.output, bundle.glb.data(), bundle.glb.size()) &&
-         execution.resourceOutputs().write(resource_outputs);
+  return execution.resourceOutputs().write(resource_outputs);
 }
 
 bool writeLevelPreviewGlbIntermediate(IntermediateModel& source, const ExecutionContext& execution,
@@ -519,10 +493,10 @@ bool writeLevelPreviewGlbIntermediate(IntermediateModel& source, const Execution
   auto bytes = source.model.exportLevelPreviewGlb(options);
   if (!bytes) return outputFailure("Level preview GLB output", bytes);
   ResourceOutputPlan resource_outputs;
-  resource_outputs.reserveOutput(invocation.output);
   std::string identity(source.model.resourcePath());
   if (identity.empty()) identity = invocation.output.path;
   const ResourceAssetId asset = resource_outputs.addAsset(ResourceAssetKind::kModel, std::move(identity));
+  resource_outputs.addPrimaryOwned(invocation.output, std::move(*bytes), asset);
   std::vector<std::uint8_t> rendered_icon;
   if (!addInventoryIconOutput(resource_outputs,
                               invocation.inventory_icon_output,
@@ -532,8 +506,7 @@ bool writeLevelPreviewGlbIntermediate(IntermediateModel& source, const Execution
                               asset) ||
       !resolveResourceOutputs(resource_outputs, execution))
     return false;
-  return writeOutput(execution.io(), invocation.output, bytes->data(), bytes->size()) &&
-         execution.resourceOutputs().write(resource_outputs);
+  return execution.resourceOutputs().write(resource_outputs);
 }
 
 }  // namespace

@@ -79,21 +79,12 @@ bool loadReferenceModel(const std::string& argument, const TextureIoOptions& tex
   }
 
   const ClassifiedPath& input = inputs.front();
-  std::vector<ModelMaterialLibraryInput> material_libraries;
-  if (!readModelMaterialLibraries(
-          input, io, DiagnosticCode::kAmbianceInputFailed, "reference Model", material_libraries))
-    return false;
-
   ConvertedModelInput converted;
   ModelInputConversionOptions conversion_options;
   conversion_options.glb.arx_units_per_glb_unit = invocation.options.glb_import.arx_units_per_glb_unit;
   conversion_options.native_text_mode = invocation.native_text_mode;
-  if (!convertModelInput(input,
-                         material_libraries,
-                         conversion_options,
-                         DiagnosticCode::kAmbianceInputFailed,
-                         "Reference Model",
-                         converted)) {
+  if (!convertModelInput(
+          input, io, conversion_options, DiagnosticCode::kAmbianceInputFailed, "Reference Model", converted)) {
     return false;
   }
 
@@ -141,11 +132,9 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
              : automaticSidecarRebase(sidecarEndpoint(context.inputs[invocation.input], ARX_RESOURCE_KIND_AMBIANCE),
                                       sidecarEndpoint(invocation.output, ARX_RESOURCE_KIND_AMBIANCE));
   if (!resolveSoundRebase(context, invocation, automatic)) return false;
-  if (!loadInput(*input_converter, context.inputs, invocation, native, invocation.state)) return false;
+  if (!loadInput(*input_converter, context.inputs, invocation, context.io, native, invocation.state)) return false;
   if (IntermediateAmbiance* intermediate = std::get_if<IntermediateAmbiance>(&invocation.state)) {
-    const bool needs_sound_data = invocation.sound_options.export_files || (invocation.options.trim_tracks_to_master &&
-                                                                            intermediate->ambiance.trackCount() > 1U);
-    if (needs_sound_data &&
+    if (invocation.sound_options.input_folder_specified &&
         !loadSoundData(intermediate->ambiance, context.io, invocation.sounds, intermediate->sound_sources))
       return false;
     intermediate->sound_sources.clear();

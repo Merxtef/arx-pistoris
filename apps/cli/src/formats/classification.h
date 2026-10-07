@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/document.hpp"
 
 #include "formats/format.h"
 #include "resources/layout.h"
@@ -39,9 +40,9 @@ struct FileFacts {
 };
 
 struct ClassifiedPath {
+  pistoris::resource_io::ResourceDocument document;
   std::string path;
   PathLocation location;
-  std::vector<std::uint8_t> buffer;
   FileFacts facts{};
   std::size_t positional_index = 0;
   ArxResourceKind resource_kind = ARX_RESOURCE_KIND_NONE;

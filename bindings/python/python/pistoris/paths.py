@@ -1,35 +1,24 @@
 """Logical Arx resource paths and selectors."""
 
 from ._core.paths import (
-    AmbiancePath,
-    AnimationPath,
+    AmbianceSelector,
+    AnimationSelector,
     AnimationType,
-    CinematicPath,
+    CinematicSelector,
     EntityClassKind,
-    ModelPath,
+    LevelSelector,
+    ModelSelector,
     ModelType,
     ResourceKind,
     SearchLocation,
-    ambiance_amb,
-    ambiance_from_amb,
-    ambiance_from_selector,
     ambiance_search_location,
-    ambiance_selector,
     ambiance_sound_directory,
     amb_from_zone_ambiance,
     animation_directory,
-    animation_from_selector,
-    animation_from_tea,
     animation_search_location,
-    animation_selector,
-    animation_tea,
     base_entity_class_from_model,
-    cinematic_cin,
-    cinematic_from_cin,
-    cinematic_from_selector,
     cinematic_illustration_directory,
     cinematic_search_location,
-    cinematic_selector,
     dlf_scene_from_level_name,
     entity_class_from_ftl,
     entity_class_from_model,
@@ -39,28 +28,17 @@ from ._core.paths import (
     is_portable_filename,
     is_portable_resource_path_component,
     item_icon_from_entity_class,
-    level_dlf,
-    level_from_dlf,
-    level_from_fts,
-    level_from_llf,
-    level_from_selector,
-    level_fts,
-    level_llf,
     level_loading_screen,
     level_minimap,
     level_search_location,
-    level_selector,
     minimap_offsets_file,
     minimap_resource_level,
     model_from_entity_class,
-    model_from_ftl,
-    model_from_selector,
-    model_ftl,
     model_search_location,
-    model_selector,
     normalize_zone_ambiance,
-    resource_selector_kind,
     sanitize_portable_filename,
+    selector_from_path,
+    selector_from_string,
     sound_directory,
     texture_directory,
 )
@@ -68,17 +46,37 @@ from ._facade import install_immutable_values as _install_immutable_values
 from ._facade import install_record_semantics as _install_record_semantics
 from ._facade import publish_types as _publish_types
 
+ResourceSelector = ModelSelector | AnimationSelector | LevelSelector | CinematicSelector | AmbianceSelector
+
 __all__ = [name for name in globals() if not name.startswith("_")]
 
 _publish_types(globals(), __name__, __all__)
-_install_immutable_values(globals(), ("SearchLocation",))
+_install_immutable_values(
+    globals(),
+    (
+        "ModelSelector",
+        "AnimationSelector",
+        "LevelSelector",
+        "CinematicSelector",
+        "AmbianceSelector",
+        "SearchLocation",
+    ),
+)
 _install_record_semantics(
     globals(),
     {
-        "ModelPath": ("type", "name", "tweak"),
-        "AnimationPath": ("type", "name"),
-        "CinematicPath": ("name",),
-        "AmbiancePath": ("name",),
+        "ModelSelector": ("type", "name", "tweak"),
+        "AnimationSelector": ("type", "name"),
+        "LevelSelector": ("level",),
+        "CinematicSelector": ("name",),
+        "AmbianceSelector": ("name",),
         "SearchLocation": ("base_path", "max_discovery_depth"),
     },
+    hashable=(
+        "ModelSelector",
+        "AnimationSelector",
+        "LevelSelector",
+        "CinematicSelector",
+        "AmbianceSelector",
+    ),
 )

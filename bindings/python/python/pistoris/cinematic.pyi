@@ -19,7 +19,6 @@ from ._core import (
     CinematicLightRef as LightRef,
     CinematicNativeOutput as NativeOutput,
     CinematicPostEffect as PostEffect,
-    CinematicSound as Sound,
     CinematicSoundEffectCollection as SoundEffectCollection,
     CinematicSoundEffectRef as SoundEffectRef,
     CinematicSoundFile as SoundFile,
@@ -27,6 +26,7 @@ from ._core import (
     CinematicSoundSourceReference as SoundSourceReference,
     CinematicSpeechCollection as SpeechCollection,
     CinematicSpeechEncodingMap as SpeechEncodingMap,
+    CinematicSpeech as Speech,
     CinematicSpeechRef as SpeechRef,
     SoundKind as SoundKind,
 )
@@ -52,7 +52,6 @@ __all__ = [
     "LightRef",
     "NativeOutput",
     "PostEffect",
-    "Sound",
     "SoundEffectCollection",
     "SoundEffectRef",
     "SoundFile",
@@ -60,6 +59,7 @@ __all__ = [
     "SoundSourceReference",
     "SpeechCollection",
     "SpeechEncodingMap",
+    "Speech",
     "SpeechRef",
     "SoundKind",
 ]

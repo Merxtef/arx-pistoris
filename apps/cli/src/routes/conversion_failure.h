@@ -4,6 +4,7 @@
 #pragma once
 
 #include "arx_pistoris/error.hpp"
+#include "arx_pistoris/resource_io/location.hpp"
 #include "arx_pistoris/runtime.hpp"
 
 #include "console/diagnostics.h"
@@ -12,6 +13,12 @@
 #include <string_view>
 
 namespace cli {
+
+template <class T>
+std::string conversionFailureDescription(const pistoris::resource_io::ResourceIoResult<T>& result) {
+  if (const auto* error = result.error()) return pistoris::resource_io::describeError(*error);
+  return pistoris::errorString(result.code());
+}
 
 inline bool conversionStageFailure(DiagnosticCode code, std::string_view stage) {
   diagnostic(code, "Stage: %.*s", static_cast<int>(stage.size()), stage.data());
@@ -65,6 +72,28 @@ inline bool conversionInputFailure(DiagnosticCode code, std::string_view source_
              static_cast<int>(description.size()),
              description.data());
   return false;
+}
+
+template <class T>
+bool conversionInputFailure(DiagnosticCode code, std::string_view source_kind, std::string_view path,
+                            const pistoris::resource_io::ResourceIoResult<T>& result) {
+  switch (result.code()) {
+    case ARX_RESOURCE_IO_NOT_FOUND:
+      code = DiagnosticCode::kResourceNotFound;
+      break;
+    case ARX_RESOURCE_IO_INVALID_PATH:
+      code = DiagnosticCode::kResourcePathInvalid;
+      break;
+    case ARX_RESOURCE_IO_STAT_FAILED:
+    case ARX_RESOURCE_IO_OPEN_FAILED:
+    case ARX_RESOURCE_IO_READ_FAILED:
+      code = DiagnosticCode::kResourceReadFailed;
+      break;
+    default:
+      break;
+  }
+  const std::string description = conversionFailureDescription(result);
+  return conversionInputFailure(code, source_kind, path, std::string_view(description));
 }
 
 template <class Result>

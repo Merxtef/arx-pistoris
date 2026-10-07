@@ -12,7 +12,6 @@
 #include "console/diagnostics.h"
 #include "formats/format.h"
 #include "pipeline/execution_context.h"
-#include "resources/output.h"
 #include "resources/resource_output.h"
 #include "resources/selector.h"
 #include "resources/sound_io.h"
@@ -21,6 +20,7 @@
 #include "routes/conversion_failure.h"
 #include "routes/native_text.h"
 
+#include <cstdint>
 #include <span>
 #include <string>
 #include <utility>
@@ -36,10 +36,21 @@ bool outputFailure(const char* what, const Result& result) {
 
 bool writeNativeFile(const pistoris::Tea& animation, const ExecutionContext& execution, const Invocation& invocation,
                      bool json, pistoris::NativeTextMode text_mode, std::span<const pistoris::SoundFile> sound_files) {
+  std::vector<std::uint8_t> primary;
+  if (json) {
+    auto text = pistoris::toTeaJson(animation, invocation.format.pretty, text_mode);
+    if (!text) return outputFailure("Animation JSON output", text);
+    primary.assign(text->begin(), text->end());
+  } else {
+    auto bytes = pistoris::writeTea(animation);
+    if (!bytes) return outputFailure("TEA output", bytes);
+    primary = std::move(*bytes);
+  }
+
   ResourceOutputPlan resource_outputs;
-  resource_outputs.reserveOutput(invocation.output);
+  const ResourceAssetId asset = resource_outputs.addAsset(ResourceAssetKind::kAnimation, invocation.output.path);
+  resource_outputs.addPrimaryOwned(invocation.output, std::move(primary), asset);
   if (!sound_files.empty()) {
-    const ResourceAssetId asset = resource_outputs.addAsset(ResourceAssetKind::kAnimation, invocation.output.path);
     if (!addSoundFileOutputs(resource_outputs,
                              execution.io(),
                              invocation.sound_output,
@@ -50,39 +61,25 @@ bool writeNativeFile(const pistoris::Tea& animation, const ExecutionContext& exe
       return false;
   }
   if (!execution.resourceOutputs().resolve(resource_outputs)) return false;
-
-  bool success = false;
-  if (json) {
-    auto text = pistoris::toTeaJson(animation, invocation.format.pretty, text_mode);
-    if (!text) {
-      outputFailure("Animation JSON output", text);
-    } else {
-      success = writeOutput(execution.io(), invocation.output, text->data(), text->size());
-    }
-  } else {
-    auto bytes = pistoris::writeTea(animation);
-    if (!bytes) {
-      outputFailure("TEA output", bytes);
-    } else {
-      success = writeOutput(execution.io(), invocation.output, bytes->data(), bytes->size());
-    }
-  }
-  if (!success) return false;
   return execution.resourceOutputs().write(resource_outputs);
 }
 
 bool writeTeaNative(NativeAnimation& source, const ExecutionContext& execution, const Invocation& invocation) {
-  if (invocation.sound_options.export_files)
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified)
     loadNativeSoundFiles(
         source.animation, source.text_mode, execution.io(), invocation.sound_input, source.sound_files);
-  return writeNativeFile(source.animation, execution, invocation, false, source.text_mode, source.sound_files);
+  const std::span<const pistoris::SoundFile> sounds =
+      invocation.sound_options.export_files ? source.sound_files : std::span<const pistoris::SoundFile>{};
+  return writeNativeFile(source.animation, execution, invocation, false, source.text_mode, sounds);
 }
 
 bool writeJsonNative(NativeAnimation& source, const ExecutionContext& execution, const Invocation& invocation) {
-  if (invocation.sound_options.export_files)
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified)
     loadNativeSoundFiles(
         source.animation, source.text_mode, execution.io(), invocation.sound_input, source.sound_files);
-  return writeNativeFile(source.animation, execution, invocation, true, source.text_mode, source.sound_files);
+  const std::span<const pistoris::SoundFile> sounds =
+      invocation.sound_options.export_files ? source.sound_files : std::span<const pistoris::SoundFile>{};
+  return writeNativeFile(source.animation, execution, invocation, true, source.text_mode, sounds);
 }
 
 bool bakeIntermediate(IntermediateAnimation& source, const Invocation& invocation, NativeAnimation& out) {

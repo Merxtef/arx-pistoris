@@ -986,6 +986,9 @@ struct AnimationSoundAccess {
   static ElementDisplayLabel displayLabel(const Owner& owner, std::size_t, std::size_t index) {
     return {"path", copyString(owner.sounds()[index].path)};
   }
+  static std::size_t positionForPath(const Owner& owner, std::size_t, std::string_view path) {
+    return animationSoundIndex(owner, canonicalResourcePath(path));
+  }
   static std::size_t compact(Owner& owner, std::size_t) {
     const std::size_t removed = unwrap(owner.compactSounds());
     owner.tracking.sounds.invalidate();
@@ -1083,14 +1086,6 @@ struct AnimationNativeOutput {
 struct AnimationBytesOutput {
   std::vector<std::uint8_t> tea;
   ReadOnlySequence<SoundFileValue> sound_files;
-};
-
-struct ModelImportOutput {
-  std::shared_ptr<PythonModel> model;
-  std::vector<std::shared_ptr<PythonAnimation>> animations;
-  std::vector<std::string> texture_source_paths;
-  std::vector<AnimationSoundSourceReference> sound_sources;
-  std::optional<ArxAnimationConversionReport> animation_report;
 };
 
 struct AnimationImportOutput {

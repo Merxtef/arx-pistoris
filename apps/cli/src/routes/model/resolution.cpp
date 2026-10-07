@@ -299,13 +299,6 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
     return false;
   invocation.preview_asset_name = previewAssetName(context.inputs[invocation.input].path);
 
-  if (!readModelMaterialLibraries(context.inputs[invocation.input],
-                                  context.io,
-                                  DiagnosticCode::kModelInputFailed,
-                                  "Model",
-                                  invocation.obj_material_libraries))
-    return false;
-
   if (context.route.output == Format::kObj) {
     PathLocation parent;
     PathLocation mtl;
@@ -323,18 +316,20 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
                                            context.requires_intermediate) == ConversionPath::kNative;
   if (!resolveTextureRebase(context, invocation, native) || !resolveSoundRebase(context, invocation, native))
     return false;
-  if (!loadInput(*input_converter, context.inputs, invocation, invocation.options, native, invocation.state))
+  if (!loadInput(
+          *input_converter, context.inputs, invocation, invocation.options, context.io, native, invocation.state))
     return false;
   if (!loadInventoryIcon(invocation, context.io)) return false;
   if (!resolveAnimationSidecarOutputs(invocation)) return false;
-  if (invocation.texture_options.export_files) {
+  if (invocation.texture_options.export_files && invocation.texture_options.input_folder_specified) {
     if (IntermediateModel* intermediate = std::get_if<IntermediateModel>(&invocation.state)) {
       if (!loadTextureImages(intermediate->model, context.io, invocation.textures, intermediate->texture_source_paths))
         return false;
       intermediate->texture_source_paths.clear();
     }
   }
-  if (invocation.sound_options.export_files && invocation.output_converter->uses_sound_files) {
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified &&
+      invocation.output_converter->uses_sound_files) {
     if (IntermediateModel* intermediate = std::get_if<IntermediateModel>(&invocation.state)) {
       if (!loadAnimationSounds(*intermediate, context, invocation)) return false;
       intermediate->sound_sources.clear();

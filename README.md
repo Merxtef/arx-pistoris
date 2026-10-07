@@ -16,12 +16,14 @@ CIN-compatible illustration timeline with effects and localized speech
 references.
 
 The library has C++20, C, and Python 3.12+ APIs for all five editing classes
-and supported native carriers. The CLI owns filesystem discovery, mounts,
-sidecars, overwrite policy, and game-resource placement. The library itself
-operates on memory buffers and logical resource paths. Third-party C++
-dependencies are vendored. The native library and CLI require no separately
-installed third-party libraries. The Python package requires a compatible
-CPython 3.12+ runtime.
+and supported native carriers. The optional C++ and Python resource-I/O layer
+resolves logical paths through ordered game-resource mounts, discovers
+selectors, performs mounted and loose-file conversion with available
+sidecars, and provides explicit output planning and collision policy. The CLI
+adds command routing, dry-run presentation, interactive overwrite decisions,
+and bounded retries. Third-party C++ dependencies are vendored. The native
+library and CLI require no separately installed third-party libraries. The
+Python package requires a compatible CPython 3.12+ runtime.
 
 ## Supported Formats
 
@@ -68,12 +70,13 @@ editing, validation, generation, or authoring-format conversion. GLB covers
 Level, Model, Ambiance, and Cinematic, with Animation authored through Model
 GLB. OBJ covers static Models only.
 
-Images and audio are sidecars rather than hidden filesystem operations.
-Imports can return source lookup paths that need resolving, and exports return
-encoded files for the caller to place. Native imports use canonical logical
-resource paths; external formats may preserve their authored lookup spelling.
-The CLI performs resolution and placement through mounts or beside loose files;
-library callers retain control of their own storage.
+Images and audio remain explicit sidecars in the core conversion API. Imports
+can return source lookup paths that need resolving, and exports return encoded
+files for the caller to place. Native imports use canonical logical resource
+paths; external formats may preserve their authored lookup spelling. Callers
+can resolve these paths themselves or use `arx_pistoris::resource_io` for live
+mounted or loose-file conversion, sidecar discovery, and output planning. The
+CLI uses that layer and supplies command-line interaction and presentation.
 
 ## Quick Start
 
@@ -103,7 +106,9 @@ See `arx-pistor --help` for the installed option set and defaults.
 - **[Authoring Reference](docs/AUTHORING_REFERENCE.md)** - exact authoring
   names, structures, flags, and defaults for Level, Model, Animation,
   Ambiance, and Cinematic.
-- **[API Guide](docs/API.md)** - C++ and C integration.
+- **[Core API Guide](docs/CORE_API.md)** - in-memory C++ and C integration.
+- **[Resource I/O API Guide](docs/RESOURCE_IO_API.md)** - C++ and Python
+  mounted or loose resource discovery, conversion, and output planning.
 - **[Python Bindings](bindings/python/README.md)** - Python installation and
   resource conversion.
 - **[Fidelity and Limitations](docs/LIMITATIONS.md)** - deliberate losses and

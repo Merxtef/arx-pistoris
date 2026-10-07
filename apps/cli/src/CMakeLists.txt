@@ -23,7 +23,6 @@ add_library(arx_pistoris_cli_support STATIC
   resources/inventory_icon_io.cpp
   resources/input.cpp
   resources/level_image_io.cpp
-  resources/output.cpp
   resources/read_diagnostics.cpp
   resources/resource_output.cpp
   resources/selector.cpp
@@ -31,17 +30,20 @@ add_library(arx_pistoris_cli_support STATIC
   resources/sound_io.cpp
   resources/texture_io.cpp
 )
-target_link_libraries(arx_pistoris_cli_support PRIVATE arx_pistoris_cpp nlohmann_json)
+target_link_libraries(arx_pistoris_cli_support
+  PUBLIC arx_pistoris_resource_io
+  PRIVATE arx_pistoris_cpp nlohmann_json
+)
 target_compile_definitions(arx_pistoris_cli_support PRIVATE ARX_PISTORIS_ENABLE_LEVEL_DEBUG_API)
 target_include_directories(arx_pistoris_cli_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 arx_target_defaults(arx_pistoris_cli_support)
 if(WIN32)
-  target_sources(arx_pistoris_cli_support PRIVATE console/terminal_windows.cpp io/default_mounts_windows.cpp)
+  target_sources(arx_pistoris_cli_support PRIVATE console/terminal_windows.cpp)
   target_link_libraries(arx_pistoris_cli_support PRIVATE shell32 ole32)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  target_sources(arx_pistoris_cli_support PRIVATE console/terminal_linux.cpp io/default_mounts_linux.cpp)
+  target_sources(arx_pistoris_cli_support PRIVATE console/terminal_linux.cpp)
 else()
-  message(FATAL_ERROR "arx-pistor automatic mounts support only Windows and Linux")
+  message(FATAL_ERROR "arx-pistor terminal support is available only on Windows and Linux")
 endif()
 
 add_executable(arx_pistoris_cli

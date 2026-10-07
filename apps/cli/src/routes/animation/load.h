@@ -9,12 +9,16 @@
 
 #include <vector>
 
+namespace cli {
+class IoService;
+}
+
 namespace cli::animation {
 
 struct InputConverterDescriptor {
-  using NativeLoader = bool (*)(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+  using NativeLoader = bool (*)(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, IoService& io,
                                 NativeAnimation& out);
-  using IntermediateLoader = bool (*)(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+  using IntermediateLoader = bool (*)(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, IoService& io,
                                       IntermediateAnimation& out);
 
   NativeLoader load_native = nullptr;
@@ -22,7 +26,7 @@ struct InputConverterDescriptor {
 };
 
 const InputConverterDescriptor* inputConverterDescriptor(Route route);
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, bool native, AnimationInput& out);
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, IoService& io, bool native, AnimationInput& out);
 
 }  // namespace cli::animation

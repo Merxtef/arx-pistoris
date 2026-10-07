@@ -4,15 +4,20 @@
 #include "routes/ambiance/load.h"
 
 #include "arx_pistoris/ambiance.hpp"
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/native.hpp"
 #include "arx_pistoris/native/text.hpp"
-#include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/resources.hpp"
+#include "arx_pistoris/sound.h"
 #include "arx_pistoris/sound.hpp"
 
-#include "base/bytes.h"
 #include "console/diagnostics.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/service.h"
+#include "resources/input.h"
+#include "resources/native_bundle.h"
 #include "routes/ambiance/invocation.h"
 #include "routes/ambiance/options.h"
 #include "routes/ambiance/state.h"
@@ -20,6 +25,8 @@
 #include "routes/native_text.h"
 #include "routes/types.h"
 
+#include <cstddef>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -32,65 +39,56 @@ bool inputFailure(const char* what, const Result& result, const ClassifiedPath& 
   return conversionInputFailure(DiagnosticCode::kAmbianceInputFailed, what, input.path, result);
 }
 
-bool applyResourcePath(const ClassifiedPath& input, pistoris::Ambiance& out) {
-  pistoris::paths::AmbiancePathView parsed;
-  if (!pistoris::paths::ambianceFromAmb(input.path, parsed)) return true;
-  const auto result = out.setResourcePath(input.path);
-  return result || inputFailure("Ambiance resource identity", result, input);
+bool loadNative(ClassifiedPath& input, const Invocation& invocation, IoService& io, NativeAmbiance& out) {
+  const pistoris::NativeTextMode text_mode =
+      directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  auto loaded = io.resources().loadAmbianceNativeBundle(
+      input.document, {.native_text_mode = text_mode, .suppress_related_resource_errors = false});
+  if (!loaded) return inputFailure("Ambiance native bundle", loaded, input);
+  out.ambiance = loaded->ambiance().carrier();
+  out.text_mode = loaded->ambiance().textMode();
+  if (nativeSoundFiles(loaded->resources(), ARX_RESOURCE_KIND_AMBIANCE, 0, io, "Ambiance sound", out.sound_files))
+    return true;
+  diagnostic(DiagnosticCode::kAmbianceInputFailed, "Ambiance native bundle contains an invalid sound reference");
+  return false;
 }
 
-bool decodeAmb(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Amb& out) {
-  switch (input.facts.format) {
-    case Format::kAmb: {
-      auto result = pistoris::readAmb(input.buffer);
-      if (!result) return inputFailure(formatName(input.facts.format), result, input);
-      out = std::move(*result);
-      return true;
+bool loadIntermediate(ClassifiedPath& input, const Invocation& invocation, IoService& io, IntermediateAmbiance& out) {
+  if (input.facts.format == Format::kAmb || input.facts.format == Format::kJson) {
+    NativeAmbiance native;
+    if (!loadNative(input, invocation, io, native)) return false;
+    std::vector<pistoris::SoundSourceReference> sources;
+    auto converted = pistoris::Ambiance::importNative(native.ambiance, &sources, native.text_mode);
+    if (!converted) return inputFailure("Ambiance", converted, input);
+    for (const pistoris::SoundFile& sound : native.sound_files) {
+      const auto loaded =
+          converted->setSoundData(sound.source_sound, {sound.encoded_audio.data(), sound.encoded_audio.size()});
+      if (!loaded) return inputFailure("Ambiance sound", loaded, input);
     }
-    case Format::kJson: {
-      auto result = pistoris::fromAmbJson(byteStringView(input.buffer), text_mode);
-      if (!result) return inputFailure(formatName(input.facts.format), result, input);
-      out = std::move(*result);
-      return true;
-    }
-    default:
-      diagnostic(DiagnosticCode::kAmbianceUnsupportedInput, "Unsupported Ambiance input format");
-      return false;
+    out.ambiance = std::move(*converted);
+    out.sound_sources = std::move(sources);
+    return true;
   }
-}
-
-bool loadNative(const ClassifiedPath& input, const Invocation& invocation, NativeAmbiance& out) {
-  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
-  return decodeAmb(input, out.text_mode, out.ambiance);
-}
-
-bool loadNativeIntermediate(const ClassifiedPath& input, const Invocation& invocation, IntermediateAmbiance& out) {
-  pistoris::Amb native;
-  const pistoris::NativeTextMode text_mode = carrierTextMode(input.facts.format, invocation.native_text_mode);
-  if (!decodeAmb(input, text_mode, native)) return false;
-  std::vector<pistoris::SoundSourceReference> sound_sources;
-  auto converted = pistoris::Ambiance::importNative(native, &sound_sources, text_mode);
-  if (!converted) return inputFailure("AMB Ambiance", converted, input);
-  if (!applyResourcePath(input, *converted)) return false;
+  const pistoris::resource_io::AmbianceLoadOptions options = {
+      .glb = invocation.options.glb_import,
+      .native_text_mode = carrierTextMode(input.facts.format, invocation.native_text_mode)};
+  auto converted = io.resources().loadAmbiance(input.document, options);
+  if (!converted) return inputFailure("Ambiance", converted, input);
   out.ambiance = std::move(*converted);
-  out.sound_sources = std::move(sound_sources);
-  return true;
-}
-
-bool loadGlbIntermediate(const ClassifiedPath& input, const Invocation& invocation, IntermediateAmbiance& out) {
-  std::vector<pistoris::SoundSourceReference> sound_sources;
-  auto converted = pistoris::Ambiance::importGlb(input.buffer, invocation.options.glb_import, &sound_sources);
-  if (!converted) return inputFailure("GLB Ambiance", converted, input);
-  out.ambiance = std::move(*converted);
-  out.sound_sources = std::move(sound_sources);
+  out.sound_sources.reserve(out.ambiance.soundCount());
+  for (std::size_t index = 0; index < out.ambiance.soundCount(); ++index) {
+    const ArxSoundView sound = out.ambiance.sounds()[index];
+    out.sound_sources.push_back(
+        {static_cast<pistoris::SoundIndex>(index), std::string(sound.path.data, sound.path.size)});
+  }
   return true;
 }
 
 }  // namespace
 
 const InputConverterDescriptor* inputConverterDescriptor(Route route) {
-  static constexpr InputConverterDescriptor kAmb{loadNative, loadNativeIntermediate};
-  static constexpr InputConverterDescriptor kGlb{nullptr, loadGlbIntermediate};
+  static constexpr InputConverterDescriptor kAmb{loadNative, loadIntermediate};
+  static constexpr InputConverterDescriptor kGlb{nullptr, loadIntermediate};
   switch (route.input) {
     case Format::kAmb:
     case Format::kJson:
@@ -102,20 +100,20 @@ const InputConverterDescriptor* inputConverterDescriptor(Route route) {
   }
 }
 
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, bool native, AmbianceInput& out) {
-  const ClassifiedPath& input = inputs[invocation.input];
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, IoService& io, bool native, AmbianceInput& out) {
+  ClassifiedPath& input = inputs[invocation.input];
   if (native) {
     if (!converter.load_native) return false;
     NativeAmbiance& loaded = out.emplace<NativeAmbiance>();
-    if (converter.load_native(input, invocation, loaded)) return true;
+    if (converter.load_native(input, invocation, io, loaded)) return true;
     out.emplace<std::monostate>();
     return false;
   }
 
   if (!converter.load_intermediate) return false;
   IntermediateAmbiance& loaded = out.emplace<IntermediateAmbiance>();
-  if (converter.load_intermediate(input, invocation, loaded)) return true;
+  if (converter.load_intermediate(input, invocation, io, loaded)) return true;
   out.emplace<std::monostate>();
   return false;
 }

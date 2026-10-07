@@ -4,6 +4,8 @@
 #include "doctest/doctest.h"
 
 #include "io/path_location.h"
+#include "io/policy.h"
+#include "io/service.h"
 #include "resources/resource_output.h"
 
 #include <array>
@@ -15,10 +17,13 @@ namespace {
 
 cli::PathLocation target(const char* path) { return {path, cli::PathAddress::kMountRelative}; }
 
+cli::IoService outputIo() { return {cli::OverwriteMode::kAlwaysYes, false, {}, "."}; }
+
 }  // namespace
 
 TEST_SUITE("CLI resource output") {
   TEST_CASE("Identical collisions select one payload") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 3> kData{1, 2, 3};
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId first = plan.addAsset(cli::ResourceAssetKind::kAnimation, "anim:first");
@@ -26,11 +31,12 @@ TEST_SUITE("CLI resource output") {
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/step.wav"), kData.data(), kData.size(), first);
     plan.add(cli::ResourceFileKind::kAudio, target("SFX/STEP.WAV"), kData.data(), kData.size(), second);
 
-    REQUIRE(plan.resolve(true, false));
+    REQUIRE(plan.resolve(io, true, false));
     CHECK(plan.selectedCount() == 1);
   }
 
   TEST_CASE("Dry run reports differing collisions without selecting data") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 1> kFirst{1};
     constexpr std::array<std::uint8_t, 1> kSecond{2};
     cli::ResourceOutputPlan plan;
@@ -41,11 +47,12 @@ TEST_SUITE("CLI resource output") {
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/step.wav"), kFirst.data(), kFirst.size(), second);
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/step.wav"), kSecond.data(), kSecond.size(), third);
 
-    REQUIRE(plan.resolve(true, false));
+    REQUIRE(plan.resolve(io, true, false));
     CHECK(plan.selectedCount() == 0);
   }
 
   TEST_CASE("Keep-first resolves differing collisions deterministically") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 1> kFirst{1};
     constexpr std::array<std::uint8_t, 1> kSecond{2};
     cli::ResourceOutputPlan plan;
@@ -54,22 +61,24 @@ TEST_SUITE("CLI resource output") {
     plan.add(cli::ResourceFileKind::kImage, target("textures/shared.png"), kFirst.data(), kFirst.size(), first);
     plan.add(cli::ResourceFileKind::kImage, target("textures/shared.png"), kSecond.data(), kSecond.size(), second);
 
-    REQUIRE(plan.resolve(false, true));
+    REQUIRE(plan.resolve(io, false, true));
     CHECK(plan.selectedCount() == 1);
   }
 
   TEST_CASE("Distinct targets remain independent") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 1> kData{1};
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kAmbiance, "ambiance:test");
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/a.wav"), kData.data(), kData.size(), asset);
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/b.wav"), kData.data(), kData.size(), asset);
 
-    REQUIRE(plan.resolve(true, false));
+    REQUIRE(plan.resolve(io, true, false));
     CHECK(plan.selectedCount() == 2);
   }
 
   TEST_CASE("Owned payloads remain valid after their source is released") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 3> kExpected{1, 2, 3};
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId first = plan.addAsset(cli::ResourceAssetKind::kModel, "model:first");
@@ -78,36 +87,39 @@ TEST_SUITE("CLI resource output") {
     plan.addOwned(cli::ResourceFileKind::kImage, target("icons/item.png"), std::move(owned), first);
     plan.add(cli::ResourceFileKind::kImage, target("icons/item.png"), kExpected.data(), kExpected.size(), second);
 
-    REQUIRE(plan.resolve(true, false));
+    REQUIRE(plan.resolve(io, true, false));
     CHECK(plan.selectedCount() == 1);
   }
 
-  TEST_CASE("Resource output cannot replace a reserved asset output") {
+  TEST_CASE("Primary and sidecar candidates share one destination decision") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 1> kData{1};
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kAnimation, "anim:test");
-    plan.reserveOutput(target("asset.glb"));
+    plan.addPrimary(target("asset.glb"), kData.data(), kData.size(), asset);
     plan.add(cli::ResourceFileKind::kAudio, target("ASSET.GLB"), kData.data(), kData.size(), asset);
 
-    CHECK_FALSE(plan.resolve(false, true));
-    CHECK(plan.selectedCount() == 0);
+    REQUIRE(plan.resolve(io, false, true));
+    CHECK(plan.selectedCount() == 1);
   }
 
   TEST_CASE("Invalid asset references fail before collision resolution") {
+    auto io = outputIo();
     constexpr std::array<std::uint8_t, 1> kData{1};
     cli::ResourceOutputPlan plan;
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/step.wav"), kData.data(), kData.size(), 0);
 
-    CHECK_FALSE(plan.resolve(true, false));
+    CHECK_FALSE(plan.resolve(io, true, false));
     CHECK(plan.selectedCount() == 0);
   }
 
   TEST_CASE("Nonempty resources require payload data") {
+    auto io = outputIo();
     cli::ResourceOutputPlan plan;
     const cli::ResourceAssetId asset = plan.addAsset(cli::ResourceAssetKind::kAnimation, "anim:test");
     plan.add(cli::ResourceFileKind::kAudio, target("sfx/step.wav"), nullptr, 1, asset);
 
-    CHECK_FALSE(plan.resolve(true, false));
+    CHECK_FALSE(plan.resolve(io, true, false));
     CHECK(plan.selectedCount() == 0);
   }
 }

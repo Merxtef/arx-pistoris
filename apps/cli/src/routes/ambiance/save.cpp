@@ -12,7 +12,6 @@
 #include "console/diagnostics.h"
 #include "formats/format.h"
 #include "pipeline/execution_context.h"
-#include "resources/output.h"
 #include "resources/resource_output.h"
 #include "resources/sound_io.h"
 #include "routes/ambiance/invocation.h"
@@ -42,9 +41,9 @@ bool prepareIntermediateSounds(IntermediateAmbiance& source, const Invocation& i
 bool writeAmbianceFiles(const void* primary_data, std::size_t primary_size, std::span<const pistoris::SoundFile> sounds,
                         const ExecutionContext& execution, const Invocation& invocation) {
   ResourceOutputPlan resource_outputs;
-  resource_outputs.reserveOutput(invocation.output);
+  const ResourceAssetId asset = resource_outputs.addAsset(ResourceAssetKind::kAmbiance, invocation.output.path);
+  resource_outputs.addPrimary(invocation.output, primary_data, primary_size, asset);
   if (!sounds.empty()) {
-    const ResourceAssetId asset = resource_outputs.addAsset(ResourceAssetKind::kAmbiance, invocation.output.path);
     if (!addSoundFileOutputs(resource_outputs,
                              execution.io(),
                              invocation.sound_output,
@@ -55,8 +54,7 @@ bool writeAmbianceFiles(const void* primary_data, std::size_t primary_size, std:
       return false;
   }
   if (!execution.resourceOutputs().resolve(resource_outputs)) return false;
-  return writeOutput(execution.io(), invocation.output, primary_data, primary_size) &&
-         execution.resourceOutputs().write(resource_outputs);
+  return execution.resourceOutputs().write(resource_outputs);
 }
 
 bool writeAmbFile(const pistoris::Amb& ambiance, std::span<const pistoris::SoundFile> sounds,
@@ -67,9 +65,10 @@ bool writeAmbFile(const pistoris::Amb& ambiance, std::span<const pistoris::Sound
 }
 
 bool writeAmbNative(NativeAmbiance& source, const ExecutionContext& execution, const Invocation& invocation) {
-  std::vector<pistoris::SoundFile> sounds;
-  if (invocation.sound_options.export_files)
-    loadNativeSoundFiles(source.ambiance, source.text_mode, execution.io(), invocation.sounds, sounds);
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified)
+    loadNativeSoundFiles(source.ambiance, source.text_mode, execution.io(), invocation.sounds, source.sound_files);
+  const std::span<const pistoris::SoundFile> sounds =
+      invocation.sound_options.export_files ? source.sound_files : std::span<const pistoris::SoundFile>{};
   return writeAmbFile(source.ambiance, sounds, execution, invocation);
 }
 
@@ -82,9 +81,10 @@ bool writeJsonFile(const pistoris::Amb& ambiance, std::span<const pistoris::Soun
 }
 
 bool writeJsonNative(NativeAmbiance& source, const ExecutionContext& execution, const Invocation& invocation) {
-  std::vector<pistoris::SoundFile> sounds;
-  if (invocation.sound_options.export_files)
-    loadNativeSoundFiles(source.ambiance, source.text_mode, execution.io(), invocation.sounds, sounds);
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified)
+    loadNativeSoundFiles(source.ambiance, source.text_mode, execution.io(), invocation.sounds, source.sound_files);
+  const std::span<const pistoris::SoundFile> sounds =
+      invocation.sound_options.export_files ? source.sound_files : std::span<const pistoris::SoundFile>{};
   return writeJsonFile(source.ambiance, sounds, source.text_mode, execution, invocation);
 }
 

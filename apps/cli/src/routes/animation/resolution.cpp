@@ -80,8 +80,8 @@ bool resolveInvocation(const RouteResolveContext& context, Invocation& invocatio
                                            invocation.output_converter->write_native != nullptr,
                                            context.requires_intermediate) == ConversionPath::kNative;
   if (!resolveSounds(context, invocation, native)) return false;
-  if (!loadInput(*input_converter, context.inputs, invocation, native, invocation.state)) return false;
-  if (invocation.sound_options.export_files) {
+  if (!loadInput(*input_converter, context.inputs, invocation, context.io, native, invocation.state)) return false;
+  if (invocation.sound_options.export_files && invocation.sound_options.input_folder_specified) {
     if (IntermediateAnimation* intermediate = std::get_if<IntermediateAnimation>(&invocation.state)) {
       if (!loadSoundData(intermediate->animation, context.io, invocation.sound_input, intermediate->sound_sources))
         return false;

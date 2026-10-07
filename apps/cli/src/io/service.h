@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include "arx_pistoris/resource_io/location.hpp"
+#include "arx_pistoris/resource_io/resources.hpp"
+
 #include "io/path_location.h"
 #include "io/policy.h"
 
@@ -78,6 +81,10 @@ class IoService {
   ResourceEnumerationResult enumerateFiles(const PathLocation& directory, std::uint32_t max_depth,
                                            std::vector<EnumeratedFile>& out);
   ResourceEnumerationResult enumerateFiles(const PathLocation& directory, std::vector<PathLocation>& out);
+  [[nodiscard]] pistoris::resource_io::ResourceIoResult<pistoris::resource_io::ResourceCatalog> scanCatalog() const;
+  [[nodiscard]] pistoris::resource_io::Resources& resources() noexcept;
+  [[nodiscard]] const pistoris::resource_io::Resources& resources() const noexcept;
+  bool executeWritePlan(pistoris::resource_io::ResourceWritePlan& plan);
   [[nodiscard]] bool valid() const noexcept;
   [[nodiscard]] bool hasReadMounts() const noexcept;
   bool useDefaultGameWriteMount();
@@ -85,6 +92,7 @@ class IoService {
  private:
   struct MountState;
 
+  bool allowOverwrite(const char* path);
   bool writeNativeFile(const std::filesystem::path& path, const void* data, std::size_t size);
 
   State state_;

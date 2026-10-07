@@ -7,11 +7,16 @@
 #include "arx_pistoris/native.hpp"
 #include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/paths.hpp"
+#include "arx_pistoris/paths/types.h"
+#include "arx_pistoris/resource_io/resources.hpp"
+#include "arx_pistoris/sound.hpp"
 
-#include "base/bytes.h"
 #include "console/diagnostics.h"
 #include "formats/classification.h"
 #include "formats/format.h"
+#include "io/service.h"
+#include "resources/input.h"
+#include "resources/native_bundle.h"
 #include "routes/animation/invocation.h"
 #include "routes/animation/state.h"
 #include "routes/conversion_failure.h"
@@ -31,49 +36,43 @@ bool inputFailure(const char* what, const Result& result, std::string_view path)
   return conversionInputFailure(DiagnosticCode::kAnimationInputFailed, what, path, result);
 }
 
-bool decodeTea(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Tea& out) {
-  switch (input.facts.format) {
-    case Format::kTea: {
-      auto result = pistoris::readTea(input.buffer);
-      if (!result) return inputFailure(formatName(input.facts.format), result, input.path);
-      out = std::move(*result);
-      return true;
-    }
-    case Format::kJson: {
-      auto result = pistoris::fromTeaJson(byteStringView(input.buffer), text_mode);
-      if (!result) return inputFailure(formatName(input.facts.format), result, input.path);
-      out = std::move(*result);
-      return true;
-    }
-    default:
-      diagnostic(DiagnosticCode::kAnimationUnsupportedInput, "Unsupported Animation input format");
-      return false;
-  }
-}
-
-bool applyResourcePath(const ClassifiedPath& input, pistoris::Animation& out) {
-  pistoris::paths::AnimationPathView parsed;
-  if (!pistoris::paths::animationFromTea(input.path, parsed)) return true;
-  const auto result = out.setResourcePath(input.path);
-  return result || inputFailure("Animation resource identity", result, input.path);
-}
-
-bool loadNative(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation, NativeAnimation& out) {
+bool loadNative(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, IoService& io,
+                NativeAnimation& out) {
   const ClassifiedPath& input = inputs[invocation.input];
-  out.text_mode = directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
-  return decodeTea(input, out.text_mode, out.animation);
+  const pistoris::NativeTextMode text_mode =
+      directCarrierTextMode(input.facts.format, invocation.output.format, invocation.native_text_mode);
+  auto loaded = io.resources().loadAnimationNativeBundle(
+      input.document, {.native_text_mode = text_mode, .suppress_related_resource_errors = false});
+  if (!loaded) return inputFailure("Animation native bundle", loaded, input.path);
+  out.animation = loaded->animation().carrier();
+  out.text_mode = loaded->animation().textMode();
+  if (nativeSoundFiles(loaded->resources(), ARX_RESOURCE_KIND_ANIMATION, 0, io, "Animation sound", out.sound_files))
+    return true;
+  diagnostic(DiagnosticCode::kAnimationInputFailed, "Animation native bundle contains an invalid sound reference");
+  return false;
 }
 
-bool loadIntermediate(const std::vector<ClassifiedPath>& inputs, const Invocation& invocation,
+bool loadIntermediate(std::vector<ClassifiedPath>& inputs, const Invocation& invocation, IoService& io,
                       IntermediateAnimation& out) {
   const ClassifiedPath& input = inputs[invocation.input];
-  const pistoris::NativeTextMode text_mode = carrierTextMode(input.facts.format, invocation.native_text_mode);
-  pistoris::Tea native;
-  if (!decodeTea(input, text_mode, native)) return false;
-  auto converted = pistoris::Animation::importNative(native, &out.sound_sources, text_mode);
-  if (!converted) return inputFailure("TEA Animation", converted, input.path);
+  NativeAnimation native;
+  if (!loadNative(inputs, invocation, io, native)) return false;
+  std::vector<pistoris::SoundSourceReference> sources;
+  auto converted = pistoris::Animation::importNative(native.animation, &sources, native.text_mode);
+  if (!converted) return inputFailure("Animation", converted, input.path);
+  pistoris::paths::AnimationPathView parsed;
+  if (pistoris::paths::animationFromTea(input.path, parsed)) {
+    const auto identity = converted->setResourcePath(input.path);
+    if (!identity) return inputFailure("Animation resource identity", identity, input.path);
+  }
+  for (const pistoris::SoundFile& sound : native.sound_files) {
+    const auto loaded =
+        converted->setSoundData(sound.source_sound, {sound.encoded_audio.data(), sound.encoded_audio.size()});
+    if (!loaded) return inputFailure("Animation sound", loaded, sound.path);
+  }
   out.animation = std::move(*converted);
-  return applyResourcePath(input, out.animation);
+  out.sound_sources = std::move(sources);
+  return true;
 }
 
 }  // namespace
@@ -89,19 +88,19 @@ const InputConverterDescriptor* inputConverterDescriptor(Route route) {
   }
 }
 
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, bool native, AnimationInput& out) {
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, IoService& io, bool native, AnimationInput& out) {
   if (native) {
     if (!converter.load_native) return false;
     NativeAnimation& loaded = out.emplace<NativeAnimation>();
-    if (converter.load_native(inputs, invocation, loaded)) return true;
+    if (converter.load_native(inputs, invocation, io, loaded)) return true;
     out.emplace<std::monostate>();
     return false;
   }
 
   if (!converter.load_intermediate) return false;
   IntermediateAnimation& loaded = out.emplace<IntermediateAnimation>();
-  if (converter.load_intermediate(inputs, invocation, loaded)) return true;
+  if (converter.load_intermediate(inputs, invocation, io, loaded)) return true;
   out.emplace<std::monostate>();
   return false;
 }

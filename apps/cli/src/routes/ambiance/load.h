@@ -10,11 +10,16 @@
 
 #include <vector>
 
+namespace cli {
+class IoService;
+}
+
 namespace cli::ambiance {
 
 struct InputConverterDescriptor {
-  using NativeLoader = bool (*)(const ClassifiedPath& input, const Invocation& invocation, NativeAmbiance& out);
-  using IntermediateLoader = bool (*)(const ClassifiedPath& input, const Invocation& invocation,
+  using NativeLoader = bool (*)(ClassifiedPath& input, const Invocation& invocation, IoService& io,
+                                NativeAmbiance& out);
+  using IntermediateLoader = bool (*)(ClassifiedPath& input, const Invocation& invocation, IoService& io,
                                       IntermediateAmbiance& out);
 
   NativeLoader load_native = nullptr;
@@ -22,7 +27,7 @@ struct InputConverterDescriptor {
 };
 
 const InputConverterDescriptor* inputConverterDescriptor(Route route);
-bool loadInput(const InputConverterDescriptor& converter, const std::vector<ClassifiedPath>& inputs,
-               const Invocation& invocation, bool native, AmbianceInput& out);
+bool loadInput(const InputConverterDescriptor& converter, std::vector<ClassifiedPath>& inputs,
+               const Invocation& invocation, IoService& io, bool native, AmbianceInput& out);
 
 }  // namespace cli::ambiance

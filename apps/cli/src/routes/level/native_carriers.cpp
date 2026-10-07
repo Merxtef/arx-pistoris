@@ -39,20 +39,20 @@ ArxReturnCode publishDecoded(Result&& result, Publish&& publish, std::string* fa
 ArxReturnCode decodeFts(const ClassifiedPath& input, pistoris::NativeTextMode text_mode, pistoris::Fts& out,
                         std::string* failure) {
   if (input.facts.format == Format::kJson) {
-    auto result = pistoris::fromFtsJson(byteStringView(input.buffer), text_mode);
+    auto result = pistoris::fromFtsJson(byteStringView(input.document.data), text_mode);
     return publishDecoded(
         std::move(result), [&](pistoris::FtsJsonImport&& decoded) { out = std::move(decoded.fts); }, failure);
   }
-  auto result = pistoris::readFts(input.buffer);
+  auto result = pistoris::readFts(input.document.data);
   return publishDecoded(std::move(result), [&](pistoris::Fts&& decoded) { out = std::move(decoded); }, failure);
 }
 
 ArxReturnCode decodeLlf(const ClassifiedPath& input, pistoris::Llf& out, std::string* failure) {
   if (input.facts.format == Format::kJson) {
-    auto result = pistoris::fromLlfJson(byteStringView(input.buffer));
+    auto result = pistoris::fromLlfJson(byteStringView(input.document.data));
     return publishDecoded(std::move(result), [&](pistoris::Llf&& decoded) { out = std::move(decoded); }, failure);
   }
-  auto result = pistoris::readLlf(input.buffer);
+  auto result = pistoris::readLlf(input.document.data);
   return publishDecoded(std::move(result), [&](pistoris::Llf&& decoded) { out = std::move(decoded); }, failure);
 }
 
@@ -60,10 +60,10 @@ ArxReturnCode decodeDlf(const ClassifiedPath& input, pistoris::NativeTextMode te
                         std::optional<pistoris::Llf>* embedded_lighting, std::string* failure) {
   if (input.facts.format == Format::kJson) {
     if (embedded_lighting) embedded_lighting->reset();
-    auto result = pistoris::fromDlfJson(byteStringView(input.buffer), text_mode);
+    auto result = pistoris::fromDlfJson(byteStringView(input.document.data), text_mode);
     return publishDecoded(std::move(result), [&](pistoris::Dlf&& decoded) { out = std::move(decoded); }, failure);
   }
-  auto result = pistoris::readDlf(input.buffer);
+  auto result = pistoris::readDlf(input.document.data);
   return publishDecoded(
       std::move(result),
       [&](pistoris::DlfBundle&& decoded) {

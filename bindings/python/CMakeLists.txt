@@ -10,7 +10,7 @@ if(EXISTS "${PYTHON_PACKAGE_BUILD}")
     "Close any Python interpreter using this build and configure again."
   )
 endif()
-file(MAKE_DIRECTORY "${PYTHON_PACKAGE_BUILD}/native")
+file(MAKE_DIRECTORY "${PYTHON_PACKAGE_BUILD}")
 
 nanobind_add_module(pistoris_python
   NB_STATIC
@@ -23,6 +23,7 @@ nanobind_add_module(pistoris_python
   src/native.cpp
   src/paths.cpp
   src/resource_values.cpp
+  src/resource_io.cpp
   src/resources.cpp
 )
 arx_target_vendored(nanobind-static-abi3)
@@ -31,7 +32,7 @@ set_target_properties(pistoris_python PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/python/pistoris"
   RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/python/pistoris"
 )
-target_link_libraries(pistoris_python PRIVATE arx_pistoris_cpp)
+target_link_libraries(pistoris_python PRIVATE arx_pistoris_cpp arx_pistoris_resource_io)
 target_include_directories(pistoris_python PRIVATE "${PROJECT_SOURCE_DIR}/libs/core/src")
 target_include_directories(pistoris_python SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/third_party/nanobind/include")
 target_compile_features(pistoris_python PRIVATE cxx_std_20)
@@ -46,11 +47,16 @@ foreach(module IN LISTS PYTHON_PUBLIC_MODULES)
   configure_file("${module}" "${PYTHON_PACKAGE_BUILD}/${module_name}" COPYONLY)
 endforeach()
 configure_file("${PYTHON_PACKAGE_SOURCE}/py.typed" "${PYTHON_PACKAGE_BUILD}/py.typed" COPYONLY)
-configure_file("${PYTHON_PACKAGE_SOURCE}/native/__init__.py" "${PYTHON_PACKAGE_BUILD}/native/__init__.py" COPYONLY)
-file(GLOB PYTHON_PUBLIC_NATIVE_STUBS CONFIGURE_DEPENDS "${PYTHON_PACKAGE_SOURCE}/native/*.pyi")
-foreach(stub IN LISTS PYTHON_PUBLIC_NATIVE_STUBS)
-  get_filename_component(stub_name "${stub}" NAME)
-  configure_file("${stub}" "${PYTHON_PACKAGE_BUILD}/native/${stub_name}" COPYONLY)
+foreach(package IN ITEMS native resource_io)
+  file(MAKE_DIRECTORY "${PYTHON_PACKAGE_BUILD}/${package}")
+  file(GLOB PYTHON_PUBLIC_PACKAGE_MODULES CONFIGURE_DEPENDS
+    "${PYTHON_PACKAGE_SOURCE}/${package}/*.py"
+    "${PYTHON_PACKAGE_SOURCE}/${package}/*.pyi"
+  )
+  foreach(module IN LISTS PYTHON_PUBLIC_PACKAGE_MODULES)
+    get_filename_component(module_name "${module}" NAME)
+    configure_file("${module}" "${PYTHON_PACKAGE_BUILD}/${package}/${module_name}" COPYONLY)
+  endforeach()
 endforeach()
 
 set(PYTHON_PRIVATE_STUB_DIR "${PYTHON_PACKAGE_BUILD}/_core")

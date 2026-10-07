@@ -1336,8 +1336,9 @@ def main() -> int:
                 raise AssertionError("emitted DLF and LLF metadata must contain a current timestamp")
 
         expect_success(cli, "--overwrite", tmp / "level3.fts.json", tmp / "level6.fts.json")
-        if (tmp / "level6.dlf.json").exists() or (tmp / "level6.llf.json").exists():
-            raise AssertionError("Level JSON input must not discover sibling carriers")
+        for extension in ("fts", "dlf", "llf"):
+            if not (tmp / f"level6.{extension}.json").is_file():
+                raise AssertionError("Level JSON input must preserve discovered sibling carriers")
 
         arbitrary_llf = tmp / "lighting.json"
         arbitrary_dlf = tmp / "scene.json"
@@ -1965,7 +1966,7 @@ def main() -> int:
         expect_success(cli, "--kind", "model", glb_as_fts, tmp / "recognized-model.json")
         if LEVEL_FTS_AVAILABLE:
             expect_code(cli, 1, "[CLI_LEVEL_INPUT_FAILED]", LEVEL_FTS, bad_llf, tmp / "bad-extra.glb")
-            expect_code(cli, 1, "[CLI_CLASSIFICATION_FAILED]", LEVEL_FTS, bad_dlf, tmp / "bad-extra-2.glb")
+            expect_code(cli, 1, "[CLI_LEVEL_INPUT_FAILED]", LEVEL_FTS, bad_dlf, tmp / "bad-extra-2.glb")
         expect_code(cli, 1, "[CLI_LEVEL_INPUT_FAILED]", bad_recognized_fts, tmp / "bad-recognized.glb")
         if LEVEL_FTS_AVAILABLE:
             expect_code(cli, 1, "[CLI_LEVEL_INPUT_FAILED]", LEVEL_FTS, bad_recognized_llf, tmp / "bad-recognized-extra.glb")
@@ -2975,7 +2976,7 @@ def main() -> int:
             "anim:npc:idle",
             failed_family_json,
         )
-        if failed_family.returncode != 1 or "[CLI_IO_STAT_FAILED]" not in failed_family.stderr:
+        if failed_family.returncode != 1 or "[CLI_RESOURCE_OUTPUT_INVALID]" not in failed_family.stderr:
             raise AssertionError(
                 "a failed standalone Animation output must fail the command\n"
                 f"{failed_family.stdout}{failed_family.stderr}"

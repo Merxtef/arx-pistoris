@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/string_view.h>
@@ -89,9 +90,15 @@ void bindCommon(nb::module_& module) {
       .def_prop_ro("property", [](const ErrorLocation& value) { return value.property; })
       .def_prop_ro("field", [](const ErrorLocation& value) { return value.field; })
       .def_prop_ro("resource_path", [](const ErrorLocation& value) { return value.resource_path; })
+      .def_prop_ro("native_path", [](const ErrorLocation& value) { return value.native_path; })
       .def_prop_ro("source_path", [](const ErrorLocation& value) { return value.source_path; })
       .def_prop_ro("json_pointer", [](const ErrorLocation& value) { return value.json_pointer; })
-      .def_prop_ro("binary_region", [](const ErrorLocation& value) { return value.binary_region; });
+      .def_prop_ro("binary_region", [](const ErrorLocation& value) { return value.binary_region; })
+      .def_prop_ro(
+          "operation",
+          [](const ErrorLocation& value) { return value.operation; },
+          nb::for_getter(nb::sig("def operation(self) -> pistoris.resource_io.Operation | None")))
+      .def_prop_ro("mount_mask", [](const ErrorLocation& value) { return value.mount_mask; });
 
   nb::object error_type =
       nb::steal<nb::object>(PyErr_NewException("pistoris.PistorisError", PyExc_RuntimeError, nullptr));

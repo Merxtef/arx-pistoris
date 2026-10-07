@@ -10,6 +10,8 @@
 #include "arx_pistoris/native/text.hpp"
 #include "arx_pistoris/texture.hpp"
 
+#include "resources/level_image_io.h"
+
 #include <optional>
 #include <string>
 #include <variant>
@@ -27,6 +29,8 @@ struct NativeLevelFiles {
   std::optional<pistoris::Fts> fts;
   std::optional<pistoris::Llf> llf;
   std::optional<pistoris::Dlf> dlf;
+  std::vector<pistoris::NativeTextureFile> texture_files;
+  LoadedLevelImages images;
   pistoris::NativeTextMode text_mode = pistoris::NativeTextMode::kUtf8;
 };
 

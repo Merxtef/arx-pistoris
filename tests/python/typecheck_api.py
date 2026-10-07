@@ -1,9 +1,18 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Merxtef
 
-from collections.abc import MutableMapping, MutableSequence, MutableSet
+from collections.abc import MutableMapping, MutableSequence, MutableSet, Sequence
+from pathlib import Path
 
 import pistoris
+
+
+def exercise_error_types(error: pistoris.PistorisError) -> None:
+    if error.location is not None:
+        operation: pistoris.resource_io.Operation | None = error.location.operation
+        assert operation is None or operation is pistoris.resource_io.Operation.READ
+        native_path: Path | None = error.location.native_path
+        assert native_path is None or native_path.is_absolute()
 
 
 def exercise_public_types(
@@ -18,20 +27,48 @@ def exercise_public_types(
     ambiance_track: pistoris.ambiance.PannedTrack = pistoris.ambiance.PannedTrack()
     cinematic_keyframe: pistoris.cinematic.Keyframe = pistoris.cinematic.Keyframe()
     level_zone: pistoris.level.Zone = pistoris.level.Zone()
-    model_path: pistoris.paths.ModelPath = pistoris.paths.ModelPath(
+    model_selector: pistoris.paths.ModelSelector = pistoris.paths.ModelSelector(
         pistoris.paths.ModelType.NPC, "human_base"
     )
-    animation_path: pistoris.paths.AnimationPath = pistoris.paths.AnimationPath(
+    animation_selector: pistoris.paths.AnimationSelector = pistoris.paths.AnimationSelector(
         pistoris.paths.AnimationType.NPC, "walk"
     )
-    model_type: pistoris.paths.ModelType = model_path.type
-    animation_type: pistoris.paths.AnimationType = animation_path.type
-    model_ftl: str = pistoris.paths.model_ftl(model_path)
-    animation_tea: str = pistoris.paths.animation_tea(animation_path)
+    model_type: pistoris.paths.ModelType = model_selector.type
+    animation_type: pistoris.paths.AnimationType = animation_selector.type
+    model_ftl: str = model_selector.to_path()
+    animation_tea: str = animation_selector.to_path()
     model_animation_directory: str = pistoris.paths.animation_directory(model_type)
     animation_directory: str = pistoris.paths.animation_directory(animation_type)
-    resource_kind: pistoris.paths.ResourceKind = pistoris.paths.resource_selector_kind("model:npc:human_base")
+    resource_kind: pistoris.paths.ResourceKind = pistoris.paths.selector_from_string("model:npc:human_base").kind
     search_location: pistoris.paths.SearchLocation = pistoris.paths.model_search_location(model_type)
+    selector: pistoris.paths.ResourceSelector = pistoris.paths.selector_from_string("model:npc:human_base")
+    mounts: pistoris.resource_io.ResourceMounts = pistoris.resource_io.ResourceMounts([])
+    resources: pistoris.resource_io.Resources = pistoris.resource_io.Resources([])
+    supplying_mount: pistoris.resource_io.mounts.Mount | None = mounts.highest_priority_mount(
+        pistoris.resource_io.ALL_MOUNTS
+    )
+    files: list[pistoris.resource_io.mounts.ResourceFile] = mounts.list_files(max_depth=2)
+    catalog: Sequence[pistoris.resource_io.catalog.Entry[pistoris.paths.ResourceSelector]] = resources.scan_catalog()
+    available_mount_mask: int = mounts.available_mount_mask
+    provider_mask: int = files[0].provider_mask if files else available_mount_mask
+    mounted_model: pistoris.Model = resources.load_model(
+        model_selector,
+        text_mode=pistoris.NativeTextMode.AUTO,
+        arx_units_per_glb_unit=10.0,
+    ).model
+    loose_model: pistoris.model.Import = resources.load_model_file(Path("model.glb"))
+    mounted_report: pistoris.resource_io.output.WriteReport = resources.write_model(
+        mounted_model, "editing/model.glb"
+    )
+    loose_plan: pistoris.resource_io.output.WritePlan = resources.prepare_model_file_write(
+        loose_model, Path("model-copy.glb")
+    )
+    loose_report: pistoris.resource_io.output.WriteReport = loose_plan.execute()
+    assert supplying_mount is None or supplying_mount.id != 0
+    assert isinstance(files, list)
+    assert provider_mask >= 0
+    assert len(mounted_report) >= 0
+    assert len(loose_report) >= 0
 
     origin: pistoris.model.OriginRef = model.origin
     origin.bone = origin.bone
@@ -55,15 +92,21 @@ def exercise_public_types(
         leading_vertex.position = pistoris.math.Vector3()
     selection.leading_vertex = None
 
-    sound: pistoris.cinematic.SoundEffectRef = cinematic.sfx.add("sound")
+    cinematic.sfx.append(pistoris.Sound(path="sound"))
+    sound: pistoris.cinematic.SoundEffectRef = cinematic.sfx[-1]
     sound.path = "renamed"
-    sound = cinematic.sfx["renamed"]
+    sound = cinematic.sfx.by_path("renamed")
     sound.encoded_audio = b"encoded audio"
     encoded_effect: bytes | None = sound.encoded_audio
     language: pistoris.cinematic.LanguageRef = cinematic.languages.add("english")
     language.name = "default"
-    speech: pistoris.cinematic.SpeechRef = cinematic.speech.add("guard/greeting")
-    speech = cinematic.speech["guard/greeting"]
+    cinematic.speech.append(
+        pistoris.cinematic.Speech(
+            path="guard/greeting", encodings={language.name: b"encoded speech"}
+        )
+    )
+    speech: pistoris.cinematic.SpeechRef = cinematic.speech[-1]
+    speech = cinematic.speech.by_path("guard/greeting")
     encodings: MutableMapping[str, bytes] = speech.encodings
     encodings[language.name] = b"encoded speech"
     del encodings[language.name]
@@ -162,4 +205,6 @@ def exercise_public_types(
         minimap,
         minimap_snapshot,
         loading_screen,
+        catalog,
+        mounted_model,
     )

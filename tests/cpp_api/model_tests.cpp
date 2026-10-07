@@ -190,6 +190,26 @@ map_Kd Imported/Textures/WALL.BMP
     CHECK((stringView(texture.external_image_extension) == ".bmp"));
   }
 
+  TEST_CASE("Uses filenames as Model identities for absolute OBJ image references") {
+    constexpr std::string_view kObj = R"(v 0 0 0
+v 1 0 0
+v 0 1 0
+usemtl wall
+f 1 2 3
+)";
+
+    for (const std::string_view source : {"/Imported/Textures/WALL.BMP", "C:/Imported/Textures/WALL.BMP"}) {
+      const std::string mtl = "newmtl wall\nmap_Kd " + std::string(source) + "\n";
+      std::vector<std::string> sources;
+      pistoris::Model model = take(pistoris::Model::importObj(kObj, mtl, &sources));
+      REQUIRE(sources.size() == 1);
+      CHECK(sources[0] == std::string(source));
+      const ArxTextureView texture = model.textures()[0];
+      CHECK((stringView(texture.path) == "wall"));
+      CHECK((stringView(texture.external_image_extension) == ".bmp"));
+    }
+  }
+
   TEST_CASE("Distinguishes dotted OBJ fallbacks from physical image paths") {
     constexpr std::string_view kObj = R"(v 0 0 0
 v 1 0 0

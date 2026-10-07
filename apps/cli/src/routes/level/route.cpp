@@ -47,9 +47,9 @@ ProbeResult probe(const RouteProbeContext& context, RouteInvocation& route_invoc
   invocation.input = 0;
   invocation.output = context.output;
   const bool primary_fts = context.inputs[0].facts.kind == PayloadKind::kFts;
-  const bool primary_json = context.inputs[0].facts.format == Format::kJson;
   const bool primary_glb = context.inputs[0].facts.format == Format::kGlb;
   const bool primary_dlf = context.inputs[0].facts.format == Format::kDlf;
+  if (primary_dlf) invocation.dlf = 0;
   if (primary_dlf && context.inputs.size() > 1) {
     return {ProbeStatus::kInvalid, "DLF Level input does not accept explicit extra inputs"};
   }
@@ -65,12 +65,10 @@ ProbeResult probe(const RouteProbeContext& context, RouteInvocation& route_invoc
     const Format format = context.inputs[index].facts.format;
     const bool native_llf_extra =
         primary_fts &&
-        ((primary_json && format == Format::kJson && context.inputs[index].facts.kind == PayloadKind::kLlf) ||
-         (!primary_json && format == Format::kLlf));
+        (format == Format::kLlf || (format == Format::kJson && context.inputs[index].facts.kind == PayloadKind::kLlf));
     const bool native_dlf_extra =
         primary_fts &&
-        ((primary_json && format == Format::kJson && context.inputs[index].facts.kind == PayloadKind::kDlf) ||
-         (!primary_json && format == Format::kDlf));
+        (format == Format::kDlf || (format == Format::kJson && context.inputs[index].facts.kind == PayloadKind::kDlf));
     if (native_llf_extra) {
       if (invocation.llf != kNoClassifiedPath) {
         return {ProbeStatus::kInvalid, "Level route accepts at most one LLF input"};

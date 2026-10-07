@@ -114,6 +114,25 @@ def install_immutable_values(
             value_type.__setattr__ = _reject_immutable_assignment
 
 
+def install_read_only_properties(
+    value_type: type, names: Iterable[str]
+) -> None:
+    """Report named read-only extension properties without freezing the type."""
+    if _GENERATING_STUBS:
+        return
+    read_only = frozenset(names)
+    inherited_setattr = value_type.__setattr__
+
+    def set_attribute(self: object, name: str, value: object) -> None:
+        if name in read_only:
+            raise AttributeError(
+                f"property {name!r} of '{type(self).__name__}' object has no setter"
+            )
+        inherited_setattr(self, name, value)
+
+    value_type.__setattr__ = set_attribute
+
+
 def _reject_immutable_assignment(
     self: object, name: str, value: object
 ) -> None:
@@ -127,14 +146,26 @@ def install_record_semantics(
     namespace: Mapping[str, object],
     records: Mapping[str, tuple[str, ...]],
     media_fields: Mapping[str, tuple[str, ...]] | None = None,
+    hashable: Iterable[str] = (),
 ) -> None:
     """Give public extension records value semantics without wrapping them."""
     media_fields = media_fields or {}
+    hashable_records = frozenset(hashable)
     for name, fields in records.items():
         record_type = namespace.get(name)
         if not isinstance(record_type, type):
             continue
-        record_type.__hash__ = None
+        if name in hashable_records:
+            def hash_record(
+                self: object,
+                *,
+                _fields: tuple[str, ...] = fields,
+            ) -> int:
+                return hash(tuple(_structural_value(getattr(self, field)) for field in _fields))
+
+            record_type.__hash__ = hash_record
+        else:
+            record_type.__hash__ = None
         if _GENERATING_STUBS:
             continue
 

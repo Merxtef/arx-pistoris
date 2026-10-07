@@ -58,8 +58,8 @@ _install_record_semantics(
         "Automation": ("first", "second", "interval_ms", "mode"),
         "PannedKey": ("start_delay_ms", "play_count", "delay_min_ms", "delay_max_ms", "volume", "pitch", "pan"),
         "PositionedKey": ("start_delay_ms", "play_count", "delay_min_ms", "delay_max_ms", "volume", "pitch", "x", "y", "z"),
-        "PannedTrack": ("sound", "keys"),
-        "PositionedTrack": ("sound", "keys"),
+        "PannedTrack": ("sound_path", "keys"),
+        "PositionedTrack": ("sound_path", "keys"),
     },
 )
 _install_record_repr(

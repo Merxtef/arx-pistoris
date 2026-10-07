@@ -5,6 +5,7 @@ import gc
 import importlib
 import json
 import re
+import tempfile
 import unittest
 from collections.abc import Collection, ItemsView, KeysView, MutableMapping, MutableSequence, MutableSet, Sequence, ValuesView
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -178,6 +179,390 @@ class ErrorTests(unittest.TestCase):
         self.assertEqual(raised.exception.location.element_name, "LLF light")
         self.assertEqual(raised.exception.location.index, 0)
         self.assertEqual(raised.exception.location.field, "color")
+
+
+class ResourceIoTests(unittest.TestCase):
+    def test_mounts_are_live_and_masks_select_providers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            high = root / "high"
+            low = root / "low"
+            (high / "data").mkdir(parents=True)
+            (low / "data").mkdir(parents=True)
+            (high / "data" / "shared.txt").write_bytes(b"high")
+            (low / "data" / "shared.txt").write_bytes(b"low")
+
+            mounts = pistoris.resource_io.ResourceMounts([high, low])
+            self.assertEqual([mount.id for mount in mounts.read_mounts], [1, 2])
+            self.assertEqual(mounts.available_mount_mask, 3)
+            self.assertEqual(mounts.highest_priority_mount(3), mounts.read_mounts[0])
+            self.assertIsNone(mounts.highest_priority_mount(0))
+            self.assertEqual(
+                repr(mounts),
+                "ResourceMounts(read_mounts=2, write_mount=None)",
+            )
+            self.assertEqual(mounts.read("data/shared.txt").data, b"high")
+            self.assertEqual(mounts.read("data/shared.txt", mount_mask=2).data, b"low")
+
+            (low / "data" / "added.ftl").write_bytes(b"later")
+            files = mounts.list_files("data", max_depth=1)
+            added = next(file for file in files if file.logical_path == "data/added.ftl")
+            self.assertEqual(added.provider_mask, 2)
+            self.assertEqual(
+                added,
+                next(file for file in mounts.list_files("data", max_depth=1) if file.logical_path == "data/added.ftl"),
+            )
+            self.assertEqual(repr(added), "ResourceFile(logical_path='data/added.ftl', provider_mask=2)")
+
+            entries = {entry.name: entry for entry in mounts.list_directory("data")}
+            self.assertEqual(entries["shared.txt"].provider_mask, 3)
+            self.assertEqual(entries["added.ftl"].kind, pistoris.resource_io.mounts.DirectoryEntryKind.FTL)
+            self.assertEqual(
+                entries["added.ftl"],
+                next(entry for entry in mounts.list_directory("data") if entry.name == "added.ftl"),
+            )
+            self.assertEqual(
+                repr(entries["added.ftl"]),
+                "DirectoryEntry(name='added.ftl', kind=DirectoryEntryKind.FTL, provider_mask=2)",
+            )
+
+    def test_catalog_is_a_fresh_immutable_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            model = root / "game" / "graph" / "obj3d" / "interactive" / "npc" / "tool"
+            model.mkdir(parents=True)
+            (model / "tool.ftl").write_bytes(b"fixture")
+
+            resources = pistoris.resource_io.Resources([root])
+            first = resources.scan_catalog()
+            self.assertIsInstance(first, Sequence)
+            expected = pistoris.paths.ModelSelector(pistoris.paths.ModelType.NPC, "tool")
+            self.assertEqual([entry.selector for entry in first], [expected])
+            self.assertEqual(first.get(expected), first[0])
+            self.assertEqual(list(first.models()), [first[0]])
+            self.assertEqual(list(first.animations()), [])
+            self.assertEqual(list(first.levels()), [])
+            self.assertEqual(list(first.cinematics()), [])
+            self.assertEqual(list(first.ambiances()), [])
+            with self.assertRaises(KeyError):
+                first.get(pistoris.paths.CinematicSelector("missing"))
+            self.assertEqual(first[0].provider_mask, 1)
+            self.assertEqual([entry.selector for entry in first[:]], [expected])
+            self.assertEqual(repr(first), "<pistoris.resource_io.catalog.Catalog len=1>")
+            self.assertEqual(first[0], resources.scan_catalog()[0])
+            self.assertEqual(
+                repr(first[0]),
+                "Entry(selector=ModelSelector(type=ModelType.NPC, name='tool', tweak=''), provider_mask=1)",
+            )
+
+            other = model.parent / "other"
+            other.mkdir()
+            (other / "other.ftl").write_bytes(b"fixture")
+            self.assertEqual([str(entry.selector) for entry in first], ["model:npc:tool"])
+            self.assertEqual(
+                [str(entry.selector) for entry in resources.scan_catalog()],
+                ["model:npc:other", "model:npc:tool"],
+            )
+
+    def test_resources_load_mounted_level(self) -> None:
+        resources = pistoris.resource_io.Resources()
+        resources.mounts.add_read_mount(FIXTURES / "mount")
+        self.assertIn("Resources(mounts=ResourceMounts(read_mounts=1", repr(resources))
+
+        catalog = resources.scan_catalog()
+        self.assertIn("level:9", [str(entry.selector) for entry in catalog])
+        level = resources.load_level(9)
+        self.assertIsInstance(level, pistoris.Level)
+        self.assertIsNotNone(level.minimap.encoded_image)
+        self.assertIsNotNone(level.loading_screen.encoded_image)
+        self.assertIsInstance(resources.load_level(pistoris.paths.LevelSelector(9)), pistoris.Level)
+        self.assertIs(resources.mounts, resources.mounts)
+
+    def test_resources_load_complete_native_resources(self) -> None:
+        resources = pistoris.resource_io.Resources([FIXTURES / "mount"])
+
+        imported = resources.load_model("model:weapons:sword_00")
+        self.assertIsInstance(imported, pistoris.model.Import)
+        model = imported.model
+        self.assertEqual(imported.animations, ())
+        self.assertTrue(model.mesh.textures)
+        self.assertTrue(all(texture.encoded_image for texture in model.mesh.textures))
+        self.assertIsNotNone(model.inventory_icon.copy())
+
+        animation = resources.load_animation("anim:npc:human_male_gathering")
+        self.assertEqual(len(animation.sounds), 2)
+        self.assertTrue(all(sound.encoded_audio for sound in animation.sounds))
+
+        ambiance = resources.load_ambiance("ambiance:explore")
+        self.assertTrue(ambiance.sounds)
+        self.assertTrue(all(sound.encoded_audio for sound in ambiance.sounds))
+
+        cinematic = resources.load_cinematic("cinematic:numbers")
+        self.assertEqual(len(cinematic.illustrations), 3)
+        self.assertTrue(all(illustration.encoded_image for illustration in cinematic.illustrations))
+        self.assertEqual({language.name for language in cinematic.languages}, {"deutsch", "english", "francais"})
+        self.assertEqual(sum(1 for sound in cinematic.sfx if sound.encoded_audio), 1)
+        self.assertEqual(sum(len(sound.encodings) for sound in cinematic.speech), 27)
+
+    def test_resources_write_concrete_selector_targets(self) -> None:
+        resources = pistoris.resource_io.Resources([FIXTURES / "mount"])
+        model_selector = pistoris.paths.ModelSelector(pistoris.paths.ModelType.WEAPONS, "sword_00")
+        animation_selector = pistoris.paths.AnimationSelector(
+            pistoris.paths.AnimationType.NPC, "human_male_gathering"
+        )
+        level_selector = pistoris.paths.LevelSelector(9)
+        ambiance_selector = pistoris.paths.AmbianceSelector("explore")
+        cinematic_selector = pistoris.paths.CinematicSelector("numbers")
+
+        model = resources.load_model(model_selector).model
+        animation = resources.load_animation(animation_selector)
+        level = resources.load_level(level_selector)
+        ambiance = resources.load_ambiance(ambiance_selector)
+        cinematic = resources.load_cinematic(cinematic_selector)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            resources.mounts.write_mount = output
+            primary = pistoris.resource_io.OutputPart.PRIMARY
+
+            report = resources.write_model(model, model_selector, outputs=primary)
+            self.assertTrue(report)
+            self.assertEqual(report[0].status, pistoris.resource_io.output.WriteStatus.WRITTEN)
+            ambiance_plan = resources.prepare_ambiance_write(ambiance, ambiance_selector, outputs=primary)
+            self.assertIsInstance(ambiance_plan, pistoris.resource_io.output.WritePlan)
+            resources.write_animation(animation, animation_selector, outputs=primary)
+            resources.write_level(level, level_selector, outputs=primary)
+            resources.write_ambiance(ambiance, ambiance_selector, outputs=primary)
+            resources.write_cinematic(cinematic, cinematic_selector, outputs=primary)
+
+            for selector in (
+                model_selector,
+                animation_selector,
+                level_selector,
+                ambiance_selector,
+                cinematic_selector,
+            ):
+                self.assertTrue((output / selector.to_path()).is_file())
+
+    def test_resources_accept_pythonic_sources_and_named_read_only_properties(self) -> None:
+        resources = pistoris.resource_io.Resources([FIXTURES / "mount"])
+        with self.assertRaisesRegex(AttributeError, "property 'mounts'"):
+            resources.mounts = pistoris.resource_io.ResourceMounts()
+
+        semantic = pistoris.paths.ModelSelector(pistoris.paths.ModelType.WEAPONS, "sword_00")
+        self.assertIsInstance(resources.load_model(semantic), pistoris.model.Import)
+        logical = semantic.to_path()
+        self.assertIsInstance(resources.load_model(Path(logical[:-4])), pistoris.model.Import)
+
+        model_path = FIXTURES / FIXTURE_CATALOG["models"][0]["ftl"]
+        self.assertIsInstance(resources.load_model_file(model_path), pistoris.model.Import)
+        self.assertIsInstance(resources.load_model_file(str(model_path)), pistoris.model.Import)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            resources.mounts.write_mount = output / "mounted"
+            model = resources.load_model(semantic).model
+            resources.write_model(model, Path("exports/sword"))
+            self.assertTrue((output / "mounted" / "exports" / "sword.ftl").is_file())
+            resources.write_model_file(model, output / "loose" / "sword.glb")
+            self.assertTrue((output / "loose" / "sword.glb").is_file())
+            self.assertTrue((output / "loose" / "sword[icon].png").is_file())
+
+            primary = output / "primary" / "sword.glb"
+            initial_report = resources.write_model_file(
+                model,
+                primary,
+                outputs=pistoris.resource_io.OutputPart.PRIMARY,
+            )
+            self.assertEqual(len(initial_report), 1)
+            self.assertEqual(
+                initial_report[0].status,
+                pistoris.resource_io.output.WriteStatus.WRITTEN,
+            )
+            self.assertTrue(primary.is_file())
+            self.assertFalse((output / "primary" / "sword[icon].png").exists())
+
+            primary.write_bytes(b"existing")
+            with self.assertRaisesRegex(pistoris.PistorisError, "PRESERVE or OVERWRITE"):
+                resources.write_model_file(model, primary, outputs=pistoris.resource_io.OutputPart.PRIMARY)
+            self.assertEqual(primary.read_bytes(), b"existing")
+
+            plan = resources.prepare_model_file_write(
+                model,
+                primary,
+                outputs=pistoris.resource_io.OutputPart.PRIMARY,
+            )
+            preflight = plan.preflight()
+            self.assertEqual(
+                preflight[0].status,
+                pistoris.resource_io.output.WriteStatus.NEEDS_EXISTING_FILE_POLICY,
+            )
+            self.assertIsNone(plan[0].if_exists)
+            plan[0].if_exists = pistoris.resource_io.ExistingFilePolicy.PRESERVE
+            planned = plan.execute()
+            self.assertEqual(planned[0].status, pistoris.resource_io.output.WriteStatus.PRESERVED)
+            self.assertEqual(primary.read_bytes(), b"existing")
+            plan[0].if_exists = None
+            self.assertIsNone(plan[0].if_exists)
+            self.assertEqual(
+                plan.preflight()[0].status,
+                pistoris.resource_io.output.WriteStatus.NEEDS_EXISTING_FILE_POLICY,
+            )
+
+            resources.write_model_file(
+                model,
+                primary,
+                outputs=pistoris.resource_io.OutputPart.PRIMARY,
+                if_exists=pistoris.resource_io.ExistingFilePolicy.PRESERVE,
+            )
+            self.assertEqual(primary.read_bytes(), b"existing")
+            resources.write_model_file(
+                model,
+                primary,
+                outputs=pistoris.resource_io.OutputPart.PRIMARY,
+                if_exists=pistoris.resource_io.ExistingFilePolicy.OVERWRITE,
+            )
+            self.assertNotEqual(primary.read_bytes(), b"existing")
+
+            with self.assertRaisesRegex(ValueError, "compress does not apply to GLB output"):
+                resources.write_model_file(model, output / "invalid.glb", compress=True)
+            with self.assertRaisesRegex(ValueError, "arx_units_per_glb_unit does not apply to native output"):
+                resources.write_model_file(model, output / "invalid.ftl", arx_units_per_glb_unit=10.0)
+
+            primary_and_images = output / "selected" / "sword.glb"
+            resources.write_model_file(
+                model,
+                primary_and_images,
+                outputs=(
+                    pistoris.resource_io.OutputPart.PRIMARY
+                    | pistoris.resource_io.OutputPart.IMAGES
+                ),
+            )
+            self.assertTrue(primary_and_images.is_file())
+            self.assertTrue((output / "selected" / "sword[icon].png").is_file())
+
+            glb, _ = catalog_glb_fixture("models", "human_male")
+            source = output / "animated.glb"
+            source.write_bytes(glb)
+            with self.assertRaises(pistoris.PistorisError):
+                resources.load_model_file(source, arx_units_per_glb_unit=0.0)
+            animated = resources.load_model_file(source)
+            self.assertGreater(len(animated.animations), 0)
+            animated_copy = output / "animated-copy.glb"
+            with self.assertRaises(pistoris.PistorisError):
+                resources.write_model_file(animated, animated_copy, arx_units_per_glb_unit=0.0)
+            resources.write_model_file(animated, animated_copy, outputs=pistoris.resource_io.OutputPart.PRIMARY)
+            roundtrip = resources.load_model_file(animated_copy)
+            self.assertEqual(len(roundtrip.animations), len(animated.animations))
+
+            with self.assertRaises(pistoris.PistorisError):
+                resources.load_model(model_path)
+            with self.assertRaises(pistoris.PistorisError):
+                resources.write_model(model, output / "loose" / "other.glb")
+
+    def test_loose_fts_json_level_identity_round_trips_through_resources(self) -> None:
+        fts_path = FIXTURES / catalog_fixture_path("levels", "level9", "fts")
+        fts = pistoris.native.fts.read(fts_path.read_bytes())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source.fts.json"
+            source.write_text(pistoris.native.fts.to_json(fts, level=9), encoding="utf-8")
+            resources = pistoris.resource_io.Resources()
+            level = resources.load_level_file(source)
+            self.assertEqual(level.resource_path, pistoris.paths.LevelSelector(9).to_path())
+
+            inferred = root / "inferred.fts.json"
+            resources.write_level_file(level, inferred)
+            self.assertEqual(pistoris.native.fts.from_json(inferred.read_text(encoding="utf-8")).level, 9)
+
+            loose = resources.load_level_file(fts_path)
+            self.assertEqual(loose.resource_path, "")
+            with self.assertRaisesRegex(pistoris.PistorisError, "level_index"):
+                resources.write_level_file(loose, root / "missing.fts.json")
+            explicit = root / "explicit.fts.json"
+            resources.write_level_file(loose, explicit, level_index=7)
+            self.assertEqual(pistoris.native.fts.from_json(explicit.read_text(encoding="utf-8")).level, 7)
+
+            resources.mounts.write_mount = root / "mounted"
+            resources.write_level(
+                loose,
+                "editing/explicit.fts.json",
+                level_index=8,
+                outputs=pistoris.resource_io.OutputPart.PRIMARY,
+            )
+            mounted = root / "mounted" / "editing" / "explicit.fts.json"
+            self.assertEqual(pistoris.native.fts.from_json(mounted.read_text(encoding="utf-8")).level, 8)
+
+    def test_mount_configuration_is_mutable_and_reports_missing_reads_as_warnings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            read = root / "read"
+            read.mkdir()
+            mounts = pistoris.resource_io.ResourceMounts()
+
+            first = mounts.add_read_mount(read)
+            duplicate = mounts.add_read_mount(read)
+            self.assertIsNotNone(first)
+            self.assertEqual(first, duplicate)
+            self.assertEqual(first.path, read.resolve())
+            self.assertEqual(len(mounts.read_mounts), 1)
+            self.assertIsInstance(mounts.read_mounts, tuple)
+
+            with self.assertWarnsRegex(UserWarning, "read mount does not exist"):
+                missing = mounts.add_read_mount(root / "missing")
+            self.assertIsNone(missing)
+            self.assertEqual(len(mounts.read_mounts), 1)
+
+            mounts.write_mount = root / "output"
+            self.assertEqual(mounts.write_mount, root.resolve() / "output")
+            mounts.write_mount = None
+            self.assertIsNone(mounts.write_mount)
+
+    def test_errors_preserve_logical_resource_path(self) -> None:
+        mounts = pistoris.resource_io.ResourceMounts()
+        with self.assertRaises(pistoris.PistorisError) as raised:
+            mounts.read("missing/file.ftl")
+
+        self.assertEqual(raised.exception.location.domain, "resource_io")
+        self.assertEqual(raised.exception.location.resource_path, "missing/file.ftl")
+        self.assertIsNone(raised.exception.location.native_path)
+        self.assertEqual(raised.exception.location.operation, pistoris.resource_io.Operation.READ)
+        self.assertEqual(raised.exception.location.mount_mask, pistoris.resource_io.ALL_MOUNTS)
+
+    def test_resource_conversion_errors_preserve_typed_content_locations(self) -> None:
+        resources = pistoris.resource_io.Resources()
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "broken.glb"
+            source.write_bytes(b"glTF")
+            with self.assertRaises(pistoris.PistorisError) as raised:
+                resources.load_model_file(source)
+
+        self.assertEqual(raised.exception.location.domain, "glb")
+        self.assertEqual(raised.exception.location.element_name, "document")
+        self.assertEqual(raised.exception.location.native_path, source)
+        self.assertEqual(raised.exception.location.operation, pistoris.resource_io.Operation.READ)
+
+    def test_case_collisions_fail_by_default_and_can_be_recovered(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = root / "data"
+            directory.mkdir()
+            (directory / "VALUE.FTL").write_bytes(b"upper")
+            (directory / "value.ftl").write_bytes(b"lower")
+            if len(list(directory.iterdir())) < 2:
+                self.skipTest("filesystem does not preserve case-colliding filenames")
+
+            mounts = pistoris.resource_io.ResourceMounts([root])
+            with self.assertRaises(pistoris.PistorisError) as raised:
+                mounts.read("data/value.ftl")
+
+            self.assertEqual(raised.exception.location.resource_path, "data/value.ftl")
+            self.assertEqual(raised.exception.location.native_path, directory)
+            self.assertEqual(
+                mounts.read("data/value.ftl", recover_case_collisions=True).data,
+                b"upper",
+            )
 
 
 class NativeCarrierTests(unittest.TestCase):
@@ -476,7 +861,8 @@ class ResourceConversionTests(unittest.TestCase):
         cinematic = pistoris.Cinematic.from_cin_bytes(
             fixture("mount/graph/interface/illustrations/numbers.cin")
         ).cinematic
-        sound = cinematic.sfx.add("test")
+        cinematic.sfx.append(pistoris.Sound(path="test"))
+        sound = cinematic.sfx[-1]
         sound.encoded_audio = audio
         cinematic.keyframes[0].sound = sound
         cinematic_sound_files = cinematic.to_cin_bytes().sound_files
@@ -719,8 +1105,12 @@ class PythonErgonomicsTests(unittest.TestCase):
     def test_path_helpers_use_typed_resource_families(self) -> None:
         paths = pistoris.paths
         self.assertIs(paths, importlib.import_module("pistoris.paths"))
-        self.assertEqual(paths.resource_selector_kind("MODEL:npc:human"), paths.ResourceKind.MODEL)
-        self.assertEqual(paths.resource_selector_kind("model.ftl"), paths.ResourceKind.NONE)
+        for removed in ("ModelPath", "AnimationPath", "CinematicPath", "AmbiancePath", "parse_resource_selector"):
+            self.assertFalse(hasattr(paths, removed))
+        self.assertFalse(callable(paths.ResourceSelector))
+        self.assertEqual(paths.selector_from_string("MODEL:npc:human").kind, paths.ResourceKind.MODEL)
+        with self.assertRaises(ValueError):
+            paths.selector_from_string("model.ftl")
         self.assertTrue(paths.is_portable_filename("wall_[metal].png"))
         self.assertFalse(paths.is_portable_filename("folder/texture.png"))
         self.assertEqual(paths.sanitize_portable_filename("my??__texture.png"), "my_texture.png")
@@ -731,30 +1121,34 @@ class PythonErgonomicsTests(unittest.TestCase):
         self.assertEqual(paths.normalize_zone_ambiance(r"Cave\Water.AMB"), "cave/water")
         self.assertEqual(paths.amb_from_zone_ambiance("cave/water"), "sfx/ambiance/cave/water.amb")
 
-        level_paths = {
-            paths.level_dlf(17): paths.level_from_dlf,
-            paths.level_llf(17): paths.level_from_llf,
-            paths.level_fts(17): paths.level_from_fts,
-        }
-        for path, inverse in level_paths.items():
-            self.assertEqual(inverse(path), 17)
+        level = paths.LevelSelector(17)
+        self.assertEqual(str(level), "level:17")
+        self.assertEqual(level.to_path(), "graph/levels/level17/level17.dlf")
+        self.assertEqual(level.associated_llf(), "graph/levels/level17/level17.llf")
+        self.assertEqual(level.associated_fts(), "game/graph/levels/level17/fast.fts")
+        self.assertEqual(paths.LevelSelector.parse("LEVEL:17"), level)
+        self.assertEqual(paths.LevelSelector.from_path(level.to_path()), level)
+        with self.assertRaises(ValueError):
+            paths.LevelSelector.from_path(level.associated_llf())
+        with self.assertRaises(ValueError):
+            paths.selector_from_path(level.associated_fts())
         self.assertEqual(paths.minimap_resource_level(14), 1)
         self.assertEqual(paths.level_minimap(14), "graph/levels/level1/map")
         self.assertEqual(paths.level_loading_screen(14), "graph/levels/level14/loading")
         self.assertEqual(paths.minimap_offsets_file(), "graph/levels/mini_offsets.ini")
         self.assertEqual(paths.dlf_scene_from_level_name("scene.v2"), "graph/levels/scene.v2")
-        self.assertEqual(paths.level_selector(17), "level:17")
-        self.assertEqual(paths.level_from_selector("LEVEL:17"), 17)
         self.assertEqual(paths.fts_from_dlf_scene("graph/levels/scene.v2"), "game/graph/levels/scene.v2/fast.fts")
         self.assertEqual(paths.fts_from_dlf_scene("../custom"), "custom/fast.fts")
         with self.assertRaises(ValueError):
             paths.fts_from_dlf_scene("../../custom")
 
-        model = paths.ModelPath(paths.ModelType.NPC, "human_base", "skins/red")
+        model = paths.ModelSelector(paths.ModelType.NPC, "human_base.ftl", "skins/red.ftl")
         model_ftl = "game/graph/obj3d/interactive/npc/human_base/tweaks/skins/red.ftl"
         model_class = "graph/obj3d/interactive/npc/human_base/tweaks/skins/red"
-        self.assertEqual(paths.model_ftl(model), model_ftl)
-        self.assertEqual(paths.model_from_ftl(model_ftl), model)
+        self.assertEqual(model.name, "human_base")
+        self.assertEqual(model.tweak, "skins/red")
+        self.assertEqual(model.to_path(), model_ftl)
+        self.assertEqual(paths.ModelSelector.from_path(Path(model_ftl)), model)
         self.assertEqual(paths.entity_class_from_ftl(model_ftl), model_class)
         self.assertEqual(paths.ftl_from_entity_class(model_class), model_ftl)
         self.assertEqual(paths.entity_class_kind(model_class), paths.EntityClassKind.NPC)
@@ -764,35 +1158,47 @@ class PythonErgonomicsTests(unittest.TestCase):
         self.assertEqual(paths.entity_class_from_model(model), model_class)
         self.assertEqual(paths.base_entity_class_from_model(model), "graph/obj3d/interactive/npc/human_base/human_base")
         self.assertEqual(paths.model_from_entity_class(model_class), model)
-        self.assertEqual(paths.model_selector(model), "model:npc:human_base:skins/red")
-        parsed_model = paths.model_from_selector("MODEL:NPC:human_base:skins/red")
+        self.assertEqual(str(model), "model:npc:human_base:skins/red")
+        parsed_model = paths.ModelSelector.parse("MODEL:NPC:human_base:skins/red")
         self.assertEqual(parsed_model, model)
+        self.assertEqual(hash(parsed_model), hash(model))
+        self.assertIsInstance(model, paths.ResourceSelector)
         self.assertEqual(parsed_model.type, paths.ModelType.NPC)
         self.assertEqual(str(parsed_model.type), "npc")
+        with self.assertRaisesRegex(AttributeError, "property 'name'"):
+            parsed_model.name = "other"
+        with self.assertRaises(ValueError):
+            paths.ModelSelector(paths.ModelType.NPC, "folder/name")
+        with self.assertRaises(ValueError):
+            paths.ModelSelector.from_path(model_ftl[:-4])
 
-        animation = paths.AnimationPath(paths.AnimationType.NPC, "walk")
+        animation = paths.AnimationSelector(paths.AnimationType.NPC, "walk.tea")
         animation_tea = "graph/obj3d/anims/npc/walk.tea"
         self.assertEqual(paths.animation_directory(paths.ModelType.ARMOR), "graph/obj3d/anims/fix_inter")
         self.assertEqual(paths.animation_directory(paths.AnimationType.NPC), "graph/obj3d/anims/npc")
-        self.assertEqual(paths.animation_tea(animation), animation_tea)
-        self.assertEqual(paths.animation_from_tea(animation_tea), animation)
-        self.assertEqual(paths.animation_selector(animation), "anim:npc:walk")
-        self.assertEqual(paths.animation_from_selector("ANIM:NPC:walk"), animation)
+        self.assertEqual(animation.to_path(), animation_tea)
+        self.assertEqual(paths.AnimationSelector.from_path(animation_tea), animation)
+        self.assertEqual(str(animation), "anim:npc:walk")
+        self.assertEqual(paths.AnimationSelector.parse("ANIM:NPC:walk"), animation)
 
-        cinematic = paths.CinematicPath("intro")
+        cinematic = paths.CinematicSelector("intro.cin")
         cinematic_cin = "graph/interface/illustrations/intro.cin"
         self.assertEqual(paths.cinematic_illustration_directory(), "graph/interface/illustrations")
-        self.assertEqual(paths.cinematic_cin(cinematic), cinematic_cin)
-        self.assertEqual(paths.cinematic_from_cin(cinematic_cin), cinematic)
-        self.assertEqual(paths.cinematic_selector(cinematic), "cinematic:intro")
-        self.assertEqual(paths.cinematic_from_selector("CINEMATIC:intro"), cinematic)
+        self.assertEqual(cinematic.to_path(), cinematic_cin)
+        self.assertEqual(paths.CinematicSelector.from_path(cinematic_cin), cinematic)
+        self.assertEqual(str(cinematic), "cinematic:intro")
+        self.assertEqual(paths.CinematicSelector.parse("CINEMATIC:intro"), cinematic)
 
-        ambiance = paths.AmbiancePath("cave/water")
+        ambiance = paths.AmbianceSelector("cave/water.amb")
         ambiance_amb = "sfx/ambiance/cave/water.amb"
-        self.assertEqual(paths.ambiance_amb(ambiance), ambiance_amb)
-        self.assertEqual(paths.ambiance_from_amb(ambiance_amb), ambiance)
-        self.assertEqual(paths.ambiance_selector(ambiance), "ambiance:cave/water")
-        self.assertEqual(paths.ambiance_from_selector("AMBIANCE:cave/water"), ambiance)
+        self.assertEqual(ambiance.to_path(), ambiance_amb)
+        self.assertEqual(paths.AmbianceSelector.from_path(ambiance_amb), ambiance)
+        self.assertEqual(str(ambiance), "ambiance:cave/water")
+        self.assertEqual(paths.AmbianceSelector.parse("AMBIANCE:cave/water"), ambiance)
+
+        for selector in (model, animation, level, cinematic, ambiance):
+            self.assertEqual(paths.selector_from_string(str(selector)), selector)
+            self.assertEqual(paths.selector_from_path(selector.to_path()), selector)
 
         location = paths.model_search_location(paths.ModelType.UI_MENUS)
         self.assertEqual(location.base_path, "game/graph/interface/menus")
@@ -802,7 +1208,7 @@ class PythonErgonomicsTests(unittest.TestCase):
         self.assertEqual(paths.cinematic_search_location().base_path, "graph/interface/illustrations")
         self.assertEqual(paths.ambiance_search_location().base_path, "sfx/ambiance")
         with self.assertRaises(ValueError):
-            paths.model_from_selector("model:items:armor:chest")
+            paths.ModelSelector.parse("model:items:armor:chest")
 
     def test_small_values_are_immutable_value_objects(self) -> None:
         self.assertFalse(hasattr(pistoris, "Vector3"))
@@ -891,6 +1297,9 @@ class PythonErgonomicsTests(unittest.TestCase):
         self.assertIsNone(vertex.bone)
         self.assertIsNone(pistoris.model.Face().texture)
         self.assertIsNone(pistoris.cinematic.Keyframe().sound_path)
+        self.assertIsNone(pistoris.animation.Keyframe().sound_path)
+        self.assertIsNone(pistoris.ambiance.PannedTrack().sound_path)
+        self.assertIsNone(pistoris.ambiance.PositionedTrack().sound_path)
         portal = pistoris.level.Portal()
         self.assertIsNone(portal.room_1)
         self.assertIsNone(portal.room_2)
@@ -937,7 +1346,7 @@ class PythonErgonomicsTests(unittest.TestCase):
         ambiance = pistoris.level.ZoneAmbiance(name=r"Ambient\Cave.AMB")
         self.assertEqual(ambiance.name, "ambient/cave")
 
-        sound = pistoris.cinematic.Sound(path=r"SFX\Door.WAV")
+        sound = pistoris.Sound(path=r"SFX\Door.WAV")
         language = pistoris.cinematic.Language(name="English Voice")
         self.assertEqual(sound.path, "sfx/door.wav")
         self.assertEqual(language.name, "english-voice")
@@ -1035,7 +1444,9 @@ class PythonErgonomicsTests(unittest.TestCase):
             volume=pistoris.ambiance.Automation(first=1.0, second=1.0),
             pitch=pistoris.ambiance.Automation(first=1.0, second=1.0),
         )
-        ambiance.tracks.append(pistoris.ambiance.PannedTrack(sound=sound_path, keys=[key]))
+        ambiance.tracks.append(
+            pistoris.ambiance.PannedTrack(sound_path=sound_path, keys=[key])
+        )
         track = 0
         keys = ambiance.tracks[track].keys
         volume = keys[0].volume
@@ -1050,7 +1461,7 @@ class PythonErgonomicsTests(unittest.TestCase):
 
         ambiance.tracks.append(
             pistoris.ambiance.PositionedTrack(
-                sound=sound_path, keys=[pistoris.ambiance.PositionedKey()]
+                sound_path=sound_path, keys=[pistoris.ambiance.PositionedKey()]
             )
         )
         positioned_track = 1
@@ -1139,7 +1550,9 @@ class PythonErgonomicsTests(unittest.TestCase):
             pitch=pistoris.ambiance.Automation(first=1.0, second=1.25),
             pan=pistoris.ambiance.Automation(first=-0.5, second=0.5),
         )
-        track_value = pistoris.ambiance.PannedTrack(sound=sound_path, keys=[key_value])
+        track_value = pistoris.ambiance.PannedTrack(
+            sound_path=sound_path, keys=[key_value]
+        )
         self.assertEqual(len(track_value.keys), 1)
         ambiance.tracks.append(track_value)
         track_index = 0
@@ -1186,7 +1599,9 @@ class PythonErgonomicsTests(unittest.TestCase):
             _ = x.first
         self.assertFalse(x == x)
 
-        ambiance.tracks[track_index] = pistoris.ambiance.PannedTrack(sound=sound_path, keys=[key_value])
+        ambiance.tracks[track_index] = pistoris.ambiance.PannedTrack(
+            sound_path=sound_path, keys=[key_value]
+        )
         self.assertIsInstance(track.copy(), pistoris.ambiance.PannedTrack)
         with self.assertRaises(ReferenceError):
             _ = key.play_count
@@ -1764,8 +2179,10 @@ class BindingRegressionTests(unittest.TestCase):
         cinematic = pistoris.Cinematic.from_cin_bytes(
             fixture("mount/graph/interface/illustrations/numbers.cin")
         ).cinematic
-        effect = cinematic.sfx.add("tests/effect")
-        speech = cinematic.speech.add("tests/speech")
+        cinematic.sfx.append(pistoris.Sound(path="tests/effect"))
+        cinematic.speech.append(pistoris.cinematic.Speech(path="tests/speech"))
+        effect = cinematic.sfx[-1]
+        speech = cinematic.speech[-1]
         keyframe = cinematic.keyframes[0]
 
         keyframe.sound = effect
@@ -1854,27 +2271,31 @@ class BindingRegressionTests(unittest.TestCase):
     def test_live_references_distinguish_updates_from_removals(self) -> None:
         cinematic = pistoris.Cinematic()
         sounds = cinematic.sfx
-        speech = cinematic.speech
-        self.assertIsInstance(sounds, Collection)
-        self.assertNotIsInstance(sounds, Sequence)
-        self.assertIsInstance(speech, Collection)
-        self.assertNotIsInstance(speech, Sequence)
-        first_sound_ref = sounds.add("first")
-        second_sound_ref = sounds.add("second")
+        speech_sounds = cinematic.speech
+        self.assertIsInstance(sounds, Sequence)
+        self.assertIsInstance(speech_sounds, Sequence)
+        audio = fixture("mount/speech/english/one.wav")
+        sounds.extend(
+            [
+                pistoris.Sound(path="first", encoded_audio=audio),
+                pistoris.Sound(path="second"),
+            ]
+        )
+        first_sound_ref = sounds[0]
+        second_sound_ref = sounds[1]
         first_sound_ref.path = "first/updated"
-        self.assertEqual(sounds["first/updated"], first_sound_ref)
-        self.assertIn("first/updated", sounds)
+        self.assertEqual(sounds.by_path("first/updated"), first_sound_ref)
+        self.assertEqual(first_sound_ref.encoded_audio, audio)
         self.assertIn(first_sound_ref, sounds)
         with self.assertRaises(KeyError) as missing_sound_error:
-            _ = sounds["missing"]
+            sounds.by_path("missing")
         self.assertEqual(missing_sound_error.exception.args, ("missing",))
-        with self.assertRaises(KeyError):
-            del sounds["missing"]
-        audio = fixture("mount/speech/english/one.wav")
-        first_sound_ref.encoded_audio = audio
         second_sound_ref.encoded_audio = audio
         replacement_audio = fixture("mount/speech/english/two.wav")
-        first_sound_ref.encoded_audio = replacement_audio
+        sounds[0] = pistoris.Sound(
+            path="first/replaced", encoded_audio=replacement_audio
+        )
+        self.assertEqual(first_sound_ref.path, "first/replaced")
         self.assertEqual(first_sound_ref.encoded_audio, replacement_audio)
         first_sound_ref.encoded_audio = None
         self.assertIsNone(first_sound_ref.encoded_audio)
@@ -1883,15 +2304,36 @@ class BindingRegressionTests(unittest.TestCase):
         english = cinematic.languages.add("English")
         self.assertEqual(english.name, "english")
         french = cinematic.languages.add("french")
-        speech = cinematic.speech.add("guard/greeting")
-        self.assertEqual(cinematic.speech["guard/greeting"], speech)
+        detached_speech = pistoris.cinematic.Speech(
+            path="guard/greeting", encodings={"ENGLISH": audio}
+        )
+        detached_encodings = detached_speech.encodings
+        detached_speech.encodings = {"english": replacement_audio}
+        self.assertEqual(detached_encodings["english"], replacement_audio)
+        cinematic.speech.append(detached_speech)
+        speech = cinematic.speech.by_path("guard/greeting")
         self.assertIsInstance(speech.encodings, MutableMapping)
+        self.assertEqual(speech.encodings, {"english": replacement_audio})
+        del speech.encodings["english"]
         self.assertEqual(speech.encodings, {})
-        self.assertEqual({}, speech.encodings)
         with self.assertRaises(TypeError):
             hash(speech.encodings)
         speech.encodings[english.name] = audio
         speech.encodings[french.name] = replacement_audio
+        preserved_encodings = dict(speech.encodings)
+        with self.assertRaises(KeyError):
+            cinematic.speech[0] = pistoris.cinematic.Speech(
+                path="guard/changed", encodings={"unregistered": audio}
+            )
+        self.assertEqual(speech.path, "guard/greeting")
+        self.assertEqual(speech.encodings, preserved_encodings)
+        with self.assertRaises(KeyError):
+            cinematic.speech.append(
+                pistoris.cinematic.Speech(
+                    path="guard/other", encodings={"unregistered": audio}
+                )
+            )
+        self.assertEqual(len(cinematic.speech), 1)
         keys = speech.encodings.keys()
         self.assertIsInstance(keys, KeysView)
         self.assertIsInstance(speech.encodings.items(), ItemsView)
@@ -1920,7 +2362,7 @@ class BindingRegressionTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             del model.selections["temporary"]
 
-        del sounds["first/updated"]
+        del sounds[0]
         with self.assertRaises(ReferenceError):
             _ = first_sound_ref.path
         self.assertEqual(second_sound_ref.path, "second")
@@ -2000,12 +2442,14 @@ class BindingRegressionTests(unittest.TestCase):
         ambiance.sounds.append(sound)
         sound_path = ambiance.sounds[0].path
         ambiance.tracks.append(
-            pistoris.ambiance.PannedTrack(sound=sound_path, keys=[key(1, 1_000_000)])
+            pistoris.ambiance.PannedTrack(
+                sound_path=sound_path, keys=[key(1, 1_000_000)]
+            )
         )
         master = ambiance.tracks[0]
         ambiance.tracks.append(
             pistoris.ambiance.PannedTrack(
-                sound=sound_path,
+                sound_path=sound_path,
                 keys=[key(1, 400_000), key(2, 400_000), key(1, 400_000)],
             )
         )
@@ -2020,7 +2464,7 @@ class BindingRegressionTests(unittest.TestCase):
         other.sounds.append(pistoris.Sound(path="sfx/timing"))
         other.tracks.append(
             pistoris.ambiance.PannedTrack(
-                sound="sfx/timing",
+                sound_path="sfx/timing",
                 keys=[key(1, 0)],
             )
         )
@@ -2045,7 +2489,9 @@ class BindingRegressionTests(unittest.TestCase):
     def test_ambiance_master_track_follows_track_removals(self) -> None:
         ambiance = pistoris.Ambiance()
         ambiance.sounds.append(pistoris.Sound(path="sfx/master"))
-        track = pistoris.ambiance.PannedTrack(sound="sfx/master", keys=[pistoris.ambiance.PannedKey()])
+        track = pistoris.ambiance.PannedTrack(
+            sound_path="sfx/master", keys=[pistoris.ambiance.PannedKey()]
+        )
         ambiance.tracks.extend([track, track, track])
         master = ambiance.tracks[2]
         ambiance.master_track = master
@@ -2370,7 +2816,7 @@ class BindingRegressionTests(unittest.TestCase):
         ambiance.sounds.append(pistoris.Sound(path="test"))
         ambiance.tracks.append(
             pistoris.ambiance.PannedTrack(
-                sound="test",
+                sound_path="test",
                 keys=[pistoris.ambiance.PannedKey(play_count=1)],
             )
         )
@@ -2396,10 +2842,12 @@ class BindingRegressionTests(unittest.TestCase):
         ambiance = pistoris.Ambiance()
         ambiance.sounds.append(pistoris.Sound(path="test"))
         panned_key = pistoris.ambiance.PannedKey(play_count=1)
-        ambiance.tracks.append(pistoris.ambiance.PannedTrack(sound="test", keys=[panned_key]))
+        ambiance.tracks.append(
+            pistoris.ambiance.PannedTrack(sound_path="test", keys=[panned_key])
+        )
         positioned_key = pistoris.ambiance.PositionedKey(play_count=1)
         ambiance.tracks[-1] = pistoris.ambiance.PositionedTrack(
-            sound="test",
+            sound_path="test",
             keys=[positioned_key],
         )
         self.assertIs(ambiance.tracks[0].kind, pistoris.ambiance.TrackKind.POSITIONED)

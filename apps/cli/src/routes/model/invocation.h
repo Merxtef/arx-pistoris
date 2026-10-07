@@ -56,7 +56,6 @@ struct Invocation final : RouteInvocation {
   ResolvedSidecarRebase sound_rebase;
   pistoris::paths::AnimationPathType animation_fallback_type = pistoris::paths::AnimationPathType::kNone;
   std::string preview_asset_name;
-  std::vector<ModelMaterialLibraryInput> obj_material_libraries;
   OutputTarget obj_mtl_output;
   std::vector<AnimationSidecarOutput> animation_outputs;
   const OutputConverterDescriptor* output_converter = nullptr;

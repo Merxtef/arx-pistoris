@@ -11,15 +11,14 @@
 
 #include "console/diagnostics.h"
 #include "formats/classification.h"
-#include "resources/model_input_io.h"  // IWYU pragma: export
 
-#include <cstdint>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace cli {
+
+class IoService;
 
 struct ConvertedModelInput {
   pistoris::Model model;
@@ -34,8 +33,7 @@ struct ModelInputConversionOptions {
 };
 
 bool isModelInput(FileFacts facts) noexcept;
-bool convertModelInput(const ClassifiedPath& input, std::span<const ModelMaterialLibraryInput> material_libraries,
-                       const ModelInputConversionOptions& options, DiagnosticCode failure_code,
-                       std::string_view description, ConvertedModelInput& out);
+bool convertModelInput(const ClassifiedPath& input, IoService& io, const ModelInputConversionOptions& options,
+                       DiagnosticCode failure_code, std::string_view description, ConvertedModelInput& out);
 
 }  // namespace cli
