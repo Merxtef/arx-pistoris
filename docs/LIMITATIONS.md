@@ -59,15 +59,23 @@ Quad reconstruction joins only compatible adjacent triangles. It does not
 change their independent corner normals or merge arbitrary fragmented
 geometry.
 
-### Independent face normals are derived
+### Independent face normals are stored
 
-Level exposes one normal per face corner. Native FTS also stores independent
-`norm` and `norm2` face normals, which Level regenerates from triangle geometry
-during FTS import. The original native values therefore do not survive an
-`FTS -> Level -> FTS` roundtrip.
+Level exposes a stored normal per face as well as one normal per corner. FTS
+import normalizes and retains valid native `norm` and `norm2` face normals;
+invalid normals fall back to triangle geometry. Native baking preserves the
+authored Level face normals.
 
 GLB import also derives Level face normals from triangle geometry. Standard GLB
 has no separate per-face normal attribute.
+
+### Unassigned faces are omitted from native output
+
+Level faces may have `NO_ROOM` affiliation. GLB preserves them under
+`arx_void_room__unassigned`, which creates no actual room, portal endpoint, or
+room-distance entry. Native baking omits these faces and reports their count.
+They do not contribute to minimap generation or effective geometry bounds
+used to place GLB helpers. Public geometry bounds still include them.
 
 ### Native limits are enforced
 

@@ -62,18 +62,20 @@ std::uint8_t colorByte(float value) noexcept {
   return static_cast<std::uint8_t>(std::lround(static_cast<double>(std::clamp(value, 0.0f, 1.0f)) * 255.0));
 }
 
-PixelKind classifyHit(const geometry::SurfaceSupportIndex& index, const GeometryData& geometry, float x,
-                      float z) noexcept {
+PixelKind classifyHit(const geometry::SurfaceSupportIndex& index, const GeometryData& geometry,
+                      std::span<const RoomIndex> face_rooms, float x, float z) noexcept {
   constexpr float kMinSurfaceUpDot = 0.0871557427f;  // cos(85 degrees)
   struct Context {
+    std::span<const RoomIndex> face_rooms;
     FaceIndex face = kInvalidFaceIndex;
     float y = std::numeric_limits<float>::max();
-  } context;
+  } context{face_rooms};
   index.visitHitsAt(
       x,
       z,
       [](const geometry::SurfaceSupportHit& hit, void* raw) {
         auto& context = *static_cast<Context*>(raw);
+        if (!context.face_rooms.empty() && context.face_rooms[hit.face] == kNoRoom) return;
         if (-hit.normal.y < kMinSurfaceUpDot) return;
         if (hit.position.y > context.y || (hit.position.y == context.y && hit.face >= context.face)) return;
         context.face = hit.face;
@@ -118,8 +120,8 @@ void calculateChebyshevDistances(std::span<const PixelKind> pixels, std::vector<
   }
 }
 
-Error generateImpl(MinimapData& out, const GeometryData& geometry, const GenerationOptions& options,
-                   GenerationDiagnostics* diagnostics) {
+Error generateImpl(MinimapData& out, const GeometryData& geometry, std::span<const RoomIndex> face_rooms,
+                   const GenerationOptions& options, GenerationDiagnostics* diagnostics) {
   Error error = validateGenerationOptions(options);
   if (error != Error::kNone) return error;
   constexpr ArxRect kBounds{
@@ -170,7 +172,7 @@ Error generateImpl(MinimapData& out, const GeometryData& geometry, const Generat
         for (std::uint32_t dx = 0; dx < kGenerationPixelsPerCell; ++dx) {
           const std::uint32_t x = first_x + dx;
           const float world_x = left + (static_cast<float>(x) + 0.5f) * kArxUnitsPerPixel;
-          PixelKind kind = classifyHit(index, geometry, world_x, world_z);
+          PixelKind kind = classifyHit(index, geometry, face_rooms, world_x, world_z);
           pixels[static_cast<std::size_t>(y) * kGenerationWidth + x] = kind;
           if (kind == PixelKind::kForeground)
             ++generated.foreground_pixels;
@@ -235,7 +237,18 @@ Error generate(MinimapData& out, const GeometryData& geometry, const GenerationO
                GenerationDiagnostics* diagnostics) {
   if (diagnostics != nullptr) *diagnostics = {};
   try {
-    return generateImpl(out, geometry, options, diagnostics);
+    return generateImpl(out, geometry, {}, options, diagnostics);
+  } catch (const std::bad_alloc&) {
+    return Error::kOutOfMemory;
+  }
+}
+
+Error generateAssigned(MinimapData& out, const GeometryData& geometry, std::span<const RoomIndex> face_rooms,
+                       const GenerationOptions& options, GenerationDiagnostics* diagnostics) {
+  if (diagnostics != nullptr) *diagnostics = {};
+  if (face_rooms.size() != geometry.faces.size()) return Error::kInvalidOptions;
+  try {
+    return generateImpl(out, geometry, face_rooms, options, diagnostics);
   } catch (const std::bad_alloc&) {
     return Error::kOutOfMemory;
   }

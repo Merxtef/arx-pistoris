@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace pistoris::geometry {
 
@@ -17,6 +18,22 @@ std::array<ArxVector3, 3> facePositions(const GeometryData& geometry, const Face
       geometry.vertices[face.corners[1].vertex].position,
       geometry.vertices[face.corners[2].vertex].position,
   };
+}
+
+ArxVector3 triangleNormalOr(const ArxVector3& a, const ArxVector3& b, const ArxVector3& c,
+                            ArxVector3 fallback) noexcept {
+  const double ab_x = static_cast<double>(b.x) - a.x;
+  const double ab_y = static_cast<double>(b.y) - a.y;
+  const double ab_z = static_cast<double>(b.z) - a.z;
+  const double ac_x = static_cast<double>(c.x) - a.x;
+  const double ac_y = static_cast<double>(c.y) - a.y;
+  const double ac_z = static_cast<double>(c.z) - a.z;
+  const double nx = ab_y * ac_z - ab_z * ac_y;
+  const double ny = ab_z * ac_x - ab_x * ac_z;
+  const double nz = ab_x * ac_y - ab_y * ac_x;
+  const double length = std::hypot(nx, ny, nz);
+  if (length == 0.0 || !std::isfinite(length)) return fallback;
+  return {static_cast<float>(nx / length), static_cast<float>(ny / length), static_cast<float>(nz / length)};
 }
 
 ArxVector3 faceNormalOr(const GeometryData& geometry, const Face& face, ArxVector3 fallback) {

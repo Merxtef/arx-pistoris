@@ -46,10 +46,15 @@ void captureLog(ArxLogLevel level, const char* msg, void* userdata) {
   }
 }
 
-pistoris::Face makeFace(pistoris::GeometryData&, std::uint32_t a, std::uint32_t b, std::uint32_t c,
+pistoris::Face makeFace(pistoris::GeometryData& geometry, std::uint32_t a, std::uint32_t b, std::uint32_t c,
                         const ArxVector3& normal, pistoris::FaceType flags = 0) {
-  return {
+  pistoris::Face face = {
       {{{a, normal, 0.0f, 0.0f}, {b, normal, 0.0f, 0.0f}, {c, normal, 0.0f, 0.0f}}}, pistoris::kNoTexture, flags, 0.0f};
+  const ArxVector3& first = geometry.vertices[a].position;
+  const ArxVector3& second = geometry.vertices[b].position;
+  const ArxVector3& third = geometry.vertices[c].position;
+  face.normal = pistoris::math::normalizeFiniteOr(pistoris::math::cross(second - first, third - first), normal);
+  return face;
 }
 
 void addQuad(pistoris::LevelModules& level, const ArxVector3& a, const ArxVector3& b, const ArxVector3& c,
@@ -222,13 +227,13 @@ pistoris::Level makePublicLevel(const pistoris::LevelModules& src) {
     REQUIRE(test::addRoom(level, room) == expected);
   }
 
-  test::MeshSnapshot mesh;
+  test::GeometrySnapshot mesh;
   mesh.vertices = src.geometry.vertices;
   mesh.faces = src.geometry.faces;
   mesh.textures = src.textures.textures;
   mesh.face_rooms = src.rooms.face_rooms;
   mesh.corner_colors = src.lighting.corner_colors;
-  REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+  REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
   for (const pistoris::Portal& portal : src.rooms.portals) {
     const pistoris::PortalIndex expected = static_cast<pistoris::PortalIndex>(level.portalCount());

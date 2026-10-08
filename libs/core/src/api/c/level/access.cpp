@@ -15,7 +15,11 @@
 #include "api/c/level/internal.h"  // IWYU pragma: keep
 
 #include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
 #include <ranges>
+#include <span>
 
 namespace {
 
@@ -25,6 +29,25 @@ ArxReturnCode copyView(const View& view, std::size_t offset, std::size_t count, 
   if (count != 0 && out == nullptr) return ARX_INVALID_DATA_POINTER;
   for (std::size_t index = 0; index < count; ++index) out[index] = view[offset + index];
   return ARX_OK;
+}
+
+template <class T>
+std::optional<std::span<T>> optionalOutput(T* data, std::size_t count) noexcept {
+  if (!data) return std::nullopt;
+  return std::span<T>(data, count);
+}
+
+template <class T>
+bool validOutput(T* data, std::size_t count) noexcept {
+  if (!data) return count == 0;
+  if (count == 0) return true;
+  if (reinterpret_cast<std::uintptr_t>(data) % alignof(T) != 0 ||
+      count > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(T) ||
+      count > std::numeric_limits<std::uintptr_t>::max() / sizeof(T))
+    return false;
+  const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(data);
+  const std::uintptr_t bytes = count * sizeof(T);
+  return begin <= std::numeric_limits<std::uintptr_t>::max() - bytes;
 }
 
 }  // namespace
@@ -108,6 +131,103 @@ ARX_LEVEL_COPY(zones, zones, ArxLevelZone)
 ARX_LEVEL_COPY(paths, paths, ArxLevelPath)
 
 #undef ARX_LEVEL_COPY
+
+ArxReturnCode arx_pistoris_level_copy_vertex_positions(const ArxLevel* level, float* positions, size_t position_count,
+                                                       ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!validOutput(positions, position_count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(level->value.copyVertexPositions(std::span(positions, position_count)), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_face_data(const ArxLevel* level, const ArxLevelFacesOutput* output,
+                                                ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!output) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (!validOutput(output->vertex_indices, output->vertex_index_count) || !validOutput(output->uvs, output->uv_count) ||
+      !validOutput(output->corner_normals, output->corner_normal_count) ||
+      !validOutput(output->textures, output->texture_count) ||
+      !validOutput(output->transvals, output->transval_count) ||
+      !validOutput(output->corner_colors, output->corner_color_count) ||
+      !validOutput(output->face_normals, output->face_normal_count) || !validOutput(output->flags, output->flag_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  pistoris::Level::FacesOutput values{
+      .vertex_indices = optionalOutput(output->vertex_indices, output->vertex_index_count),
+      .uvs = optionalOutput(output->uvs, output->uv_count),
+      .corner_normals = optionalOutput(output->corner_normals, output->corner_normal_count),
+      .textures = optionalOutput(output->textures, output->texture_count),
+      .transvals = optionalOutput(output->transvals, output->transval_count),
+      .corner_colors = optionalOutput(output->corner_colors, output->corner_color_count),
+      .face_normals = optionalOutput(output->face_normals, output->face_normal_count),
+      .flags = optionalOutput(output->flags, output->flag_count),
+  };
+  return pistoris::c_api::publish(level->value.copyFaces(values), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_face_textures(const ArxLevel* level, ArxTextureIndex* textures,
+                                                    size_t texture_count, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!validOutput(textures, texture_count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(level->value.copyFaceTextures(std::span(textures, texture_count)), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_face_rooms(const ArxLevel* level, ArxRoomIndex* rooms, size_t room_count,
+                                                 ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!validOutput(rooms, room_count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(level->value.copyFaceRooms(std::span(rooms, room_count)), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_room_distance_data(const ArxLevel* level,
+                                                         const ArxLevelRoomDistancesOutput* output,
+                                                         ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!output) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (!validOutput(output->distances, output->distance_count) ||
+      !validOutput(output->endpoint_portals, output->endpoint_portal_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  const pistoris::Level::RoomDistancesOutput values{
+      .distances = optionalOutput(output->distances, output->distance_count),
+      .endpoint_portals = optionalOutput(output->endpoint_portals, output->endpoint_portal_count),
+  };
+  return pistoris::c_api::publish(level->value.copyRoomDistances(values), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_anchor_data(const ArxLevel* level, const ArxLevelAnchorsOutput* output,
+                                                  ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!output) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (!validOutput(output->positions, output->position_count) || !validOutput(output->radii, output->radius_count) ||
+      !validOutput(output->heights, output->height_count) || !validOutput(output->flags, output->flag_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  const pistoris::Level::AnchorsOutput values{
+      .positions = optionalOutput(output->positions, output->position_count),
+      .radii = optionalOutput(output->radii, output->radius_count),
+      .heights = optionalOutput(output->heights, output->height_count),
+      .flags = optionalOutput(output->flags, output->flag_count),
+  };
+  return pistoris::c_api::publish(level->value.copyAnchors(values), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_anchor_connection_endpoints(const ArxLevel* level, ArxAnchorIndex* endpoints,
+                                                                  size_t endpoint_count, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!validOutput(endpoints, endpoint_count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(level->value.copyAnchorConnections(std::span(endpoints, endpoint_count)), error);
+}
+
+ArxReturnCode arx_pistoris_level_copy_nav_surface_data(const ArxLevel* level, const ArxLevelNavSurfaceOutput* output,
+                                                       ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!output) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (!validOutput(output->positions, output->position_count) ||
+      !validOutput(output->triangle_indices, output->triangle_index_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  const pistoris::Level::NavSurfaceOutput values{
+      .positions = optionalOutput(output->positions, output->position_count),
+      .triangle_indices = optionalOutput(output->triangle_indices, output->triangle_index_count),
+  };
+  return pistoris::c_api::publish(level->value.copyNavSurface(values), error);
+}
 
 ArxReturnCode arx_pistoris_level_nav_surface_info(const ArxLevel* level, ArxLevelNavSurfaceInfo* out_info,
                                                   ArxError* error) noexcept {

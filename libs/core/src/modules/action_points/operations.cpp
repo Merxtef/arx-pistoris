@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -40,8 +41,17 @@ bool referencesBone(const ActionPointsData& actions, BoneIndex bone) noexcept {
 }
 
 void remapBoneIndicesAfterRemoval(ActionPointsData& actions, BoneIndex removed) noexcept {
-  for (ActionPoint& point : actions.points)
-    if (point.bone != kInvalidBoneIndex && point.bone > removed) --point.bone;
+  for (ActionPoint& point : actions.points) {
+    if (point.bone == removed)
+      point.bone = kInvalidBoneIndex;
+    else if (point.bone != kInvalidBoneIndex && point.bone > removed)
+      --point.bone;
+  }
+}
+
+void replaceBoneReferences(ActionPointsData& actions, std::span<const BoneIndex> bones) noexcept {
+  assert(bones.size() == actions.points.size());
+  for (std::size_t i = 0; i < bones.size(); ++i) actions.points[i].bone = bones[i];
 }
 
 void clearBoneReferences(ActionPointsData& actions) noexcept {

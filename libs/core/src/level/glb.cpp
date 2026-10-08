@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/base/location.hpp"
+#include "arx_pistoris/base/math.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/glb/location.hpp"
 #include "arx_pistoris/level.hpp"
@@ -129,7 +130,7 @@ LevelGlbExportResult<std::vector<std::uint8_t>> Level::exportGlb(std::span<const
         std::vector<std::uint8_t> out;
         ArxLevelModelPreviewReport export_report{};
         const ArxReturnCode rc = exportLevelToGlb(static_cast<const LevelModules&>(*data_),
-                                                  *data_->validation.derived.referenced_bounds,
+                                                  data_->validation.derived.effective_bounds.value_or(ArxAabb{}),
                                                   options,
                                                   preview_data,
                                                   &export_report,

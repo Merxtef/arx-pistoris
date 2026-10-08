@@ -129,7 +129,7 @@ TEST_SUITE("C Model editing") {
     CHECK((std::string_view(copied_selection.name.data, copied_selection.name.size) == "heavy_armor"));
     REQUIRE(arx_pistoris_model_set_selection_includes_origin(model, selection_id, 1, nullptr) == ARX_OK);
 
-    REQUIRE(arx_pistoris_model_validate_mesh(model, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_validate_geometry(model, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_validate_skeleton(model, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_validate_action_points(model, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_validate_selections(model, nullptr) == ARX_OK);
@@ -195,7 +195,8 @@ TEST_SUITE("C Model editing") {
     REQUIRE(arx_pistoris_model_remove_face(model, face_index, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_face_count(model, &count, nullptr) == ARX_OK);
     CHECK(count == 0);
-    REQUIRE(arx_pistoris_model_clear_mesh(model, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clear_vertices(model, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clear_textures(model, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_vertex_count(model, &count, nullptr) == ARX_OK);
     CHECK(count == 0);
     REQUIRE(arx_pistoris_model_texture_count(model, &count, nullptr) == ARX_OK);
@@ -211,7 +212,7 @@ TEST_SUITE("C Model editing") {
     REQUIRE(arx_pistoris_model_remove_bone(model, child_index, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_bone_count(model, &count, nullptr) == ARX_OK);
     CHECK(count == 1);
-    REQUIRE(arx_pistoris_model_clear_skeleton(model, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clear_bones(model, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_model_bone_count(model, &count, nullptr) == ARX_OK);
     CHECK(count == 0);
 

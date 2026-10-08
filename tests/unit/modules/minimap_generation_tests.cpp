@@ -130,6 +130,24 @@ TEST_SUITE("minimap::generation") {
     CHECK(pixel(tied_rgba, 0, 639) == std::array<std::uint8_t, 4>{0, 255, 0, 255});
   }
 
+  TEST_CASE("Assigned surfaces are selected before unassigned surfaces") {
+    GeometryData geometry = squareGeometry();
+    appendGeometry(geometry, squareGeometry(kFaceBitWater, -20.0f));
+    const std::array<RoomIndex, 4> face_rooms = {0, 0, kNoRoom, kNoRoom};
+
+    MinimapData generated;
+    REQUIRE(minimap::generateAssigned(generated, geometry, face_rooms, options()) == minimap::Error::kNone);
+    int width = 0;
+    int height = 0;
+    const std::vector<std::uint8_t> rgba = decodeRgba(generated.encoded_image, width, height);
+    CHECK(pixel(rgba, 0, 639) == std::array<std::uint8_t, 4>{255, 0, 0, 255});
+
+    // The generic module generator intentionally keeps its all-faces behavior.
+    REQUIRE(minimap::generate(generated, geometry, options()) == minimap::Error::kNone);
+    const std::vector<std::uint8_t> all_faces_rgba = decodeRgba(generated.encoded_image, width, height);
+    CHECK(pixel(all_faces_rgba, 0, 639) == std::array<std::uint8_t, 4>{0, 255, 0, 255});
+  }
+
   TEST_CASE("Steep and downward-facing surfaces are ignored") {
     GeometryData gentle = squareGeometry();
     gentle.vertices[1].position.y = -1000.0f;

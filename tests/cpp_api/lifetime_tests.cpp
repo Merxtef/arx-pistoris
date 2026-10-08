@@ -94,7 +94,7 @@ TEST_SUITE("C++ resource lifetime") {
           CHECK(model.vertexCount() == 0);
           CHECK(model.vertices().empty());
         },
-        [](pistoris::Model& model) { model.clearMesh(); });
+        [](pistoris::Model& model) { model.clearVertices(); });
   }
 
   TEST_CASE("Level has a recoverable moved-from state") {
@@ -105,7 +105,7 @@ TEST_SUITE("C++ resource lifetime") {
           CHECK(level.entityCount() == 0);
           CHECK(level.entities().empty());
         },
-        [](pistoris::Level& level) { level.clearMesh(); });
+        [](pistoris::Level& level) { level.clearVertices(); });
   }
 
   TEST_CASE("Ambiance GLB export rejects a moved-from reference Model") {

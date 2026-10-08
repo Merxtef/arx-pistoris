@@ -20,6 +20,7 @@ namespace {
 
 Face makeValidFace() {
   Face face;
+  face.normal = {0.0f, 1.0f, 0.0f};
   face.texture = 0;
   face.flags = kFaceBitStone;
   face.transval = 0.25f;

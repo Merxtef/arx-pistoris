@@ -441,6 +441,11 @@ ArxReturnCode bakeFts(const LevelModules& level, NativeTextureResources& texture
 
   ClipScratch clip_scratch;
   for (std::size_t face_index = 0; face_index < level.geometry.faces.size(); ++face_index) {
+    if (level.rooms.face_rooms[face_index] == kNoRoom) {
+      ++warnings.omitted_unassigned_faces;
+      continue;
+    }
+
     const Face& face = level.geometry.faces[face_index];
     std::array<BakedCorner, 3> triangle = {};
     float min_x = std::numeric_limits<float>::max();
@@ -466,10 +471,7 @@ ArxReturnCode bakeFts(const LevelModules& level, NativeTextureResources& texture
                                 kSourceCornerEdgeMasks[corner_index]};
     }
 
-    const ArxVector3 face_normal = math::normalizeFiniteOr(
-        math::cross(triangle[1].position - triangle[0].position, triangle[2].position - triangle[0].position),
-        {0.0f, -1.0f, 0.0f},
-        std::numeric_limits<float>::epsilon());
+    const ArxVector3 face_normal = face.normal;
     const std::int16_t native_room = static_cast<std::int16_t>(level.rooms.face_rooms[face_index] + 1U);
     const std::int32_t min_cell_x = cellCoord(min_x);
     const std::int32_t max_cell_x = cellCoord(max_x);

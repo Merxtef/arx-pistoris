@@ -43,9 +43,14 @@ bool isMinimapRootName(std::string_view name, glb::ParsedLabel* label) {
   return singletonRootName(name, kMinimapRootName, label);
 }
 
+bool isVoidRoomRootName(std::string_view name, glb::ParsedLabel* label) {
+  return singletonRootName(name, kVoidRoomRootName, label);
+}
+
 LevelObjectKind levelObjectKind(const cgltf_node& node) {
   const std::string_view name = node.name != nullptr ? node.name : "";
   if (isReservedRoomName(name)) return LevelObjectKind::kRoom;
+  if (singletonRootAttempt(name, kVoidRoomRootName)) return LevelObjectKind::kVoidRoom;
   if (isReservedPortalName(name)) return LevelObjectKind::kPortal;
   if (isReservedAnchorName(name)) return LevelObjectKind::kAnchor;
   if (isReservedLightName(name)) return LevelObjectKind::kLight;

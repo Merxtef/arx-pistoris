@@ -99,7 +99,7 @@ source_path = Path("human_male.ftl")
 imported = pistoris.Model.from_ftl_bytes(source_path.read_bytes())
 
 for texture, lookup_path in zip(
-    imported.model.mesh.textures,
+    imported.model.textures,
     imported.texture_source_paths,
     strict=True,
 ):
@@ -314,11 +314,12 @@ format-specific indices and numeric sentinel values.
 `pistoris.level.ZoneAmbiance` identifies a zone's Ambiance and its maximum
 volume as a percentage, with `100` as the default.
 
-Related state is grouped by domain. Models expose `mesh`, `skeleton`, and the
-special `origin` point; levels expose `mesh` and `nav_surface`.
+Related state is exposed on its owning resource. Models expose `vertices`,
+`faces`, `textures`, `skeleton`, and the special `origin` point; levels expose
+`vertices`, `faces`, `textures`, and `nav_surface`.
 Collection-specific operations live
-with the data they affect, such as `model.mesh.validate()`,
-`model.mesh.weld_vertices()`, `level.mesh.weld_vertices()`,
+with the data they affect, such as `model.validate_geometry()`,
+`model.weld_vertices()`, `level.weld_vertices()`,
 `level.nav_surface.generate()`, and
 `animation.sounds.compact()`. The same rule places portal repair on
 `level.portals`, room-distance operations on `level.room_distances`, anchor
@@ -334,8 +335,8 @@ references. An element reference keeps its resource alive and field assignment
 writes through the resource's validated editing API:
 
 ```python
-model.mesh.textures.append(pistoris.Texture(path="textures/armor"))
-texture = model.mesh.textures[0]
+model.textures.append(pistoris.Texture(path="textures/armor"))
+texture = model.textures[0]
 texture.path = "textures/armor"
 detached = texture.copy()
 ```
@@ -353,7 +354,7 @@ lists of live references.
 Nested records on live references are live views as well:
 
 ```python
-model.mesh.faces[0].corners[0].u = 0.5
+model.faces[0].corners[0].u = 0.5
 animation.keyframes[0].group_transforms[0].scale = pistoris.math.Vector3(1, 1, 1)
 ambiance.tracks[0].keys[0].volume.first = 0.8
 cinematic.keyframes[0].light.intensity = 1.25
@@ -371,6 +372,90 @@ frame.group_transforms[0].scale = pistoris.math.Vector3(1, 1, 1)
 Replacing a detached aggregate property invalidates references obtained from
 its previous value. Editing an existing element preserves its reference.
 
+### Bulk Geometry Buffers
+
+Geometry collection `replace()` methods accept Python buffer objects directly,
+including NumPy arrays, `array.array`, and `memoryview`; NumPy is optional.
+Raw replacement methods accept positional or keyword arguments. Use keyword
+arguments to identify parallel arrays explicitly, especially for faces.
+Inputs must have the exact native-endian scalar type (`float32` or `uint32`),
+be aligned and C-contiguous, and may be read-only. The binding borrows each
+buffer for the replacement call without making a converted copy. Pass either
+the packed flat layout or the semantic shape:
+
+```python
+model.vertices.replace(positions)  # float32: (V, 3) or (3 * V,)
+model.faces.replace(
+    vertex_indices=vertex_indices,  # uint32: (F, 3)
+    uvs=uvs,                       # float32: (F, 3, 2)
+    corner_normals=corner_normals,  # float32: (F, 3, 3)
+    textures=textures,             # uint32: (F,)
+    transvals=transvals,            # float32: (F,)
+)
+level.faces.replace(
+    vertex_indices=vertex_indices, uvs=uvs, corner_normals=corner_normals,
+    textures=textures, transvals=transvals, corner_colors=corner_colors,
+)
+```
+
+Level corner colors accept one RGB float32 triplet broadcast to all corners or
+an `(F, 3, 3)` array. Face normals and flags are optional; omitted normals are
+derived from geometry and omitted flags use defaults. Per-face texture/room
+links and Model bone/selection affiliations have separate replacement methods,
+so those updates preserve face and vertex identities.
+
+Scalar attributes and affiliation arrays must be one dimensional, including
+per-face texture/room indices, transvals, flags, and Model bone indices.
+Selection masks require native-endian `uint64`, one per vertex, bone, or action
+point. Each live selection exposes its bit as `mask`; `selections.active_mask`
+combines all occupied bits. Masks cannot refer to nonexistent selections.
+
+The raw collections also copy their current data into caller-owned buffers.
+These methods are destination-only, keyword-only, and return `None`. Supply at
+least one output; pass `None` to skip an output. Outputs must be writable,
+aligned, native-endian, C-contiguous buffers of the required dtype and size.
+They accept flat arrays or the corresponding semantic shapes shown above.
+The methods validate every requested destination before writing, so a bad
+later output leaves earlier destinations untouched. Destination buffers may
+not overlap each other. Copying does not edit the resource or invalidate its
+live references. NumPy is optional; writable `array.array` and `memoryview`
+buffers work as well.
+
+```python
+from array import array
+
+positions = array("f", [0] * (3 * len(model.vertices)))
+model.vertices.copy(positions=positions)
+
+indices = array("I", [0] * (3 * len(model.faces)))
+uvs = array("f", [0] * (6 * len(model.faces)))
+model.faces.copy(vertex_indices=indices, uvs=uvs)
+
+masks = array("Q", [0] * len(model.vertices))
+model.vertices.copy_selection_masks(masks=masks)
+```
+
+Geometry copies are available as `vertices.copy(positions=...)` and
+`faces.copy(vertex_indices=..., uvs=..., corner_normals=..., textures=...,
+transvals=..., face_normals=..., flags=...)`; Level faces also accept
+`corner_colors=...`. Separate affiliation copies are
+`vertices.copy_bones(bones=...)`, `vertices.copy_selection_masks(masks=...)`,
+`skeleton.bones.copy_selection_masks(masks=...)`,
+`action_points.copy_bones(bones=...)`, and
+`action_points.copy_selection_masks(masks=...)`. Face affiliations use
+`faces.copy_textures(textures=...)`, plus `level.faces.copy_rooms(rooms=...)`.
+Level also provides `anchors.copy(positions=..., radii=..., heights=...,
+flags=...)`, `anchor_connections.copy(endpoints=...)`,
+`room_distances.copy(distances=..., endpoint_portals=...)`, and
+`nav_surface.copy(positions=..., triangle_indices=...)`.
+
+Copies return every requested element, including implicit default values.
+Selection affiliations preserve all 64 mask bits. Room distances return one
+distance per implicit room pair and two endpoint portal indices per distance;
+unavailable entries use `-1` and the invalid-index sentinel. Empty collections
+accept zero-length output buffers. Calling a copy method without an output
+raises `ValueError`.
+
 ### Detached Records
 
 Detached semantic records do not expose resource-local indices. A model
@@ -378,8 +463,8 @@ vertex names its bone; a face owns its detached corner vertices and names its
 texture; level portals name their rooms; anchor connections name both
 anchors. Adding or assigning a record resolves those relationships against
 the destination resource and raises `KeyError` when a required name or path
-is missing. Adding a detached face creates its three owned vertices; weld the
-mesh afterwards when independently authored faces should share vertices.
+is missing. Adding a detached face creates its three owned vertices; weld
+vertices afterwards when independently authored faces should share vertices.
 
 Fixed nested collections support indexed replacement but not insertion or
 deletion. Their `copy()` methods return detached records. Dynamic detached
@@ -525,8 +610,8 @@ projection offset with the encoded image.
 
 Level face corners always expose a `Color3`. Unauthored lighting reads as the
 neutral default `Color3(0.5, 0.5, 0.5)`, and
-`level.mesh.reset_corner_colors()` restores that value for every corner.
-Use `level.mesh.generate_static_lighting()` to replace corner colors from the
+`level.reset_corner_colors()` restores that value for every corner.
+Use `level.generate_static_lighting()` to replace corner colors from the
 current geometry and lights.
 
 Level room distances expose one value for every unordered pair of distinct

@@ -71,6 +71,8 @@ enum class Error : std::uint8_t {
   kDegenerateFace,
   kBadVertexWeldSegment,
   kOverlappingVertexWeldSegments,
+  kBadVertexCount,
+  kBadFaceCount,
 };
 
 using FacePredicateFn = bool (*)(FaceIndex face, const void* user_data) noexcept;
@@ -287,6 +289,8 @@ std::size_t vertexCapacityForAppend(const GeometryData& geometry, std::size_t co
 Error collectTextureUsage(const GeometryData& geometry, std::size_t texture_count, std::vector<std::uint8_t>& out);
 Error buildVertexFaceIndex(const GeometryData& geometry, VertexFaceIndex& out);
 std::array<ArxVector3, 3> facePositions(const GeometryData& geometry, const Face& face);
+ArxVector3 triangleNormalOr(const ArxVector3& a, const ArxVector3& b, const ArxVector3& c,
+                            ArxVector3 fallback) noexcept;
 ArxVector3 faceNormalOr(const GeometryData& geometry, const Face& face, ArxVector3 fallback);
 ArxAabb triangleBounds(const std::array<ArxVector3, 3>& vertices);
 bool degenerateTriangle(const ArxVector3& a, const ArxVector3& b, const ArxVector3& c);
@@ -297,6 +301,19 @@ bool segmentIntersectsTriangle(const ArxVector3& start, const ArxVector3& end, c
 
 // --- Mutation ---
 
+bool normalizeNormal(ArxVector3& normal) noexcept;
+Error buildVertices(std::span<const float> positions, std::vector<Vertex>& out);
+Error buildFaces(std::span<const Vertex> vertices, std::size_t texture_count,
+                 std::span<const std::uint32_t> vertex_indices, std::span<const float> uvs,
+                 std::span<const float> corner_normals, std::span<const TextureIndex> textures,
+                 std::span<const float> transvals, std::span<const float> face_normals, std::span<const FaceType> flags,
+                 std::vector<Face>& out);
+
+void replaceVertices(GeometryData& geometry, std::vector<Vertex>&& vertices) noexcept;
+void replaceFaces(GeometryData& geometry, std::vector<Face>&& faces) noexcept;
+void clearFaces(GeometryData& geometry) noexcept;
+void resetFaceTextures(GeometryData& geometry) noexcept;
+void replaceFaceTextures(GeometryData& geometry, std::span<const TextureIndex> textures) noexcept;
 void reserveVertexCapacity(GeometryData& geometry, std::size_t capacity);
 void reserveFaceCapacity(GeometryData& geometry, std::size_t capacity);
 void setVertex(GeometryData& geometry, VertexIndex index, Vertex vertex) noexcept;

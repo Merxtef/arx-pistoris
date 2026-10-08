@@ -44,7 +44,8 @@ bool exportedPortal(const Portal& portal, const RoomProjection& projection) {
 RoomProjection buildRoomProjection(const LevelModules& level) {
   RoomProjection projection;
   projection.has_faces.assign(level.rooms.definitions.size(), false);
-  for (RoomIndex room : level.rooms.face_rooms) projection.has_faces[room] = true;
+  for (RoomIndex room : level.rooms.face_rooms)
+    if (room != kNoRoom) projection.has_faces[room] = true;
   for (bool has_faces : projection.has_faces)
     if (!has_faces) ++projection.empty_rooms;
 

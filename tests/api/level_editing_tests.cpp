@@ -26,6 +26,7 @@ ArxLevelFace floorFace(ArxVertexIndex a, ArxVertexIndex b, ArxVertexIndex c, Arx
   ArxLevelFace result{};
   result.texture = texture;
   result.room = 0;
+  result.normal = {0.0f, -1.0f, 0.0f};
   result.corners[0] = {a, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f, {}};
   result.corners[1] = {b, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f, {}};
   result.corners[2] = {c, {0.0f, -1.0f, 0.0f}, 1.0f, 1.0f, {}};
@@ -41,44 +42,70 @@ ArxLevel* makePopulatedLevel() {
   REQUIRE(room_index == 0);
 
   const ArxTextureView texture{levelStringView("graph/obj3d/textures/floor.png"), {}};
-  const std::array<ArxLevelVertex, 4> vertices = {
-      ArxLevelVertex{{0.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{400.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{400.0f, 0.0f, 400.0f}},
-      ArxLevelVertex{{0.0f, 0.0f, 400.0f}},
-  };
-  const std::array<ArxLevelFace, 2> faces = {
-      floorFace(0, 1, 2, 0),
-      floorFace(0, 2, 3, 0),
-  };
-  const ArxLevelMeshInput mesh{vertices.data(), vertices.size(), faces.data(), faces.size(), &texture, 1};
-  REQUIRE(arx_pistoris_level_replace_mesh(level, &mesh, nullptr) == ARX_OK);
+  ArxTextureIndex texture_index = ARX_INVALID_INDEX;
+  REQUIRE(arx_pistoris_level_add_texture(level, &texture, &texture_index, nullptr) == ARX_OK);
+  const std::array<float, 12> positions = {0, 0, 0, 400, 0, 0, 400, 0, 400, 0, 0, 400};
+  const std::array<ArxLevelFace, 2> source_faces = {floorFace(0, 1, 2, texture_index),
+                                                    floorFace(0, 2, 3, texture_index)};
+  std::array<std::uint32_t, 6> vertex_indices{};
+  std::array<float, 12> uvs{};
+  std::array<float, 18> corner_normals{};
+  std::array<std::uint32_t, 2> textures{};
+  std::array<float, 2> transvals{};
+  std::array<float, 18> corner_colors{};
+  std::array<ArxFaceType, 2> flags{};
+  for (std::size_t face_index = 0; face_index < source_faces.size(); ++face_index) {
+    const ArxLevelFace& face = source_faces[face_index];
+    textures[face_index] = face.texture;
+    transvals[face_index] = face.transval;
+    flags[face_index] = face.flags;
+    for (std::size_t corner_index = 0; corner_index < 3; ++corner_index) {
+      const std::size_t corner = face_index * 3 + corner_index;
+      vertex_indices[corner] = face.corners[corner_index].vertex;
+      uvs[corner * 2] = face.corners[corner_index].u;
+      uvs[corner * 2 + 1] = face.corners[corner_index].v;
+      corner_normals[corner * 3] = face.corners[corner_index].normal.x;
+      corner_normals[corner * 3 + 1] = face.corners[corner_index].normal.y;
+      corner_normals[corner * 3 + 2] = face.corners[corner_index].normal.z;
+      corner_colors[corner * 3] = face.corners[corner_index].color.r;
+      corner_colors[corner * 3 + 1] = face.corners[corner_index].color.g;
+      corner_colors[corner * 3 + 2] = face.corners[corner_index].color.b;
+    }
+  }
+  const ArxLevelFacesInput faces{vertex_indices.data(),
+                                 vertex_indices.size(),
+                                 uvs.data(),
+                                 uvs.size(),
+                                 corner_normals.data(),
+                                 corner_normals.size(),
+                                 textures.data(),
+                                 textures.size(),
+                                 transvals.data(),
+                                 transvals.size(),
+                                 corner_colors.data(),
+                                 corner_colors.size(),
+                                 nullptr,
+                                 0,
+                                 flags.data(),
+                                 flags.size()};
+  const std::array<ArxRoomIndex, 2> rooms = {0, 0};
+  REQUIRE(arx_pistoris_level_replace_vertices(level, positions.data(), positions.size(), nullptr) == ARX_OK);
+  REQUIRE(arx_pistoris_level_replace_faces(level, &faces, nullptr) == ARX_OK);
+  REQUIRE(arx_pistoris_level_replace_face_rooms(level, rooms.data(), rooms.size(), nullptr) == ARX_OK);
   return level;
 }
 
 void setFlatNavSurface(ArxLevel* level) {
-  const std::array<ArxLevelVertex, 4> vertices = {
-      ArxLevelVertex{{0.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{400.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{400.0f, 0.0f, 400.0f}},
-      ArxLevelVertex{{0.0f, 0.0f, 400.0f}},
-  };
-  const std::array<ArxLevelNavSurfaceTriangle, 2> triangles = {{{0, 1, 2}, {0, 2, 3}}};
-  const ArxLevelNavSurfaceInput surface{vertices.data(), vertices.size(), triangles.data(), triangles.size()};
+  const std::array<float, 12> positions = {0, 0, 0, 400, 0, 0, 400, 0, 400, 0, 0, 400};
+  const std::array<std::uint32_t, 6> indices = {0, 1, 2, 0, 2, 3};
+  const ArxLevelNavSurfaceInput surface{positions.data(), positions.size(), indices.data(), indices.size()};
   REQUIRE(arx_pistoris_level_set_nav_surface(level, &surface, nullptr) == ARX_OK);
 }
 
 void setDisconnectedNavSurface(ArxLevel* level) {
-  const std::array<ArxLevelVertex, 6> vertices = {
-      ArxLevelVertex{{0.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{10.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{0.0f, 0.0f, 10.0f}},
-      ArxLevelVertex{{20.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{25.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{20.0f, 0.0f, 2.0f}},
-  };
-  const std::array<ArxLevelNavSurfaceTriangle, 2> triangles = {{{0, 1, 2}, {3, 4, 5}}};
-  const ArxLevelNavSurfaceInput surface{vertices.data(), vertices.size(), triangles.data(), triangles.size()};
+  const std::array<float, 18> positions = {0, 0, 0, 10, 0, 0, 0, 0, 10, 20, 0, 0, 25, 0, 0, 20, 0, 2};
+  const std::array<std::uint32_t, 6> indices = {0, 1, 2, 3, 4, 5};
+  const ArxLevelNavSurfaceInput surface{positions.data(), positions.size(), indices.data(), indices.size()};
   REQUIRE(arx_pistoris_level_set_nav_surface(level, &surface, nullptr) == ARX_OK);
 }
 
@@ -128,7 +155,7 @@ TEST_SUITE("C Level editing") {
     REQUIRE(arx_pistoris_level_add_face(level, &added_face, &added_face_index, nullptr) == ARX_OK);
     CHECK(added_face_index == 2);
 
-    REQUIRE(arx_pistoris_level_validate_mesh(level, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_level_validate_geometry(level, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_level_validate_vertices(level, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_level_validate_textures(level, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_level_validate_faces(level, nullptr) == ARX_OK);
@@ -175,13 +202,13 @@ TEST_SUITE("C Level editing") {
     std::size_t removed = 0;
     REQUIRE(arx_pistoris_level_compact_vertices(level, &removed, nullptr) == ARX_OK);
     CHECK(removed == 2);
-    REQUIRE(arx_pistoris_level_clear_mesh(level, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_level_clear_vertices(level, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_level_vertex_count(level, &count, nullptr) == ARX_OK);
     CHECK(count == 0);
     REQUIRE(arx_pistoris_level_face_count(level, &count, nullptr) == ARX_OK);
     CHECK(count == 0);
     REQUIRE(arx_pistoris_level_texture_count(level, &count, nullptr) == ARX_OK);
-    CHECK(count == 0);
+    CHECK(count == 1);
     REQUIRE(arx_pistoris_level_reset(level, nullptr) == ARX_OK);
     REQUIRE(arx_pistoris_level_room_count(level, &count, nullptr) == ARX_OK);
     CHECK(count == 0);
@@ -200,8 +227,8 @@ TEST_SUITE("C Level editing") {
 
     ArxLevelPortal portal{};
     portal.name = levelStringView("door");
-    portal.room_1 = 0;
-    portal.room_2 = second_room_index;
+    portal.room_front = 0;
+    portal.room_back = second_room_index;
     portal.shape = ARX_PORTAL_TRIANGLE;
     portal.vertices[0] = {100.0f, 0.0f, 100.0f};
     portal.vertices[1] = {100.0f, -100.0f, 100.0f};
@@ -212,17 +239,33 @@ TEST_SUITE("C Level editing") {
     portal.name = levelStringView("doorway");
     REQUIRE(arx_pistoris_level_set_portal(level, portal_index, &portal, nullptr) == ARX_OK);
 
-    const ArxLevelRoomDistance distance{0, second_room_index, -1.0f, portal_index, portal_index};
-    REQUIRE(arx_pistoris_level_replace_room_distances(level, &distance, 1, nullptr) == ARX_OK);
+    const std::array<float, 1> distances = {-1.0f};
+    const std::array<ArxPortalIndex, 2> distance_portals = {portal_index, portal_index};
+    REQUIRE(arx_pistoris_level_replace_room_distances(
+                level, distances.data(), distances.size(), distance_portals.data(), distance_portals.size(), nullptr) ==
+            ARX_OK);
 
     std::array<ArxLevelAnchor, 2> anchors{};
     anchors[0] = {{100.0f, 0.0f, 100.0f}, 25.0f, -80.0f, 0, levelStringView("first")};
     anchors[1] = {{200.0f, 0.0f, 100.0f}, 25.0f, -80.0f, 0, levelStringView("second")};
-    const ArxLevelAnchorConnection connection{0, 1};
-    const ArxLevelAnchorsInput anchor_input{anchors.data(), anchors.size(), &connection, 1};
+    const std::array<float, 6> anchor_positions = {100.0f, 0.0f, 100.0f, 200.0f, 0.0f, 100.0f};
+    const std::array<float, 2> anchor_radii = {25.0f, 25.0f};
+    const std::array<float, 2> anchor_heights = {-80.0f, -80.0f};
+    const std::array<std::uint32_t, 2> anchor_flags = {0, 0};
+    const ArxLevelAnchorsInput anchor_input{anchor_positions.data(),
+                                            anchor_positions.size(),
+                                            anchor_radii.data(),
+                                            anchor_radii.size(),
+                                            anchor_heights.data(),
+                                            anchor_heights.size(),
+                                            anchor_flags.data(),
+                                            anchor_flags.size()};
     REQUIRE(arx_pistoris_level_replace_anchors(level, &anchor_input, nullptr) == ARX_OK);
     anchors[0].radius = 30.0f;
     REQUIRE(arx_pistoris_level_set_anchor(level, 0, &anchors[0], nullptr) == ARX_OK);
+    const std::array<ArxAnchorIndex, 2> initial_connection = {0, 1};
+    REQUIRE(arx_pistoris_level_replace_anchor_connections(
+                level, initial_connection.data(), initial_connection.size(), nullptr) == ARX_OK);
     const ArxLevelAnchor third_anchor{{300.0f, 0.0f, 100.0f}, 25.0f, -80.0f, 0, levelStringView("third")};
     ArxAnchorIndex third_anchor_index = ARX_INVALID_INDEX;
     REQUIRE(arx_pistoris_level_add_anchor(level, &third_anchor, &third_anchor_index, nullptr) == ARX_OK);
@@ -252,7 +295,7 @@ TEST_SUITE("C Level editing") {
     ArxLevelPortal copied_portal{};
     REQUIRE(arx_pistoris_level_copy_portals(level, 0, 1, &copied_portal, nullptr) == ARX_OK);
     CHECK(levelString(copied_portal.name) == "doorway");
-    CHECK(copied_portal.room_2 == second_room_index);
+    CHECK(copied_portal.room_back == second_room_index);
     CHECK(copied_portal.shape == ARX_PORTAL_TRIANGLE);
     CHECK(copied_portal.vertices[2].x == doctest::Approx(200.0f));
     REQUIRE(arx_pistoris_level_room_distance_count(level, &count, nullptr) == ARX_OK);
@@ -268,6 +311,8 @@ TEST_SUITE("C Level editing") {
     std::array<ArxLevelAnchor, 3> copied_anchors{};
     REQUIRE(arx_pistoris_level_copy_anchors(level, 0, copied_anchors.size(), copied_anchors.data(), nullptr) == ARX_OK);
     CHECK(copied_anchors[0].radius == doctest::Approx(30.0f));
+    CHECK(levelString(copied_anchors[0].name) == "first");
+    CHECK(levelString(copied_anchors[1].name) == "anchor_1");
     CHECK(levelString(copied_anchors[2].name) == "third");
     REQUIRE(arx_pistoris_level_anchor_connection_count(level, &count, nullptr) == ARX_OK);
     CHECK(count == 2);
@@ -482,8 +527,8 @@ TEST_SUITE("C Level editing") {
     CHECK(room_face.room == second_room_index);
     ArxLevelPortal portal{};
     portal.name = levelStringView("door");
-    portal.room_1 = 0;
-    portal.room_2 = second_room_index;
+    portal.room_front = 0;
+    portal.room_back = second_room_index;
     portal.vertices[0] = {200.0f, 0.0f, 100.0f};
     portal.vertices[1] = {200.0f, -100.0f, 100.0f};
     portal.vertices[2] = {200.0f, -100.0f, 300.0f};

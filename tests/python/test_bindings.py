@@ -7,15 +7,574 @@ import json
 import re
 import tempfile
 import unittest
+from array import array
 from collections.abc import Collection, ItemsView, KeysView, MutableMapping, MutableSequence, MutableSet, Sequence, ValuesView
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest import mock
 
 import pistoris
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
 
 FIXTURES = Path(__file__).resolve().parents[2] / "data" / "fixtures"
 FIXTURE_CATALOG = json.loads((FIXTURES / "catalog.json").read_text(encoding="utf-8"))
+
+
+class PythonBulkReplacementTests(unittest.TestCase):
+    def test_empty_raw_buffers_do_not_require_an_aligned_data_pointer(self) -> None:
+        model = pistoris.Model()
+        operations = (
+            ("f", "positions", model.vertices.replace, model.vertices.copy),
+            ("I", "bones", model.vertices.replace_bones, model.vertices.copy_bones),
+            ("Q", "masks", model.vertices.replace_selection_masks, model.vertices.copy_selection_masks),
+        )
+        for scalar_format, field, replace, copy in operations:
+            buffers = (
+                array(scalar_format),
+                memoryview(bytearray(1))[1:].cast(scalar_format),
+            )
+            for buffer in buffers:
+                with self.subTest(format=scalar_format, provider=type(buffer).__name__):
+                    self.assertIsNone(replace(**{field: buffer}))
+                    self.assertIsNone(copy(**{field: buffer}))
+        self.assertEqual(len(model.vertices), 0)
+
+    def test_clearing_rooms_invalidates_portals_before_reusing_indices(self) -> None:
+        level = pistoris.Level()
+
+        def add_rooms_and_portal(name: str) -> None:
+            for room_name in ("front", "back"):
+                level.rooms.append(pistoris.level.Room(name=room_name))
+            level.portals.append(pistoris.level.Portal(
+                name=name,
+                room_front="front",
+                room_back="back",
+                vertices=[
+                    pistoris.math.Vector3(0, 0, 0),
+                    pistoris.math.Vector3(1, 0, 0),
+                    pistoris.math.Vector3(1, 0, 1),
+                    pistoris.math.Vector3(0, 0, 1),
+                ],
+            ))
+
+        add_rooms_and_portal("old")
+        saved_portal = level.portals[0]
+        level.rooms.clear()
+        self.assertEqual(len(level.portals), 0)
+        with self.assertRaises(ReferenceError):
+            _ = saved_portal.index
+
+        add_rooms_and_portal("new")
+        with self.assertRaises(ReferenceError):
+            _ = saved_portal.name
+        self.assertEqual(level.portals[0].name, "new")
+
+    def test_raw_buffers_preserve_indexed_topology_and_replace_atomically(self) -> None:
+        model = pistoris.Model()
+        positions = array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0, 1])
+        indices = array("I", [0, 1, 2, 1, 3, 2])
+        uvs = array("f", [0, 0, 1, 0, 0, 1, 1, 0, 1, 1, 0, 1])
+        normals = array("f", [0, -2, 0] * 6)
+        texture_indices = array("I", [0xFFFFFFFF, 0xFFFFFFFF])
+        transvals = array("f", [0, 0])
+
+        model.vertices.replace(memoryview(positions))
+        model.faces.replace(memoryview(indices), memoryview(uvs), memoryview(normals),
+                            memoryview(texture_indices), memoryview(transvals))
+
+        self.assertEqual(len(model.vertices), 4)
+        self.assertEqual(len(model.faces), 2)
+        self.assertEqual(
+            [corner.vertex.position for face in model.faces for corner in face.corners],
+            [
+                pistoris.math.Vector3(0, 0, 0),
+                pistoris.math.Vector3(1, 0, 0),
+                pistoris.math.Vector3(0, 0, 1),
+                pistoris.math.Vector3(1, 0, 0),
+                pistoris.math.Vector3(1, 0, 1),
+                pistoris.math.Vector3(0, 0, 1),
+            ],
+        )
+        self.assertEqual(model.faces[0].normal, pistoris.math.Vector3(0, -1, 0))
+
+        with self.assertRaises(pistoris.PistorisError):
+            model.faces.replace(array("I", [0, 1, 99]), array("f", [0] * 6), array("f", [0, -1, 0] * 3),
+                                array("I", [0xFFFFFFFF]), array("f", [0]))
+        self.assertEqual((len(model.vertices), len(model.faces)), (4, 2))
+        self.assertEqual(model.faces[0].corners[2].vertex.position, pistoris.math.Vector3(0, 0, 1))
+
+        with self.assertRaises((pistoris.PistorisError, ValueError)):
+            model.vertices.replace(array("f", [8, 9]))
+        self.assertEqual(len(model.vertices), 4)
+        self.assertEqual(model.vertices[0].position, pistoris.math.Vector3(0, 0, 0))
+
+    def test_shaped_numpy_buffers_are_accepted_when_available(self) -> None:
+        if np is None:
+            self.skipTest("NumPy is optional")
+        model = pistoris.Model()
+        positions = np.asarray([[0, 0, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32)
+        indices = np.asarray([[0, 1, 2]], dtype=np.uint32)
+        uvs = np.asarray([[[0, 0], [1, 0], [0, 1]]], dtype=np.float32)
+        normals = np.asarray([[[0, -1, 0]] * 3], dtype=np.float32)
+        textures = np.asarray([0xFFFFFFFF], dtype=np.uint32)
+        transvals = np.asarray([0], dtype=np.float32)
+
+        model.vertices.replace(positions)
+        model.faces.replace(indices, uvs, normals, textures, transvals)
+        self.assertEqual((len(model.vertices), len(model.faces)), (3, 1))
+
+        with self.assertRaises((pistoris.PistorisError, TypeError, ValueError)):
+            model.vertices.replace(positions[:, ::-1])
+        self.assertEqual(len(model.vertices), 3)
+
+    def test_selection_masks_expose_single_and_active_bits(self) -> None:
+        model = pistoris.Model()
+        first = model.selections.add(pistoris.model.Selection(name="first"))
+        second = model.selections.add(pistoris.model.Selection(name="second"))
+        self.assertEqual(first.mask, 1)
+        self.assertEqual(second.mask, 2)
+        self.assertEqual(model.selections.active_mask, 3)
+        model.vertices.replace(array("f", [0, 0, 0]))
+        model.vertices.replace_selection_masks(array("Q", [second.mask]))
+        self.assertEqual(model.vertices[0].selections, {second})
+
+    def test_numpy_buffers_validate_dtype_layout_and_read_only_inputs(self) -> None:
+        if np is None:
+            self.skipTest("NumPy is optional")
+        model = pistoris.Model()
+        positions = np.asarray([[0, 0, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float32)
+        indices = np.asarray([[0, 1, 2]], dtype=np.uint32)
+        uvs = np.asarray([[[0, 0], [1, 0], [0, 1]]], dtype=np.float32)
+        normals = np.asarray([[[0, -1, 0]] * 3], dtype=np.float32)
+        textures = np.asarray([0xFFFFFFFF], dtype=np.uint32)
+        transvals = np.asarray([0], dtype=np.float32)
+        for values in (positions, indices, uvs, normals, textures, transvals):
+            values.setflags(write=False)
+        model.vertices.replace(positions)
+        model.faces.replace(indices, uvs, normals, textures, transvals)
+
+        expected_positions = [vertex.position for vertex in model.vertices]
+        wrong_endian_dtype = np.dtype(">f4" if np.little_endian else "<f4")
+        unaligned_storage = np.empty(positions.nbytes + 1, dtype=np.uint8)
+        unaligned = np.ndarray(positions.shape, dtype=np.float32, buffer=unaligned_storage, offset=1)
+        non_contiguous = np.ones((3, 6), dtype=np.float32)[:, ::2]
+        rejected = (
+            np.ones((3, 3), dtype=np.float64),
+            np.ones((3, 3), dtype=wrong_endian_dtype),
+            unaligned,
+            non_contiguous,
+        )
+        for values in rejected:
+            with self.subTest(dtype=values.dtype, strides=values.strides):
+                with self.assertRaises((pistoris.PistorisError, TypeError, ValueError)):
+                    model.vertices.replace(values)
+                self.assertEqual([vertex.position for vertex in model.vertices], expected_positions)
+                self.assertEqual(len(model.faces), 1)
+
+    def test_numpy_selection_masks_preserve_uint64_bits(self) -> None:
+        if np is None:
+            self.skipTest("NumPy is optional")
+        model = pistoris.Model()
+        selection = model.selections.add(pistoris.model.Selection(name="selection_0"))
+        for index in range(1, 41):
+            selection = model.selections.add(pistoris.model.Selection(name=f"selection_{index}"))
+        model.vertices.replace(array("f", [0, 0, 0]))
+
+        mask = np.asarray([1 << 40], dtype=np.uint64)
+        model.vertices.replace_selection_masks(mask)
+
+        self.assertEqual(selection.mask, 1 << 40)
+        self.assertEqual(model.vertices[0].selections, {selection})
+
+    def test_scalar_replacements_reject_multidimensional_buffers_without_mutation(self) -> None:
+        model = pistoris.Model()
+        model.vertices.replace(array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1]))
+        for index in range(2):
+            model.skeleton.bones.append(pistoris.model.Bone(name=f"bone_{index}"))
+            model.action_points.append(pistoris.model.ActionPoint(name=f"point_{index}"))
+            model.textures.append(pistoris.Texture(path=f"textures/texture_{index}"))
+            model.selections.add(pistoris.model.Selection(name=f"selection_{index}"))
+        model.faces.replace(
+            array("I", [0, 1, 2] * 2), array("f", [0] * 12), array("f", [0, -1, 0] * 6),
+            array("I", [0, 0]), array("f", [0, 0]),
+        )
+
+        mask_cases = (
+            ("vertex_masks", model.vertices, model.replace_vertex_selection_masks),
+            ("bone_masks", model.skeleton.bones, model.replace_bone_selection_masks),
+            ("point_masks", model.action_points, model.replace_action_point_selection_masks),
+        )
+        for name, collection, alias in mask_cases:
+            for api, replace in (("collection", collection.replace_selection_masks), ("resource", alias)):
+                count = len(collection)
+                replace(array("Q", [1] * count))
+                expected = [set(item.selections) for item in collection]
+                for shape in ((1, count), (count, 1), (1, 1, count)):
+                    with self.subTest(attribute=name, api=api, shape=shape):
+                        values = memoryview(array("Q", [2] * count)).cast("B").cast("Q", shape=shape)
+                        with self.assertRaises(ValueError):
+                            replace(values)
+                        self.assertEqual([set(item.selections) for item in collection], expected)
+
+        index_cases = (
+            ("vertex_bones", model.vertices, model.vertices.replace_bones, model.replace_vertex_bones, "bone"),
+            ("point_bones", model.action_points, model.action_points.replace_bones,
+             model.replace_action_point_bones, "bone"),
+            ("face_textures", model.faces, model.faces.replace_textures, model.replace_face_textures, "texture"),
+        )
+        for name, collection, collection_replace, alias, attribute in index_cases:
+            for api, replace in (("collection", collection_replace), ("resource", alias)):
+                count = len(collection)
+                replace(array("I", [0] * count))
+                expected = [getattr(item, attribute) for item in collection]
+                for shape in ((1, count), (count, 1), (1, 1, count)):
+                    with self.subTest(attribute=name, api=api, shape=shape):
+                        values = memoryview(array("I", [1] * count)).cast("B").cast("I", shape=shape)
+                        with self.assertRaises(ValueError):
+                            replace(values)
+                        self.assertEqual([getattr(item, attribute) for item in collection], expected)
+
+    def test_rich_level_faces_derive_omitted_normals_and_reject_explicit_zero(self) -> None:
+        def make_face(normal=None):
+            return pistoris.level.Face(
+                corners=[
+                    pistoris.level.Corner(
+                        vertex=pistoris.level.Vertex(position=position),
+                        normal=pistoris.math.Vector3(0, -1, 0),
+                    )
+                    for position in (
+                        pistoris.math.Vector3(0, 0, 0),
+                        pistoris.math.Vector3(1, 0, 0),
+                        pistoris.math.Vector3(0, 0, 1),
+                    )
+                ],
+                normal=normal,
+            )
+
+        level = pistoris.Level()
+        face = make_face()
+        self.assertEqual(face.normal, pistoris.math.Vector3(0, -1, 0))
+        level.faces.append(face)
+        self.assertEqual(level.faces[0].normal, pistoris.math.Vector3(0, -1, 0))
+
+        before_positions = [vertex.position for vertex in level.vertices]
+        before_normal = level.faces[0].normal
+        with self.assertRaises(pistoris.PistorisError):
+            level.faces.append(make_face(pistoris.math.Vector3(0, 0, 0)))
+        self.assertEqual(len(level.faces), 1)
+        self.assertEqual([vertex.position for vertex in level.vertices], before_positions)
+
+        with self.assertRaises(pistoris.PistorisError):
+            level.faces[0].normal = pistoris.math.Vector3(0, 0, 0)
+        self.assertEqual(len(level.faces), 1)
+        self.assertEqual(level.faces[0].normal, before_normal)
+        self.assertEqual([vertex.position for vertex in level.vertices], before_positions)
+
+    def test_rich_level_faces_derive_normals_at_small_scales(self) -> None:
+        def make_face(edge_length):
+            return pistoris.level.Face(corners=[
+                pistoris.level.Corner(
+                    vertex=pistoris.level.Vertex(position=pistoris.math.Vector3(*position)),
+                    normal=pistoris.math.Vector3(0, -1, 0),
+                )
+                for position in ((0, 0, 0), (edge_length, 0, 0), (0, 0, edge_length))
+            ])
+
+        for edge_length in (1e-7, 1e-20):
+            raw = pistoris.Level()
+            raw.vertices.replace(array("f", [0, 0, 0, edge_length, 0, 0, 0, 0, edge_length]))
+            raw.faces.replace(array("I", [0, 1, 2]), array("f", [0] * 6), array("f", [0, -1, 0] * 3),
+                              array("I", [0xFFFFFFFF]), array("f", [0]), array("f", [0.5] * 3))
+            raw.validate()
+
+            for operation in ("append", "assignment"):
+                with self.subTest(edge_length=edge_length, operation=operation):
+                    rich = pistoris.Level()
+                    face = make_face(edge_length)
+                    self.assertEqual(face.normal, raw.faces[0].normal)
+                    if operation == "append":
+                        rich.faces.append(face)
+                    else:
+                        rich.faces.append(make_face(1))
+                        rich.faces[0] = face
+                    rich.validate()
+                    self.assertEqual(len(rich.faces), 1)
+                    self.assertEqual(rich.faces[0].normal, raw.faces[0].normal)
+                    self.assertEqual(
+                        [corner.vertex.position for corner in rich.faces[0].corners],
+                        [corner.vertex.position for corner in raw.faces[0].corners],
+                    )
+
+
+class PythonBulkCopyTests(unittest.TestCase):
+    @staticmethod
+    def model_with_bulk_data() -> tuple[pistoris.Model, object, object]:
+        model = pistoris.Model()
+        first = model.selections.add(pistoris.model.Selection(name="first"))
+        removed = model.selections.add(pistoris.model.Selection(name="removed"))
+        last = model.selections.add(pistoris.model.Selection(name="last"))
+        del model.selections[removed.name]
+        model.vertices.replace(array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1]))
+        model.faces.replace(
+            array("I", [0, 1, 2]), array("f", [0, 0, 1, 0, 0, 1]), array("f", [0, -1, 0] * 3),
+            array("I", [0xFFFFFFFF]), array("f", [0.25]), array("f", [0, -1, 0]), array("I", [4]),
+        )
+        model.skeleton.bones.append(pistoris.model.Bone(name="root"))
+        model.skeleton.bones.append(pistoris.model.Bone(name="child"))
+        model.action_points.append(pistoris.model.ActionPoint(name="point_a"))
+        model.action_points.append(pistoris.model.ActionPoint(name="point_b"))
+        model.vertices.replace_bones(array("I", [0, 0xFFFFFFFF, 1]))
+        model.action_points.replace_bones(array("I", [1, 0xFFFFFFFF]))
+        model.vertices.replace_selection_masks(array("Q", [first.mask, 0, last.mask]))
+        model.skeleton.bones.replace_selection_masks(array("Q", [last.mask, first.mask]))
+        model.action_points.replace_selection_masks(array("Q", [first.mask, last.mask]))
+        return model, first, last
+
+    @staticmethod
+    def level_with_bulk_data() -> pistoris.Level:
+        level = pistoris.Level()
+        level.rooms.append(pistoris.level.Room(name="front"))
+        level.rooms.append(pistoris.level.Room(name="back"))
+        level.vertices.replace(array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1, 2, 0, 0, 3, 0, 0, 2, 0, 1]))
+        level.faces.replace(
+            array("I", [0, 1, 2, 3, 4, 5]), array("f", [0, 0, 1, 0, 0, 1] * 2),
+            array("f", [0, -1, 0] * 6), array("I", [0xFFFFFFFF, 0xFFFFFFFF]), array("f", [0.25, 0.5]),
+            array("f", [0.5, 0.5, 0.5]), array("f", [0, -1, 0] * 2), array("I", [1, 2]),
+        )
+        level.faces.replace_rooms(array("I", [0, 0xFFFFFFFF]))
+        level.anchors.append(pistoris.level.Anchor(position=pistoris.math.Vector3(0, 0, 0)))
+        level.anchors.append(pistoris.level.Anchor(position=pistoris.math.Vector3(1, 0, 1)))
+        level.anchor_connections.replace(array("I", [0, 1]))
+        level.nav_surface.replace(array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1]), array("I", [0, 1, 2]))
+        return level
+
+    def test_model_copy_methods_write_only_requested_arrays_without_invalidating_refs(self) -> None:
+        model, first, last = self.model_with_bulk_data()
+        vertex_ref = model.vertices[0]
+        face_ref = model.faces[0]
+
+        positions = array("f", [-1] * 9)
+        self.assertIsNone(model.vertices.copy(positions=positions))
+        self.assertEqual(positions, array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1]))
+
+        indices = array("I", [99] * 3)
+        uvs = array("f", [-1] * 6)
+        normals = array("f", [-1] * 9)
+        textures = array("I", [0])
+        transvals = array("f", [-1])
+        face_normals = array("f", [-1] * 3)
+        flags = array("I", [0])
+        self.assertIsNone(model.faces.copy(
+            vertex_indices=indices, uvs=uvs, corner_normals=normals, textures=textures,
+            transvals=transvals, face_normals=face_normals, flags=flags,
+        ))
+        self.assertEqual(indices, array("I", [0, 1, 2]))
+        self.assertEqual(uvs, array("f", [0, 0, 1, 0, 0, 1]))
+        self.assertEqual(normals, array("f", [0, -1, 0] * 3))
+        self.assertEqual(textures, array("I", [0xFFFFFFFF]))
+        self.assertEqual(transvals, array("f", [0.25]))
+        self.assertEqual(face_normals, array("f", [0, -1, 0]))
+        self.assertEqual(flags, array("I", [4]))
+
+        bones = array("I", [99] * 3)
+        masks = array("Q", [99] * 3)
+        model.vertices.copy_bones(bones=bones)
+        model.vertices.copy_selection_masks(masks=masks)
+        self.assertEqual(bones, array("I", [0, 0xFFFFFFFF, 1]))
+        self.assertEqual(masks, array("Q", [first.mask, 0, last.mask]))
+
+        bone_masks = array("Q", [99] * 2)
+        point_bones = array("I", [99] * 2)
+        point_masks = array("Q", [99] * 2)
+        model.skeleton.bones.copy_selection_masks(masks=bone_masks)
+        model.action_points.copy_bones(bones=point_bones)
+        model.action_points.copy_selection_masks(masks=point_masks)
+        self.assertEqual(bone_masks, array("Q", [last.mask, first.mask]))
+        self.assertEqual(point_bones, array("I", [1, 0xFFFFFFFF]))
+        self.assertEqual(point_masks, array("Q", [first.mask, last.mask]))
+
+        face_textures = array("I", [0])
+        model.faces.copy_textures(textures=face_textures)
+        self.assertEqual(face_textures, array("I", [0xFFFFFFFF]))
+        self.assertEqual(vertex_ref.position, pistoris.math.Vector3(0, 0, 0))
+        self.assertEqual(face_ref.corners[0].vertex.position, pistoris.math.Vector3(0, 0, 0))
+        positions[0] = 77
+        self.assertEqual(vertex_ref.position, pistoris.math.Vector3(0, 0, 0))
+
+    def test_level_copy_methods_include_default_colors_and_room_sentinels(self) -> None:
+        level = self.level_with_bulk_data()
+        face_ref = level.faces[0]
+        vertex_ref = level.vertices[0]
+
+        colors = array("f", [-1] * 18)
+        rooms = array("I", [99] * 2)
+        texture_indices = array("I", [0, 0])
+        level.faces.copy(corner_colors=colors)
+        level.faces.copy_rooms(rooms=rooms)
+        level.faces.copy_textures(textures=texture_indices)
+        self.assertEqual(colors, array("f", [0.5] * 18))
+        self.assertEqual(rooms, array("I", [0, 0xFFFFFFFF]))
+        self.assertEqual(texture_indices, array("I", [0xFFFFFFFF] * 2))
+
+        anchors = array("f", [-1] * 6)
+        radii = array("f", [-1] * 2)
+        heights = array("f", [-1] * 2)
+        anchor_flags = array("I", [0xFFFFFFFF] * 2)
+        level.anchors.copy(positions=anchors, radii=radii, heights=heights, flags=anchor_flags)
+        self.assertEqual(anchors, array("f", [0, 0, 0, 1, 0, 1]))
+        self.assertEqual(radii, array("f", [anchor.radius for anchor in level.anchors]))
+        self.assertEqual(heights, array("f", [anchor.height for anchor in level.anchors]))
+        self.assertEqual(anchor_flags, array("I", [0, 0]))
+
+        endpoints = array("I", [99] * 2)
+        level.anchor_connections.copy(endpoints=endpoints)
+        self.assertEqual(endpoints, array("I", [0, 1]))
+        nav_positions = array("f", [-1] * 9)
+        triangle_indices = array("I", [99] * 3)
+        level.nav_surface.copy(positions=nav_positions, triangle_indices=triangle_indices)
+        self.assertEqual(nav_positions, array("f", [0, 0, 0, 1, 0, 0, 0, 0, 1]))
+        self.assertEqual(triangle_indices, array("I", [0, 1, 2]))
+
+        distances = array("f", [99])
+        portal_endpoints = array("I", [99] * 2)
+        level.room_distances.copy(distances=distances, endpoint_portals=portal_endpoints)
+        self.assertEqual(distances, array("f", [-1]))
+        self.assertEqual(portal_endpoints, array("I", [0xFFFFFFFF, 0xFFFFFFFF]))
+        self.assertEqual(face_ref.room.name, "front")
+        self.assertEqual(vertex_ref.position, pistoris.math.Vector3(0, 0, 0))
+
+        implicit_default = pistoris.Level()
+        implicit_default.faces.append(pistoris.level.Face(corners=[
+            pistoris.level.Corner(
+                vertex=pistoris.level.Vertex(position=position), normal=pistoris.math.Vector3(0, -1, 0)
+            )
+            for position in (
+                pistoris.math.Vector3(0, 0, 0),
+                pistoris.math.Vector3(1, 0, 0),
+                pistoris.math.Vector3(0, 0, 1),
+            )
+        ]))
+        implicit_colors = array("f", [-1] * 9)
+        implicit_default.faces.copy(corner_colors=implicit_colors)
+        self.assertEqual(implicit_colors, array("f", [0.5] * 9))
+
+    def test_copy_preflights_all_destinations_and_rejects_overlap(self) -> None:
+        model, _, _ = self.model_with_bulk_data()
+        original_uvs = array("f", [99] * 6)
+        readonly_normals = memoryview(array("f", [99] * 9)).toreadonly()
+        with self.assertRaises((TypeError, ValueError, BufferError, pistoris.PistorisError)):
+            model.faces.copy(uvs=original_uvs, corner_normals=readonly_normals)
+        self.assertEqual(original_uvs, array("f", [99] * 6))
+
+        shared = array("f", [99] * 15)
+        uv_view = memoryview(shared)[:6]
+        normal_view = memoryview(shared)[3:12]
+        with self.assertRaises((TypeError, ValueError, pistoris.PistorisError)):
+            model.faces.copy(uvs=uv_view, corner_normals=normal_view)
+        self.assertEqual(shared, array("f", [99] * 15))
+
+        mixed_storage = bytearray(36)
+        mixed_indices = memoryview(mixed_storage).cast("I")[:3]
+        mixed_positions = memoryview(mixed_storage).cast("f")[:9]
+        with self.assertRaises((TypeError, ValueError, pistoris.PistorisError)):
+            model.faces.copy(vertex_indices=mixed_indices, corner_normals=mixed_positions)
+        self.assertEqual(mixed_storage, bytearray(36))
+
+        wrong_size = array("f", [99] * 8)
+        with self.assertRaises((TypeError, ValueError, pistoris.PistorisError)):
+            model.vertices.copy(positions=wrong_size)
+        self.assertEqual(wrong_size, array("f", [99] * 8))
+
+    def test_copy_requires_an_output_but_accepts_empty_outputs_and_is_keyword_only(self) -> None:
+        model = pistoris.Model()
+        empty_copy_methods = (
+            model.vertices.copy,
+            model.faces.copy,
+            model.vertices.copy_bones,
+            model.vertices.copy_selection_masks,
+            model.skeleton.bones.copy_selection_masks,
+            model.action_points.copy_bones,
+            model.action_points.copy_selection_masks,
+            model.faces.copy_textures,
+        )
+        level = pistoris.Level()
+        empty_copy_methods += (
+            level.faces.copy,
+            level.faces.copy_textures,
+            level.faces.copy_rooms,
+            level.anchors.copy,
+            level.anchor_connections.copy,
+            level.room_distances.copy,
+            level.nav_surface.copy,
+        )
+        for copy in empty_copy_methods:
+            with self.subTest(copy=copy):
+                with self.assertRaises(ValueError):
+                    copy()
+        with self.assertRaises(ValueError):
+            model.vertices.copy(positions=None)
+        with self.assertRaises(TypeError):
+            model.vertices.copy(array("f"))
+        self.assertIsNone(model.vertices.copy(positions=array("f")))
+        self.assertIsNone(model.faces.copy(
+            vertex_indices=array("I"), uvs=array("f"), corner_normals=array("f"),
+            textures=array("I"), transvals=array("f"),
+        ))
+
+        self.assertIsNone(level.anchors.copy(positions=array("f")))
+        self.assertIsNone(level.anchor_connections.copy(endpoints=array("I")))
+        self.assertIsNone(level.nav_surface.copy(positions=array("f")))
+        self.assertIsNone(level.room_distances.copy(distances=array("f")))
+
+    def test_selection_copy_preserves_the_highest_mask_bit(self) -> None:
+        model = pistoris.Model()
+        selection = model.selections.add(pistoris.model.Selection(name="selection_0"))
+        for index in range(1, 64):
+            selection = model.selections.add(pistoris.model.Selection(name=f"selection_{index}"))
+        model.vertices.replace(array("f", [0, 0, 0]))
+        model.vertices.replace_selection_masks(array("Q", [selection.mask]))
+        copied = array("Q", [0])
+        model.vertices.copy_selection_masks(masks=copied)
+        self.assertEqual(selection.mask, 1 << 63)
+        self.assertEqual(copied, array("Q", [1 << 63]))
+
+    def test_copy_accepts_shaped_numpy_outputs_and_rejects_bad_destinations(self) -> None:
+        if np is None:
+            self.skipTest("NumPy is optional")
+        model, _, _ = self.model_with_bulk_data()
+        positions = np.full((3, 3), -1, dtype=np.float32)
+        indices = np.full((1, 3), 0xFFFFFFFF, dtype=np.uint32)
+        uvs = np.full((1, 3, 2), -1, dtype=np.float32)
+        normals = np.full((1, 3, 3), -1, dtype=np.float32)
+        model.vertices.copy(positions=positions)
+        model.faces.copy(vertex_indices=indices, uvs=uvs, corner_normals=normals)
+        np.testing.assert_array_equal(positions, [[0, 0, 0], [1, 0, 0], [0, 0, 1]])
+        np.testing.assert_array_equal(indices, [[0, 1, 2]])
+        np.testing.assert_array_equal(uvs, [[[0, 0], [1, 0], [0, 1]]])
+        np.testing.assert_array_equal(normals, [[[0, -1, 0]] * 3])
+
+        wrong_shape = np.full((1, 9), -1, dtype=np.float32)
+        with self.assertRaises((TypeError, ValueError, pistoris.PistorisError)):
+            model.vertices.copy(positions=wrong_shape)
+        np.testing.assert_array_equal(wrong_shape, np.full((1, 9), -1, dtype=np.float32))
+
+        readonly = np.full((3, 3), -1, dtype=np.float32)
+        readonly.setflags(write=False)
+        wrong_dtype = np.full((3, 3), -1, dtype=np.float64)
+        wrong_endian = np.full((3, 3), -1, dtype=np.dtype(">f4" if np.little_endian else "<f4"))
+        non_contiguous = np.full((3, 6), -1, dtype=np.float32)[:, ::2]
+        storage = np.full(3 * 3 * 4 + 1, 0xFF, dtype=np.uint8)
+        unaligned = np.ndarray((3, 3), dtype=np.float32, buffer=storage, offset=1)
+        for destination in (readonly, wrong_dtype, wrong_endian, non_contiguous, unaligned):
+            before = destination.tobytes()
+            with self.subTest(dtype=destination.dtype, strides=destination.strides):
+                with self.assertRaises((TypeError, ValueError, pistoris.PistorisError)):
+                    model.vertices.copy(positions=destination)
+                self.assertEqual(destination.tobytes(), before)
 
 
 def fixture(path: str) -> bytes:
@@ -43,6 +602,47 @@ def catalog_fixture_path(section: str, name: str, field: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"Fixture catalog field {section}.{name}.{field} must resolve to a path string")
     return value
+
+
+def replace_anchors(
+    level: pistoris.Level,
+    anchors: Sequence[pistoris.level.Anchor],
+    connections: Sequence[pistoris.level.AnchorConnection] = (),
+) -> None:
+    positions = array("f")
+    radii = array("f")
+    heights = array("f")
+    flags = array("I")
+    for anchor in anchors:
+        positions.extend((anchor.position.x, anchor.position.y, anchor.position.z))
+        radii.append(anchor.radius)
+        heights.append(anchor.height)
+        flags.append(anchor.flags)
+    level.anchors.replace(positions, radii, heights, flags)
+    ids = {anchor.name: index for index, anchor in enumerate(anchors)}
+    endpoints = array("I")
+    for connection in connections:
+        endpoints.extend((ids[connection.first], ids[connection.second]))
+    level.anchor_connections.replace(endpoints)
+
+
+def replace_nav_surface(
+    level: pistoris.Level,
+    vertices: Sequence[pistoris.level.Vertex],
+    triangles: Sequence[pistoris.level.NavSurfaceTriangle],
+) -> None:
+    positions = array("f")
+    for vertex in vertices:
+        positions.extend((vertex.position.x, vertex.position.y, vertex.position.z))
+    vertex_ids = {
+        (vertex.position.x, vertex.position.y, vertex.position.z): index for index, vertex in enumerate(vertices)
+    }
+    indices = array("I")
+    for triangle in triangles:
+        indices.extend(
+            vertex_ids[(vertex.position.x, vertex.position.y, vertex.position.z)] for vertex in triangle.vertices
+        )
+    level.nav_surface.replace(positions, indices)
 
 
 def catalog_fixture(section: str, name: str, field: str) -> bytes:
@@ -285,8 +885,8 @@ class ResourceIoTests(unittest.TestCase):
         self.assertIsInstance(imported, pistoris.model.Import)
         model = imported.model
         self.assertEqual(imported.animations, ())
-        self.assertTrue(model.mesh.textures)
-        self.assertTrue(all(texture.encoded_image for texture in model.mesh.textures))
+        self.assertTrue(model.textures)
+        self.assertTrue(all(texture.encoded_image for texture in model.textures))
         self.assertIsNotNone(model.inventory_icon.copy())
 
         animation = resources.load_animation("anim:npc:human_male_gathering")
@@ -734,15 +1334,15 @@ class ResourceConversionTests(unittest.TestCase):
         ftl_bytes = fixture("mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl")
         carrier = pistoris.native.ftl.read(ftl_bytes)
         model = pistoris.Model.from_ftl(carrier).model
-        self.assertIsInstance(model.mesh.vertices, pistoris.model.VertexCollection)
-        self.assertGreater(len(model.mesh.vertices), 0)
+        self.assertIsInstance(model.vertices, pistoris.model.VertexCollection)
+        self.assertGreater(len(model.vertices), 0)
         native_output = model.to_ftl_bytes(include_sidecars=False)
         self.assertGreater(len(native_output.ftl), 0)
         self.assertIsInstance(native_output.texture_files, pistoris.TextureFileSequence)
 
         glb, units = catalog_glb_fixture("models", "human_male")
         glb_model = pistoris.Model.from_glb(glb, arx_units_per_glb_unit=units).model
-        self.assertEqual(len(glb_model.mesh.vertices), len(model.mesh.vertices))
+        self.assertEqual(len(glb_model.vertices), len(model.vertices))
 
         copied = model.copy()
         copied.resource_path = "model:npc:copy"
@@ -776,14 +1376,14 @@ class ResourceConversionTests(unittest.TestCase):
             obj,
             mtl,
         )
-        self.assertGreater(len(imported.model.mesh.faces), 0)
+        self.assertGreater(len(imported.model.faces), 0)
         self.assertEqual(imported.texture_source_paths, ("custom_dagger_texture.png",))
 
         library = pistoris.model.ObjMaterialLibrary()
         library.path = material_path
         library.text = mtl
         path_aware = pistoris.Model.from_obj(obj, [library])
-        self.assertEqual(len(path_aware.model.mesh.faces), len(imported.model.mesh.faces))
+        self.assertEqual(len(path_aware.model.faces), len(imported.model.faces))
 
         class GeneratedLibraries:
             def __len__(self) -> int:
@@ -798,7 +1398,7 @@ class ResourceConversionTests(unittest.TestCase):
                 return value
 
         generated = pistoris.Model.from_obj(obj, GeneratedLibraries())
-        self.assertEqual(len(generated.model.mesh.faces), len(imported.model.mesh.faces))
+        self.assertEqual(len(generated.model.faces), len(imported.model.faces))
 
         broken_library = pistoris.model.ObjMaterialLibrary()
         broken_library.path = "broken.mtl"
@@ -903,7 +1503,7 @@ class ResourceConversionTests(unittest.TestCase):
         llf = fixture("mount/graph/levels/level9/level9.llf")
         dlf = fixture("mount/graph/levels/level9/level9.dlf")
         level = pistoris.Level.from_native_bytes(fts, llf, dlf).level
-        self.assertGreater(len(level.mesh.faces), 0)
+        self.assertGreater(len(level.faces), 0)
 
         minimap_image = fixture("mount/graph/levels/level9/map.png")
         level.minimap.set_from_projection(minimap_image, pistoris.math.Vector2())
@@ -947,7 +1547,7 @@ class ResourceConversionTests(unittest.TestCase):
         glb_import = pistoris.Level.from_glb(glb, arx_units_per_glb_unit=units)
         self.assertIsInstance(glb_import.glb_info, pistoris.level.GlbImportInfo)
         glb_level = glb_import.level
-        self.assertEqual(len(glb_level.mesh.faces), len(level.mesh.faces))
+        self.assertEqual(len(glb_level.faces), len(level.faces))
         glb_output = glb_level.to_glb()
         self.assertIsInstance(glb_output, pistoris.level.GlbOutput)
         self.assertGreater(len(glb_output.glb), 0)
@@ -1059,18 +1659,12 @@ class PythonErgonomicsTests(unittest.TestCase):
         self.assertEqual(pistoris.Model.__module__, "pistoris")
         self.assertEqual(pistoris.model.Vertex.__module__, "pistoris.model")
         self.assertEqual(pistoris.model.Vertex.__name__, "Vertex")
-        self.assertEqual(
-            repr(pistoris.Model().mesh),
-            "<pistoris.model.Mesh vertices=0 faces=0 textures=0>",
-        )
+        self.assertFalse(hasattr(pistoris.Model(), "mesh"))
         self.assertEqual(
             repr(pistoris.Model().skeleton),
             "<pistoris.model.Skeleton bones=0>",
         )
-        self.assertEqual(
-            repr(pistoris.Level().mesh),
-            "<pistoris.level.Mesh vertices=0 faces=0 textures=0>",
-        )
+        self.assertFalse(hasattr(pistoris.Level(), "mesh"))
         self.assertEqual(
             repr(pistoris.Level().nav_surface),
             "<pistoris.level.NavSurface present=False vertices=0 triangles=0>",
@@ -1301,12 +1895,12 @@ class PythonErgonomicsTests(unittest.TestCase):
         self.assertIsNone(pistoris.ambiance.PannedTrack().sound_path)
         self.assertIsNone(pistoris.ambiance.PositionedTrack().sound_path)
         portal = pistoris.level.Portal()
-        self.assertIsNone(portal.room_1)
-        self.assertIsNone(portal.room_2)
-        portal.room_1 = "room 2"
-        self.assertEqual(portal.room_1, "room-2")
-        portal.room_1 = None
-        self.assertIsNone(portal.room_1)
+        self.assertIsNone(portal.room_front)
+        self.assertIsNone(portal.room_back)
+        portal.room_front = "room 2"
+        self.assertEqual(portal.room_front, "room-2")
+        portal.room_front = None
+        self.assertIsNone(portal.room_front)
         selection = pistoris.model.Selection(name="CUT_HEAD")
         self.assertEqual(selection.name, "cut_head")
         self.assertEqual(selection, pistoris.model.Selection(name="cut_head"))
@@ -1332,8 +1926,8 @@ class PythonErgonomicsTests(unittest.TestCase):
         bone = pistoris.model.Bone(name="Root Bone", parent="Parent Bone")
         self.assertEqual((bone.name, bone.parent), ("root-bone", "parent-bone"))
 
-        portal = pistoris.level.Portal(name="Main Portal", room_1="Room One")
-        self.assertEqual((portal.name, portal.room_1), ("Main-Portal", "Room-One"))
+        portal = pistoris.level.Portal(name="Main Portal", room_front="Room One")
+        self.assertEqual((portal.name, portal.room_front), ("Main-Portal", "Room-One"))
         anchor = pistoris.level.Anchor()
         self.assertEqual(anchor.name, "")
         self.assertEqual(pistoris.level.Light(name="Main Light").name, "Main-Light")
@@ -1407,17 +2001,17 @@ class PythonErgonomicsTests(unittest.TestCase):
             fixture("mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl")
         )
         model = pistoris.Model.from_ftl_bytes(memoryview(source)).model
-        self.assertGreater(len(model.mesh.vertices), 0)
+        self.assertGreater(len(model.vertices), 0)
 
         sound = pistoris.Sound(encoded_audio=memoryview(b"audio"))
         self.assertEqual(sound.encoded_audio, b"audio")
 
         level = pistoris.Level()
-        level.mesh.textures.append(pistoris.Texture(path="test"))
+        level.textures.append(pistoris.Texture(path="test"))
         texture_index = 0
         encoded_image = fixture("mount/graph/obj3d/textures/sword02_00.png")
-        level.mesh.textures[texture_index].encoded_image = memoryview(encoded_image)
-        self.assertEqual(level.mesh.textures[texture_index].encoded_image, encoded_image)
+        level.textures[texture_index].encoded_image = memoryview(encoded_image)
+        self.assertEqual(level.textures[texture_index].encoded_image, encoded_image)
 
         self.assertIs(pistoris.classify_text_encoding(bytearray(b"ascii")), pistoris.TextEncoding.ASCII)
         with self.assertRaises(BufferError):
@@ -1427,14 +2021,14 @@ class PythonErgonomicsTests(unittest.TestCase):
         model = pistoris.Model.from_ftl_bytes(
             fixture("mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl")
         ).model
-        self.assertEqual(repr(model.mesh.vertices[0]), "<pistoris.model.VertexRef>")
-        self.assertIn(" path=", repr(model.mesh.textures[0]))
-        self.assertNotIn(" name=", repr(model.mesh.textures[0]))
+        self.assertEqual(repr(model.vertices[0]), "<pistoris.model.VertexRef>")
+        self.assertIn(" path=", repr(model.textures[0]))
+        self.assertNotIn(" name=", repr(model.textures[0]))
         self.assertIn(" name=", repr(model.skeleton.bones[0]))
-        corner = model.mesh.faces[0].corners[0]
+        corner = model.faces[0].corners[0]
         self.assertEqual(repr(corner), "<pistoris.model.FaceCornerRef index=0>")
         corner.u += 0.125
-        self.assertEqual(model.mesh.faces[0].corners[0].u, corner.u)
+        self.assertEqual(model.faces[0].corners[0].u, corner.u)
 
         ambiance = pistoris.Ambiance()
         ambiance.sounds.append(pistoris.Sound(path="sfx/test"))
@@ -1612,17 +2206,17 @@ class PythonErgonomicsTests(unittest.TestCase):
         model = pistoris.Model.from_ftl_bytes(
             fixture("mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl")
         ).model
-        faces = model.mesh.faces[:2]
+        faces = model.faces[:2]
         self.assertEqual(len(faces), 2)
         faces[0].transval = 0.25
-        self.assertEqual(model.mesh.faces[0].transval, 0.25)
+        self.assertEqual(model.faces[0].transval, 0.25)
 
         sidecars = model.to_ftl_bytes().texture_files
         sliced = sidecars[:1]
         self.assertIsInstance(sliced, pistoris.TextureFileSequence)
         self.assertEqual(len(sliced), min(1, len(sidecars)))
         if sidecars:
-            self.assertEqual(sidecars[0].source_path, model.mesh.textures[0].path)
+            self.assertEqual(sidecars[0].source_path, model.textures[0].path)
             with self.assertRaises(AttributeError):
                 sidecars[0].source_path = "changed"
 
@@ -1646,27 +2240,27 @@ class BindingRegressionTests(unittest.TestCase):
                 pistoris.math.Vector3(0.0, 0.0, 1.0),
             )
         ]
-        model.mesh.faces.append(
+        model.faces.append(
             pistoris.model.Face(
                 corners=[pistoris.model.Corner(vertex=vertex, normal=normal) for vertex in vertices],
                 normal=normal,
             )
         )
-        self.assertEqual(len(model.mesh.vertices), 3)
+        self.assertEqual(len(model.vertices), 3)
 
-        replacement = model.mesh.faces[0].copy()
+        replacement = model.faces[0].copy()
         for corner in replacement.corners:
             corner.vertex.selections = [pistoris.model.Selection(name="second"), pistoris.model.Selection(name="first")]
-        model.mesh.faces[0] = replacement
+        model.faces[0] = replacement
 
-        self.assertEqual(len(model.mesh.vertices), 3)
-        self.assertEqual(set(model.mesh.vertices[0].selections), {first, second})
+        self.assertEqual(len(model.vertices), 3)
+        self.assertEqual(set(model.vertices[0].selections), {first, second})
 
     def test_detached_relationships_resolve_by_semantic_identity(self) -> None:
         model = pistoris.Model()
         model.skeleton.bones.append(pistoris.model.Bone(name="root"))
         selection = model.selections.add(pistoris.model.Selection(name="selected"))
-        model.mesh.textures.append(pistoris.Texture(path="textures/test"))
+        model.textures.append(pistoris.Texture(path="textures/test"))
         normal = pistoris.math.Vector3(0.0, 1.0, 0.0)
         selected = pistoris.model.Selection(name="selected")
         vertices = (
@@ -1686,28 +2280,28 @@ class BindingRegressionTests(unittest.TestCase):
             texture="textures/test",
         )
 
-        model.mesh.faces.append(face)
+        model.faces.append(face)
 
-        self.assertEqual(len(model.mesh.vertices), 3)
-        self.assertEqual(model.mesh.faces[0].texture, model.mesh.textures[0])
-        self.assertEqual(model.mesh.faces[0].corners[0].vertex.bone, model.skeleton.bones[0])
-        self.assertEqual(selection.vertices, tuple(model.mesh.vertices))
+        self.assertEqual(len(model.vertices), 3)
+        self.assertEqual(model.faces[0].texture, model.textures[0])
+        self.assertEqual(model.faces[0].corners[0].vertex.bone, model.skeleton.bones[0])
+        self.assertEqual(selection.vertices, tuple(model.vertices))
 
-        stale_vertex = model.mesh.vertices[0]
-        model.mesh.vertices.append(
+        stale_vertex = model.vertices[0]
+        model.vertices.append(
             pistoris.model.Vertex(
                 position=pistoris.math.Vector3(0.001, 0.0, 0.0), bone="root", selections=[selected]
             )
         )
-        model.mesh.weld_vertices(radius=0.01)
-        self.assertEqual(len(model.mesh.vertices), 3)
+        model.weld_vertices(radius=0.01)
+        self.assertEqual(len(model.vertices), 3)
         with self.assertRaises(ReferenceError):
             _ = stale_vertex.position
 
-        vertex_count = len(model.mesh.vertices)
+        vertex_count = len(model.vertices)
         with self.assertRaises(KeyError):
-            model.mesh.vertices.append(pistoris.model.Vertex(bone="missing"))
-        self.assertEqual(len(model.mesh.vertices), vertex_count)
+            model.vertices.append(pistoris.model.Vertex(bone="missing"))
+        self.assertEqual(len(model.vertices), vertex_count)
 
         level = pistoris.Level()
         face = pistoris.level.Face(
@@ -1723,16 +2317,16 @@ class BindingRegressionTests(unittest.TestCase):
         self.assertIsNone(face.room)
         level.rooms.append(pistoris.level.Room(name="room"))
         face.room = "room"
-        level.mesh.faces.append(face)
-        self.assertEqual(level.mesh.faces[0].room, level.rooms[0])
-        self.assertEqual(level.mesh.faces[0].copy().room, "room")
+        level.faces.append(face)
+        self.assertEqual(level.faces[0].room, level.rooms[0])
+        self.assertEqual(level.faces[0].copy().room, "room")
 
         level.anchors.append(pistoris.level.Anchor())
         self.assertEqual(level.anchors[0].name, "anchor_0")
 
     def test_semantic_state_is_fully_editable_and_inspectable(self) -> None:
         model = pistoris.Model()
-        model.mesh.vertices.extend((pistoris.model.Vertex(), pistoris.model.Vertex()))
+        model.vertices.extend((pistoris.model.Vertex(), pistoris.model.Vertex()))
         first_vertex = 0
         second_vertex = 1
         model.skeleton.bones.append(pistoris.model.Bone(name="root"))
@@ -1759,25 +2353,26 @@ class BindingRegressionTests(unittest.TestCase):
         self.assertEqual(leading_vertex.copy().bone, "root")
         model.origin.selections.add(selection_ref)
         self.assertIs(selection_ref.includes_origin, True)
-        model.mesh.vertices[first_vertex].selections.add(selection_ref)
+        model.vertices[first_vertex].selections.add(selection_ref)
         bone.selections.add(selection_ref)
         action_point.selections.add(selection_ref)
-        self.assertEqual(selection_ref.vertices, (model.mesh.vertices[first_vertex],))
+        self.assertEqual(selection_ref.vertices, (model.vertices[first_vertex],))
         self.assertEqual(selection_ref.bones, (bone,))
         self.assertEqual(selection_ref.action_points, (action_point,))
-        model.mesh.vertices[second_vertex].selections.add(selection_ref)
-        model.mesh.vertices[first_vertex].selections.discard(selection_ref)
+        model.vertices[second_vertex].selections.add(selection_ref)
+        model.vertices[first_vertex].selections.discard(selection_ref)
         bone.selections.clear()
-        self.assertEqual(selection_ref.vertices, (model.mesh.vertices[second_vertex],))
+        self.assertEqual(selection_ref.vertices, (model.vertices[second_vertex],))
         self.assertEqual(selection_ref.bones, ())
         self.assertFalse(hasattr(selection_ref.copy(), "vertices"))
 
         model.origin.bone = bone
         self.assertEqual(model.origin.bone, bone)
 
-        model.mesh.vertices[second_vertex].bone = bone
-        model.skeleton.replace([pistoris.model.Bone(name="replacement")])
-        self.assertIsNone(model.mesh.vertices[second_vertex].bone)
+        model.vertices[second_vertex].bone = bone
+        model.skeleton.bones.clear()
+        model.skeleton.bones.append(pistoris.model.Bone(name="replacement"))
+        self.assertIsNone(model.vertices[second_vertex].bone)
         self.assertIsNone(model.origin.bone)
         self.assertIsNone(model.action_points[0].bone)
         replaced_leading_vertex = selection_ref.leading_vertex
@@ -1872,8 +2467,8 @@ class BindingRegressionTests(unittest.TestCase):
         model.inventory_icon.clear()
         self.assertIsNone(model.inventory_icon.copy())
 
-        model.mesh.textures.append(pistoris.Texture(path="test"))
-        model_texture = model.mesh.textures[0]
+        model.textures.append(pistoris.Texture(path="test"))
+        model_texture = model.textures[0]
         self.assertIsNone(model_texture.encoded_image)
         model_texture.encoded_image = icon
         model_texture.encoded_image = None
@@ -1890,8 +2485,8 @@ class BindingRegressionTests(unittest.TestCase):
         level.minimap.clear()
         self.assertIsNone(level.minimap.copy())
 
-        level.mesh.textures.append(pistoris.Texture(path="test"))
-        level_texture = level.mesh.textures[0]
+        level.textures.append(pistoris.Texture(path="test"))
+        level_texture = level.textures[0]
         self.assertIsNone(level_texture.encoded_image)
         level_texture.encoded_image = minimap
         level_texture.encoded_image = None
@@ -1968,21 +2563,21 @@ class BindingRegressionTests(unittest.TestCase):
             fixture("mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl")
         ).model
 
-        texture = model.mesh.textures[0]
+        texture = model.textures[0]
         texture.path = "custom/live_texture"
-        self.assertEqual(model.mesh.textures[0].path, "custom/live_texture")
+        self.assertEqual(model.textures[0].path, "custom/live_texture")
 
         detached = texture.copy()
         detached.path = "custom/detached"
         self.assertEqual(texture.path, "custom/live_texture")
 
-        removed = model.mesh.faces[0]
-        shifted = model.mesh.faces[1]
-        self.assertEqual(model.mesh.faces[-1].index, len(model.mesh.faces) - 1)
+        removed = model.faces[0]
+        shifted = model.faces[1]
+        self.assertEqual(model.faces[-1].index, len(model.faces) - 1)
         with self.assertRaises(IndexError):
-            _ = model.mesh.faces[len(model.mesh.faces)]
+            _ = model.faces[len(model.faces)]
 
-        del model.mesh.faces[0]
+        del model.faces[0]
         with self.assertRaises(ReferenceError):
             _ = removed.index
         self.assertEqual(shifted.index, 0)
@@ -2017,7 +2612,7 @@ class BindingRegressionTests(unittest.TestCase):
     def test_live_references_keep_the_resource_alive(self) -> None:
         texture = pistoris.Model.from_ftl_bytes(
             fixture("mount/game/graph/obj3d/interactive/npc/human_male/human_male.ftl")
-        ).model.mesh.textures[0]
+        ).model.textures[0]
         gc.collect()
         self.assertTrue(texture.path)
 
@@ -2064,9 +2659,9 @@ class BindingRegressionTests(unittest.TestCase):
         self.assertEqual(set(vertex.selections), set())
 
         model = pistoris.Model()
-        model.mesh.vertices.append(pistoris.model.Vertex())
+        model.vertices.append(pistoris.model.Vertex())
         selection = model.selections.add(pistoris.model.Selection(name="selected"))
-        membership = model.mesh.vertices[0].selections
+        membership = model.vertices[0].selections
         self.assertIsInstance(membership, MutableSet)
         self.assertNotIn("selected", membership)
         with self.assertRaises(TypeError):
@@ -2136,17 +2731,9 @@ class BindingRegressionTests(unittest.TestCase):
 
     def test_anchor_name_repair_preserves_authored_names_and_allocates_unique_defaults(self) -> None:
         level = pistoris.Level()
-        level.anchors.replace(
-            [
-                pistoris.level.Anchor(name="anchor_1"),
-                pistoris.level.Anchor(),
-                pistoris.level.Anchor(name="anchor_3"),
-                pistoris.level.Anchor(),
-            ]
-        )
+        replace_anchors(level, [pistoris.level.Anchor() for _ in range(4)])
         names = [anchor.name for anchor in level.anchors]
-        self.assertEqual(names[0], "anchor_1")
-        self.assertEqual(names[2], "anchor_3")
+        self.assertEqual(names, [f"anchor_{index}" for index in range(4)])
         self.assertEqual(len(set(names)), len(names))
         self.assertTrue(all(re.fullmatch(r"anchor_\d+", name) for name in names))
 
@@ -2159,12 +2746,12 @@ class BindingRegressionTests(unittest.TestCase):
 
     def test_semantic_collection_operations_have_collection_homes(self) -> None:
         model = pistoris.Model()
-        self.assertTrue(callable(model.action_points.replace))
+        self.assertTrue(callable(model.action_points.append))
         self.assertTrue(callable(model.skeleton.infer_selection_memberships))
         self.assertTrue(callable(model.inventory_icon.render))
         self.assertTrue(callable(pistoris.Ambiance().tracks.trim_to_master))
         level = pistoris.Level()
-        self.assertTrue(callable(level.mesh.generate_static_lighting))
+        self.assertTrue(callable(level.generate_static_lighting))
         self.assertTrue(callable(level.portals.flatten))
         self.assertTrue(callable(level.room_distances.replace))
         self.assertTrue(callable(level.room_distances.reset))
@@ -2259,7 +2846,7 @@ class BindingRegressionTests(unittest.TestCase):
         level = pistoris.Level()
         anchors = [pistoris.level.Anchor(name=f"anchor_{index}") for index in range(3)]
         late = pistoris.level.AnchorConnection(first="anchor_1", second="anchor_2")
-        level.anchors.replace(anchors, [late])
+        replace_anchors(level, anchors, [late])
         shifted_connection = level.anchor_connections[0]
         early = pistoris.level.AnchorConnection(first="anchor_0", second="anchor_1")
 
@@ -2400,10 +2987,19 @@ class BindingRegressionTests(unittest.TestCase):
             _ = level.room_distances[(room_a,)]
         with self.assertRaises(ValueError):
             level.room_distances[(room_a,)] = replacement
-        with self.assertRaises(ValueError):
-            level.room_distances.replace([])
+        with self.assertRaises((TypeError, ValueError, pistoris.PistorisError)):
+            level.room_distances.replace(array("f"), array("I"))
 
-        level.room_distances.replace([entry.copy() for entry in level.room_distances])
+        distance_values = array("f", [entry.distance for entry in level.room_distances])
+        portal_endpoints = array("I")
+        for entry in level.room_distances:
+            portal_endpoints.extend(
+                (
+                    entry.portal_a.index if entry.portal_a is not None else 0xFFFFFFFF,
+                    entry.portal_b.index if entry.portal_b is not None else 0xFFFFFFFF,
+                )
+            )
+        level.room_distances.replace(distance_values, portal_endpoints)
         room_distance.distance = original_distance
         self.assertEqual(room_distance.distance, original_distance)
         count = len(level.room_distances)
@@ -2546,11 +3142,11 @@ class BindingRegressionTests(unittest.TestCase):
         nav_vertices[1].position = pistoris.math.Vector3(1.0, 0.0, 0.0)
         nav_vertices[2].position = pistoris.math.Vector3(0.0, 0.0, 1.0)
         nav_triangle = pistoris.level.NavSurfaceTriangle(vertices=nav_vertices)
-        level.nav_surface.replace([], [nav_triangle])
+        replace_nav_surface(level, nav_vertices, [nav_triangle])
 
         anchors = [pistoris.level.Anchor(name=f"anchor_{index}") for index in range(2)]
         connection_value = pistoris.level.AnchorConnection(first="anchor_0", second="anchor_1")
-        level.anchors.replace(anchors, [connection_value])
+        replace_anchors(level, anchors, [connection_value])
 
         nav_vertex = level.nav_surface.vertices[0]
         anchor = level.anchors[0]
@@ -2581,8 +3177,8 @@ class BindingRegressionTests(unittest.TestCase):
         ):
             portal = pistoris.level.Portal()
             portal.name = name
-            portal.room_1 = room_1
-            portal.room_2 = room_2
+            portal.room_front = room_1
+            portal.room_back = room_2
             portal.vertices = [
                 pistoris.math.Vector3(offset, 0.0, 0.0),
                 pistoris.math.Vector3(offset + 1.0, 0.0, 0.0),
@@ -2598,10 +3194,11 @@ class BindingRegressionTests(unittest.TestCase):
             _ = removed_portal.index
         self.assertEqual(retained_portal.index, 0)
         self.assertEqual(retained_portal.name, "retained")
-        self.assertEqual(retained_portal.room_1.name, "second")
-        self.assertEqual(retained_portal.room_2.name, "third")
+        self.assertEqual(retained_portal.room_front.name, "second")
+        self.assertEqual(retained_portal.room_back.name, "third")
 
-        cascade_level.anchors.replace(
+        replace_anchors(
+            cascade_level,
             [pistoris.level.Anchor(name=f"anchor_{index}") for index in range(3)],
             [
                 pistoris.level.AnchorConnection(first="anchor_0", second="anchor_1"),
@@ -2618,7 +3215,7 @@ class BindingRegressionTests(unittest.TestCase):
         self.assertEqual(retained_connection.first.name, "anchor_1")
         self.assertEqual(retained_connection.second.name, "anchor_2")
 
-        level.mesh.clear()
+        level.vertices.clear()
         for reference in (nav_vertex, anchor, connection):
             with self.assertRaises(ReferenceError):
                 _ = reference.index
@@ -2648,9 +3245,9 @@ class BindingRegressionTests(unittest.TestCase):
             fixture("mount/graph/levels/level9/level9.llf"),
             fixture("mount/graph/levels/level9/level9.dlf"),
         ).level
-        level_texture = level.mesh.textures[0]
+        level_texture = level.textures[0]
         level_texture.path = "custom/level_texture"
-        self.assertEqual(level.mesh.textures[0].path, "custom/level_texture")
+        self.assertEqual(level.textures[0].path, "custom/level_texture")
 
     def test_live_corner_color_assignment_updates_level_storage(self) -> None:
         level = pistoris.Level.from_native_bytes(
@@ -2658,15 +3255,15 @@ class BindingRegressionTests(unittest.TestCase):
             fixture("mount/graph/levels/level9/level9.llf"),
             fixture("mount/graph/levels/level9/level9.dlf"),
         ).level
-        level.mesh.reset_corner_colors()
-        face = level.mesh.faces[0]
+        level.reset_corner_colors()
+        face = level.faces[0]
         self.assertEqual(face.corners[0].color, pistoris.math.Color3(0.5, 0.5, 0.5))
 
         color = pistoris.math.Color3(0.25, 0.5, 0.75)
         face.corners[0].color = color
-        self.assertEqual(level.mesh.faces[0].corners[0].color, color)
+        self.assertEqual(level.faces[0].corners[0].color, color)
 
-        level.mesh.reset_corner_colors()
+        level.reset_corner_colors()
         self.assertEqual(face.corners[0].color, pistoris.math.Color3(0.5, 0.5, 0.5))
 
     def test_inventory_icon_slot_count_does_not_wrap(self) -> None:
@@ -2798,9 +3395,9 @@ class BindingRegressionTests(unittest.TestCase):
 
     def test_collections_follow_the_sequence_protocol(self) -> None:
         model = pistoris.Model()
-        self.assertIsNone(model.mesh.vertices.append(pistoris.model.Vertex()))
-        self.assertIsNone(model.mesh.vertices.extend(pistoris.model.Vertex() for _ in range(2)))
-        vertices = model.mesh.vertices
+        self.assertIsNone(model.vertices.append(pistoris.model.Vertex()))
+        self.assertIsNone(model.vertices.extend(pistoris.model.Vertex() for _ in range(2)))
+        vertices = model.vertices
         reference = vertices[0]
         self.assertIsInstance(vertices, Sequence)
         self.assertEqual(len(vertices), 3)
@@ -2809,8 +3406,8 @@ class BindingRegressionTests(unittest.TestCase):
         self.assertEqual(vertices.count(reference), 1)
         self.assertEqual(list(reversed(vertices)), vertices[::-1])
 
-        model.mesh.vertices.extend(vertex.copy() for vertex in model.mesh.vertices)
-        self.assertEqual(len(model.mesh.vertices), 6)
+        model.vertices.extend(vertex.copy() for vertex in model.vertices)
+        self.assertEqual(len(model.vertices), 6)
 
         ambiance = pistoris.Ambiance()
         ambiance.sounds.append(pistoris.Sound(path="test"))
@@ -2825,12 +3422,12 @@ class BindingRegressionTests(unittest.TestCase):
 
     def test_positional_mutators_accept_negative_indices(self) -> None:
         model = pistoris.Model()
-        model.mesh.vertices.append(pistoris.model.Vertex())
+        model.vertices.append(pistoris.model.Vertex())
         replacement_vertex = pistoris.model.Vertex(position=pistoris.math.Vector3(1.0, 2.0, 3.0))
-        model.mesh.vertices[-1] = replacement_vertex
-        self.assertEqual(model.mesh.vertices[0].position, replacement_vertex.position)
+        model.vertices[-1] = replacement_vertex
+        self.assertEqual(model.vertices[0].position, replacement_vertex.position)
         with self.assertRaises(IndexError):
-            model.mesh.vertices[-2] = replacement_vertex
+            model.vertices[-2] = replacement_vertex
 
         animation = pistoris.Animation()
         animation.sounds.append(pistoris.Sound(path="first"))
@@ -2997,7 +3594,23 @@ class BindingRegressionTests(unittest.TestCase):
                 "translate",
                 "apply_reference",
                 "resource_path",
-                "mesh",
+                "vertices",
+                "faces",
+                "textures",
+                "validate_geometry",
+                "weld_vertices",
+                "clear_vertices",
+                "clear_faces",
+                "clear_textures",
+                "replace_vertices",
+                "replace_face_textures",
+                "replace_vertex_bones",
+                "replace_vertex_selection_masks",
+                "replace_bone_selection_masks",
+                "replace_action_point_selection_masks",
+                "clear_bones",
+                "clear_action_points",
+                "replace_action_point_bones",
                 "skeleton",
                 "origin",
                 "action_points",
@@ -3069,7 +3682,16 @@ class BindingRegressionTests(unittest.TestCase):
                 "resource_path",
                 "bounds",
                 "referenced_bounds",
-                "mesh",
+                "vertices",
+                "faces",
+                "textures",
+                "validate_geometry",
+                "weld_vertices",
+                "validate_face_rooms",
+                "validate_corner_colors",
+                "generate_static_lighting",
+                "snap_to_portals",
+                "reset_corner_colors",
                 "rooms",
                 "portals",
                 "room_distances",

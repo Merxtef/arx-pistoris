@@ -346,6 +346,16 @@ void addGeometryFace(pistoris::LevelModules& level, const TestFace& source) {
         source.corners[corner].v,
     };
   }
+  const bool vertices_exist = std::ranges::all_of(
+      source.corners, [&level](const TestCorner& corner) { return corner.vertex < level.geometry.vertices.size(); });
+  if (vertices_exist) {
+    const pistoris::ArxVector3& a = level.geometry.vertices[source.corners[0].vertex].position;
+    const pistoris::ArxVector3& b = level.geometry.vertices[source.corners[1].vertex].position;
+    const pistoris::ArxVector3& c = level.geometry.vertices[source.corners[2].vertex].position;
+    face.normal = pistoris::math::normalizeFiniteOr(pistoris::math::cross(b - a, c - a), source.corners[0].normal);
+  } else {
+    face.normal = source.corners[0].normal;
+  }
   face.texture = source.texture;
   face.flags = source.flags;
   face.transval = source.transval;
@@ -809,13 +819,13 @@ ArxReturnCode exportRenderSplitsDebugGlb(const pistoris::LevelModules& src, floa
     if (test::addRoom(level, room) == pistoris::kInvalidRoomIndex) return ARX_LEVEL_BAD_ROOM_NAME;
   }
 
-  test::MeshSnapshot mesh;
+  test::GeometrySnapshot mesh;
   mesh.vertices = src.geometry.vertices;
   mesh.faces = src.geometry.faces;
   mesh.textures = src.textures.textures;
   mesh.face_rooms = src.rooms.face_rooms;
   mesh.corner_colors = src.lighting.corner_colors;
-  ArxReturnCode rc = test::replaceMesh(level, mesh);
+  ArxReturnCode rc = test::replaceGeometry(level, mesh);
   if (rc != ARX_OK) return rc;
 
   return pistoris::level_debug::exportRenderSplitsDebugGlb(level, out, normal_weld_degrees);
@@ -829,6 +839,31 @@ std::size_t testAttributeCount(const ParsedTestGlb& parsed, std::string_view sem
 }  // namespace
 
 TEST_SUITE("FtsGlb") {
+  TEST_CASE("Native FTS repairs face normals at tiny scales") {
+    for (float edge : {1.0e-23f, 1.0f}) {
+      CAPTURE(edge);
+      pistoris::fts::Data native = makeQuadFtsScene();
+      auto& polygon = native.cells[0].polygons[0];
+      for (auto& vertex : polygon.v) {
+        vertex.ssx *= edge;
+        vertex.ssz *= edge;
+      }
+      polygon.norm = {};
+      polygon.norm2 = {};
+      REQUIRE(pistoris::validate(native));
+
+      auto imported = pistoris::Level::importNative(native);
+      REQUIRE(imported);
+      REQUIRE(imported->validateGeometry());
+      REQUIRE(imported->faceCount() == 2);
+      for (const auto& face : imported->faces()) {
+        CHECK(face.normal.x == doctest::Approx(0.0f));
+        CHECK(face.normal.y == doctest::Approx(-1.0f));
+        CHECK(face.normal.z == doctest::Approx(0.0f));
+      }
+    }
+  }
+
   TEST_CASE("LevelGlbImportRequiresGeometry") {
     pistoris::glb::Builder builder;
     builder.addRoot(builder.addNode("empty"));
@@ -930,6 +965,43 @@ TEST_SUITE("FtsGlb") {
     CHECK(pistoris::writeDlf(bundle.dlf, {}));
   }
 
+  TEST_CASE("LevelNativeBundleBakeOmitsUnassignedFaces") {
+    pistoris::LevelModules level = makeSimpleLevel();
+    const std::uint32_t base = static_cast<std::uint32_t>(level.geometry.vertices.size());
+    level.geometry.vertices.push_back({{0.0f, 0.0f, 0.0f}});
+    level.geometry.vertices.push_back({{16000.0f, 0.0f, 0.0f}});
+    level.geometry.vertices.push_back({{0.0f, 0.0f, 16000.0f}});
+    const pistoris::ArxVector3 normal{0.0f, -1.0f, 0.0f};
+    addLevelFace(
+        level,
+        {{{{base, normal, 0.0f, 0.0f}, {base + 1, normal, 1.0f, 0.0f}, {base + 2, normal, 0.0f, 1.0f}}}, 0, 0, 0.0f},
+        pistoris::kNoRoom);
+    level.lighting.corner_colors = {{1.0f, 0.0f, 0.0f},
+                                    {1.0f, 0.0f, 0.0f},
+                                    {1.0f, 0.0f, 0.0f},
+                                    {0.0f, 0.0f, 1.0f},
+                                    {0.0f, 0.0f, 1.0f},
+                                    {0.0f, 0.0f, 1.0f}};
+
+    LogCapture logs;
+    pistoris::NativeLevelBundle bundle;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
+    CHECK(bundle.fts.scene.num_polys == 1);
+    REQUIRE(bundle.llf.colors.size() == 3);
+    for (const pistoris::ArxColor3& color : bundle.llf.colors) {
+      CHECK(color.r == doctest::Approx(1.0f));
+      CHECK(color.g == doctest::Approx(0.0f));
+      CHECK(color.b == doctest::Approx(0.0f));
+    }
+    CHECK(logs.contains("omitted 1 face(s) without a room"));
+
+    level.rooms.face_rooms[0] = pistoris::kNoRoom;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(level, {.level_name = "output"}, bundle) == ARX_OK);
+    CHECK(bundle.fts.scene.num_polys == 0);
+    CHECK(bundle.llf.colors.empty());
+    CHECK(logs.contains("omitted 2 face(s) without a room"));
+  }
+
   TEST_CASE("LevelNativeBundleBakeCanDisableQuadReconstruction") {
     pistoris::LevelModules level = makeSimpleLevel();
     level.geometry.vertices = {{{90.0f, 0.0f, 10.0f}}, {{110.0f, 0.0f, 10.0f}}, {{90.0f, 0.0f, 30.0f}}};
@@ -946,6 +1018,55 @@ TEST_SUITE("FtsGlb") {
     CHECK(bundle.fts.scene.num_polys == 3);
     CHECK(bundle.llf.colors.size() == 9);
     CHECK(logs.contains("FTS quad reconstruction disabled; emitted 3 triangle(s)"));
+  }
+
+  TEST_CASE("NativeFtsImportAndBakePreserveIndependentQuadFaceNormals") {
+    pistoris::fts::Data source = makeQuadFtsScene();
+    source.cells[0].polygons[0].norm = {0.0f, -1.0f, 0.0f};
+    source.cells[0].polygons[0].norm2 = {1.0f, 0.0f, 0.0f};
+
+    pistoris::LevelModules imported;
+    REQUIRE(buildLevelModules(imported, source) == ARX_OK);
+    REQUIRE(imported.geometry.faces.size() == 2);
+    CHECK(imported.geometry.faces[0].normal.x == doctest::Approx(0.0f));
+    CHECK(imported.geometry.faces[0].normal.y == doctest::Approx(-1.0f));
+    CHECK(imported.geometry.faces[0].normal.z == doctest::Approx(0.0f));
+    CHECK(imported.geometry.faces[1].normal.x == doctest::Approx(1.0f));
+    CHECK(imported.geometry.faces[1].normal.y == doctest::Approx(0.0f));
+    CHECK(imported.geometry.faces[1].normal.z == doctest::Approx(0.0f));
+
+    pistoris::NativeLevelBundle baked;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(imported, {.level_name = "output"}, baked) == ARX_OK);
+    REQUIRE(baked.fts.cells[0].polygons.size() == 1);
+    const pistoris::fts::Poly& polygon = baked.fts.cells[0].polygons[0];
+    CHECK((polygon.type & pistoris::kFaceBitQuad) != 0);
+    CHECK(polygon.norm.x == doctest::Approx(0.0f));
+    CHECK(polygon.norm.y == doctest::Approx(-1.0f));
+    CHECK(polygon.norm.z == doctest::Approx(0.0f));
+    CHECK(polygon.norm2.x == doctest::Approx(1.0f));
+    CHECK(polygon.norm2.y == doctest::Approx(0.0f));
+    CHECK(polygon.norm2.z == doctest::Approx(0.0f));
+  }
+
+  TEST_CASE("NativeFtsBakeClippingPreservesAuthoredFaceNormal") {
+    pistoris::LevelModules level = makeSimpleLevel();
+    level.geometry.vertices = {{{90.0f, 0.0f, 10.0f}}, {{110.0f, 0.0f, 10.0f}}, {{90.0f, 0.0f, 30.0f}}};
+    level.geometry.faces[0].normal = {0.0f, 0.0f, 1.0f};
+
+    pistoris::NativeLevelBundle baked;
+    REQUIRE(pistoris::level_native::bakeNativeLevelBundle(
+                level, {.level_name = "output", .reconstruct_quads = false}, baked) == ARX_OK);
+    REQUIRE(baked.fts.scene.num_polys > 1);
+    std::size_t emitted = 0;
+    for (const pistoris::fts::Cell& cell : baked.fts.cells) {
+      for (const pistoris::fts::Poly& polygon : cell.polygons) {
+        ++emitted;
+        CHECK(polygon.norm.x == doctest::Approx(0.0f));
+        CHECK(polygon.norm.y == doctest::Approx(0.0f));
+        CHECK(polygon.norm.z == doctest::Approx(1.0f));
+      }
+    }
+    CHECK(emitted == static_cast<std::size_t>(baked.fts.scene.num_polys));
   }
 
   TEST_CASE("LevelNativeBundleBakePacksCompatibleNonplanarFaces") {
@@ -5505,19 +5626,19 @@ TEST_SUITE("FtsGlb") {
     pistoris::Level level;
     REQUIRE(test::addRoom(level, {"room"}) == 0);
 
-    test::MeshSnapshot mesh;
+    test::GeometrySnapshot mesh;
     const pistoris::LevelModules source = makeSimpleLevel();
     mesh.vertices = source.geometry.vertices;
     mesh.faces = source.geometry.faces;
     mesh.textures = source.textures.textures;
     mesh.face_rooms = source.rooms.face_rooms;
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
     REQUIRE(level.validate());
     REQUIRE(level.bounds().has_value());
     REQUIRE(level.referencedBounds().has_value());
 
-    level.clearMesh();
+    level.clearVertices();
     CHECK(level.validate().code() == ARX_LEVEL_NO_GEOMETRY);
     CHECK_FALSE(level.bounds().has_value());
     CHECK_FALSE(level.referencedBounds().has_value());

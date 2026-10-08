@@ -204,10 +204,11 @@ FtlResult<Model> Model::importNative(const ftl::Data& native, std::vector<std::s
           continue;
         }
         const ArxVector3 generated_face_normal =
-            math::normalizeFiniteOr(math::cross(positions[1] - positions[0], positions[2] - positions[0]), {});
+            geometry::triangleNormalOr(positions[0], positions[1], positions[2], {});
 
         Face face;
         face.normal = source.norm;
+        if (!geometry::normalizeNormal(face.normal)) face.normal = generated_face_normal;
         stripped_quad_flags += static_cast<std::size_t>((source.type & kFaceBitQuad) != 0);
         face.flags = source.type & ~kFaceBitQuad;
         face.texture = source.texture_id == kFtlTextureNone

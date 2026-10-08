@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/base/error.h"
+#include "arx_pistoris/base/flags.h"
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/status.h"
 #include "arx_pistoris/base/string_view.h"
@@ -14,6 +15,34 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
+#include <span>
+
+namespace {
+
+template <class T>
+ArxReturnCode validateOutputPointer(T* data, std::size_t count) noexcept {
+  if (!data) return count == 0 ? ARX_OK : ARX_INVALID_DATA_POINTER;
+  if (count == 0) return ARX_OK;
+  if (reinterpret_cast<std::uintptr_t>(data) % alignof(T) != 0 ||
+      count > static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max()) / sizeof(T) ||
+      count > std::numeric_limits<std::uintptr_t>::max() / sizeof(T)) {
+    return ARX_INVALID_DATA_POINTER;
+  }
+  const std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(data);
+  const std::uintptr_t bytes = count * sizeof(T);
+  if (begin > std::numeric_limits<std::uintptr_t>::max() - bytes) return ARX_INVALID_DATA_POINTER;
+  return ARX_OK;
+}
+
+template <class T>
+std::optional<std::span<T>> outputSpan(T* data, std::size_t count) noexcept {
+  if (!data) return std::nullopt;
+  return std::span<T>(data, count);
+}
+
+}  // namespace
 
 // NOLINTBEGIN(readability-identifier-naming)
 
@@ -75,6 +104,55 @@ ARX_MODEL_COPY(bones, bones, ArxModelBone)
 ARX_MODEL_COPY(action_points, actionPoints, ArxModelActionPoint)
 
 #undef ARX_MODEL_COPY
+
+ArxReturnCode arx_pistoris_model_copy_face_data(const ArxModel* model, const ArxModelFacesOutput* output,
+                                                ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!output) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+#define ARX_MODEL_VALIDATE_COPY_OUTPUT(field, count_field, type)                              \
+  do {                                                                                        \
+    const ArxReturnCode rc = validateOutputPointer<type>(output->field, output->count_field); \
+    if (rc != ARX_OK) return pistoris::c_api::publishCode(rc, error);                         \
+  } while (false)
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(vertex_indices, vertex_index_count, std::uint32_t);
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(uvs, uv_count, float);
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(corner_normals, corner_normal_count, float);
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(textures, texture_count, ArxTextureIndex);
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(transvals, transval_count, float);
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(face_normals, face_normal_count, float);
+  ARX_MODEL_VALIDATE_COPY_OUTPUT(flags, flag_count, ArxFaceType);
+#undef ARX_MODEL_VALIDATE_COPY_OUTPUT
+  const pistoris::Model::FacesOutput destinations{
+      .vertex_indices = outputSpan(output->vertex_indices, output->vertex_index_count),
+      .uvs = outputSpan(output->uvs, output->uv_count),
+      .corner_normals = outputSpan(output->corner_normals, output->corner_normal_count),
+      .textures = outputSpan(output->textures, output->texture_count),
+      .transvals = outputSpan(output->transvals, output->transval_count),
+      .face_normals = outputSpan(output->face_normals, output->face_normal_count),
+      .flags = outputSpan(output->flags, output->flag_count),
+  };
+  return pistoris::c_api::publish(model->value.copyFaces(destinations), error);
+}
+
+#define ARX_MODEL_COPY_BULK(name, method, type)                                                      \
+  ArxReturnCode arx_pistoris_model_copy_##name(                                                      \
+      const ArxModel* model, type(*output), size_t count, ArxError* error) noexcept {                \
+    if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);                      \
+    if (const ArxReturnCode rc = validateOutputPointer<type>(output, count); rc != ARX_OK)           \
+      return pistoris::c_api::publishCode(rc, error);                                                \
+    const std::span<type> destination = output ? std::span<type>(output, count) : std::span<type>{}; \
+    return pistoris::c_api::publish(model->value.method(destination), error);                        \
+  }
+
+ARX_MODEL_COPY_BULK(vertex_positions, copyVertexPositions, float)
+ARX_MODEL_COPY_BULK(face_textures, copyFaceTextures, ArxTextureIndex)
+ARX_MODEL_COPY_BULK(vertex_bones, copyVertexBones, ArxBoneIndex)
+ARX_MODEL_COPY_BULK(action_point_bones, copyActionPointBones, ArxBoneIndex)
+ARX_MODEL_COPY_BULK(vertex_selection_masks, copyVertexSelectionMasks, ArxSelectionMask)
+ARX_MODEL_COPY_BULK(bone_selection_masks, copyBoneSelectionMasks, ArxSelectionMask)
+ARX_MODEL_COPY_BULK(action_point_selection_masks, copyActionPointSelectionMasks, ArxSelectionMask)
+
+#undef ARX_MODEL_COPY_BULK
 
 ArxReturnCode arx_pistoris_model_origin(const ArxModel* model, ArxModelOrigin* out_origin, ArxError* error) noexcept {
   if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);

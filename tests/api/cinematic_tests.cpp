@@ -7,6 +7,7 @@
 #include "arx_pistoris/cinematic/types.h"
 #include "arx_pistoris/native/text.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -112,6 +113,44 @@ TEST_SUITE("C Cinematic API") {
     std::size_t count = 0;
     CHECK(arx_pistoris_cinematic_sound_count(cinematic, static_cast<ArxSoundKind>(99), &count, nullptr) ==
           ARX_INVALID_OPTIONS);
+    arx_pistoris_cinematic_destroy(cinematic);
+  }
+
+  TEST_CASE("Rejects sound kinds before narrowing at every C boundary") {
+    ArxCinematic* cinematic = nullptr;
+    REQUIRE(arx_pistoris_cinematic_create(&cinematic, nullptr) == ARX_OK);
+    ArxSoundHandle original = ARX_NO_SOUND_HANDLE;
+    REQUIRE(arx_pistoris_cinematic_add_sound(cinematic, ARX_SOUND_EFFECT, view("effect"), &original, nullptr) ==
+            ARX_OK);
+
+    for (const int raw_kind : std::array{-1, 99, 256, 257, 65536}) {
+      CAPTURE(raw_kind);
+      const auto kind = static_cast<ArxSoundKind>(raw_kind);
+      std::size_t count = 42;
+      CHECK(arx_pistoris_cinematic_sound_count(cinematic, kind, &count, nullptr) == ARX_INVALID_OPTIONS);
+      CHECK(count == 42);
+      ArxCinematicSoundView sound_view{};
+      CHECK(arx_pistoris_cinematic_copy_sound_views(cinematic, kind, 0, 1, &sound_view, nullptr) ==
+            ARX_INVALID_OPTIONS);
+      CHECK(sound_view.path.data == nullptr);
+      CHECK(arx_pistoris_cinematic_compact_sounds(cinematic, kind, &count, nullptr) == ARX_INVALID_OPTIONS);
+      CHECK(count == 42);
+      CHECK(arx_pistoris_cinematic_rebase_sound_paths(cinematic, kind, view("changed"), nullptr) ==
+            ARX_INVALID_OPTIONS);
+      ArxSoundHandle sound = original;
+      CHECK(arx_pistoris_cinematic_add_sound(cinematic, kind, view("extra"), &sound, nullptr) == ARX_INVALID_OPTIONS);
+      CHECK(sound == ARX_NO_SOUND_HANDLE);
+      sound = original;
+      CHECK(arx_pistoris_sound_handle(kind, 0, &sound) == ARX_INVALID_OPTIONS);
+      CHECK(sound == ARX_NO_SOUND_HANDLE);
+    }
+
+    std::size_t count = 0;
+    REQUIRE(arx_pistoris_cinematic_sound_count(cinematic, ARX_SOUND_EFFECT, &count, nullptr) == ARX_OK);
+    CHECK(count == 1);
+    ArxCinematicSoundView sound_view{};
+    REQUIRE(arx_pistoris_cinematic_copy_sound_views(cinematic, ARX_SOUND_EFFECT, 0, 1, &sound_view, nullptr) == ARX_OK);
+    CHECK((std::string_view(sound_view.path.data, sound_view.path.size) == "effect"));
     arx_pistoris_cinematic_destroy(cinematic);
   }
 

@@ -82,6 +82,34 @@ struct LevelDebugAccess;
 // Non-const calls invalidate collection indices and borrowed views
 class Level {
  public:
+  struct FacesOutput {
+    std::optional<std::span<std::uint32_t>> vertex_indices = {};
+    std::optional<std::span<float>> uvs = {};
+    std::optional<std::span<float>> corner_normals = {};
+    std::optional<std::span<TextureIndex>> textures = {};
+    std::optional<std::span<float>> transvals = {};
+    std::optional<std::span<float>> corner_colors = {};
+    std::optional<std::span<float>> face_normals = {};
+    std::optional<std::span<FaceType>> flags = {};
+  };
+
+  struct AnchorsOutput {
+    std::optional<std::span<float>> positions = {};
+    std::optional<std::span<float>> radii = {};
+    std::optional<std::span<float>> heights = {};
+    std::optional<std::span<std::uint32_t>> flags = {};
+  };
+
+  struct NavSurfaceOutput {
+    std::optional<std::span<float>> positions = {};
+    std::optional<std::span<NavSurfaceVertexIndex>> triangle_indices = {};
+  };
+
+  struct RoomDistancesOutput {
+    std::optional<std::span<float>> distances = {};
+    std::optional<std::span<PortalIndex>> endpoint_portals = {};
+  };
+
   struct VerticesViewTag;
   struct FacesViewTag;
   struct TexturesViewTag;
@@ -327,7 +355,7 @@ class Level {
   // --- Validation ---
 
   [[nodiscard]] LevelResult<void> validate() const noexcept;
-  [[nodiscard]] LevelResult<void> validateMesh() const noexcept;
+  [[nodiscard]] LevelResult<void> validateGeometry() const noexcept;
   [[nodiscard]] LevelResult<void> validateVertices() const noexcept;
   [[nodiscard]] LevelResult<void> validateTextures() const noexcept;
   [[nodiscard]] LevelResult<void> validateFaces() const noexcept;
@@ -411,7 +439,18 @@ class Level {
   // Returns the canonical room order and the default sentinel when no distance is available.
   [[nodiscard]] LevelResult<ArxLevelRoomDistance> roomDistance(RoomIndex room_a, RoomIndex room_b) const noexcept;
 
-  // --- Mesh editing ---
+  // --- Raw data copies ---
+
+  [[nodiscard]] LevelResult<void> copyVertexPositions(std::span<float> positions) const noexcept;
+  [[nodiscard]] LevelResult<void> copyFaces(const FacesOutput& output) const noexcept;
+  [[nodiscard]] LevelResult<void> copyFaceTextures(std::span<TextureIndex> textures) const noexcept;
+  [[nodiscard]] LevelResult<void> copyFaceRooms(std::span<RoomIndex> rooms) const noexcept;
+  [[nodiscard]] LevelResult<void> copyRoomDistances(const RoomDistancesOutput& output) const noexcept;
+  [[nodiscard]] LevelResult<void> copyAnchors(const AnchorsOutput& output) const noexcept;
+  [[nodiscard]] LevelResult<void> copyAnchorConnections(std::span<AnchorIndex> endpoints) const noexcept;
+  [[nodiscard]] LevelResult<void> copyNavSurface(const NavSurfaceOutput& output) const noexcept;
+
+  // --- Geometry editing ---
 
   [[nodiscard]] LevelResult<void> setVertex(VertexIndex index, ArxLevelVertex vertex) noexcept;
   [[nodiscard]] LevelResult<VertexIndex> addVertex(ArxLevelVertex vertex) noexcept;
@@ -436,21 +475,36 @@ class Level {
   [[nodiscard]] LevelResult<void> setFaceRoom(FaceIndex face, RoomIndex room) noexcept;
   [[nodiscard]] LevelResult<void> setCornerColor(FaceIndex face, std::uint8_t corner, ArxColor3 color) noexcept;
   void resetCornerColors() noexcept;
-  [[nodiscard]] LevelResult<void> replaceMesh(const ArxLevelMeshInput& mesh) noexcept;
-  void clearMesh() noexcept;
+  [[nodiscard]] LevelResult<void> replaceVertices(std::span<const float> positions) noexcept;
+  void clearVertices() noexcept;
+  // For F faces: indices 3F, UVs 6F, corner normals 9F, textures F, transvals F,
+  // colors 9F or one RGB triple, normals 3F or omitted, and flags F or omitted.
+  [[nodiscard]] LevelResult<void> replaceFaces(std::span<const std::uint32_t> vertex_indices,
+                                               std::span<const float> uvs, std::span<const float> corner_normals,
+                                               std::span<const TextureIndex> textures, std::span<const float> transvals,
+                                               std::span<const float> corner_colors,
+                                               std::span<const float> face_normals = {},
+                                               std::span<const FaceType> flags = {}) noexcept;
+  void clearFaces() noexcept;
+  void clearTextures() noexcept;
+  [[nodiscard]] LevelResult<void> replaceFaceTextures(std::span<const TextureIndex> textures) noexcept;
+  [[nodiscard]] LevelResult<void> replaceFaceRooms(std::span<const RoomIndex> rooms) noexcept;
 
   // --- Rooms ---
 
   [[nodiscard]] LevelResult<void> setRoom(RoomIndex index, const ArxLevelRoom& room) noexcept;
   [[nodiscard]] LevelResult<RoomIndex> addRoom(const ArxLevelRoom& room) noexcept;
   [[nodiscard]] LevelResult<void> removeRoom(RoomIndex index) noexcept;
+  void clearRooms() noexcept;
   [[nodiscard]] LevelResult<void> setPortal(PortalIndex index, const ArxLevelPortal& portal) noexcept;
   [[nodiscard]] LevelResult<PortalIndex> addPortal(const ArxLevelPortal& portal) noexcept;
   [[nodiscard]] LevelResult<void> removePortal(PortalIndex index) noexcept;
   [[nodiscard]] LevelResult<void> flattenPortals() noexcept;
   [[nodiscard]] LevelResult<void> setRoomDistance(const ArxLevelRoomDistance& distance) noexcept;
-  [[nodiscard]] LevelResult<void> replaceRoomDistances(std::span<const ArxLevelRoomDistance> distances) noexcept;
+  [[nodiscard]] LevelResult<void> replaceRoomDistances(std::span<const float> distances,
+                                                       std::span<const PortalIndex> endpoint_portals) noexcept;
   void clearRoomDistances() noexcept;
+  void clearPortals() noexcept;
 
   // --- Navigation ---
 
@@ -461,10 +515,15 @@ class Level {
                                                       ArxLevelAnchorConnection connection) noexcept;
   [[nodiscard]] LevelResult<AnchorConnectionIndex> addAnchorConnection(ArxLevelAnchorConnection connection) noexcept;
   [[nodiscard]] LevelResult<void> removeAnchorConnection(AnchorConnectionIndex index) noexcept;
-  [[nodiscard]] LevelResult<void> replaceAnchors(const ArxLevelAnchorsInput& anchors) noexcept;
+  [[nodiscard]] LevelResult<void> replaceAnchors(std::span<const float> positions, std::span<const float> radii,
+                                                 std::span<const float> heights,
+                                                 std::span<const std::uint32_t> flags) noexcept;
+  [[nodiscard]] LevelResult<void> replaceAnchorConnections(std::span<const AnchorIndex> endpoints) noexcept;
+  void clearAnchorConnections() noexcept;
   void clearAnchors() noexcept;
 
-  [[nodiscard]] LevelResult<void> setNavSurface(const ArxLevelNavSurfaceInput& surface) noexcept;
+  [[nodiscard]] LevelResult<void> setNavSurface(std::span<const float> positions,
+                                                std::span<const NavSurfaceVertexIndex> triangle_indices) noexcept;
   void clearNavSurface() noexcept;
 
   // --- Scene ---

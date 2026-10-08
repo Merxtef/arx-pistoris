@@ -78,24 +78,41 @@ typedef struct ArxModelSelectionMembersInput {
   size_t action_point_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
 } ArxModelSelectionMembersInput;
 
-typedef struct ArxModelMeshInput {
-  const ArxModelVertex* vertices;
-  size_t vertex_count;
-  const ArxModelFace* faces;
-  size_t face_count;
-  const ArxTextureView* textures;
-  size_t texture_count;
-} ArxModelMeshInput;
+// Counts are scalar element counts. Empty face_normals derive normals; empty flags mean zero.
+typedef struct ArxModelFacesInput {
+  const uint32_t* vertex_indices ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t vertex_index_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  const float* uvs ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t uv_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  const float* corner_normals ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t corner_normal_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  const ArxTextureIndex* textures ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t texture_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  const float* transvals ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t transval_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  const float* face_normals ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t face_normal_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  const ArxFaceType* flags ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t flag_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+} ArxModelFacesInput;
 
-typedef struct ArxModelSkeletonInput {
-  const ArxModelBone* bones;
-  size_t bone_count;
-} ArxModelSkeletonInput;
-
-typedef struct ArxModelActionPointsInput {
-  const ArxModelActionPoint* action_points;
-  size_t action_point_count;
-} ArxModelActionPointsInput;
+// Null pointer and zero count omit a destination; non-null pointer and zero count request an empty destination.
+typedef struct ArxModelFacesOutput {
+  uint32_t* vertex_indices ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t vertex_index_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  float* uvs ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t uv_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  float* corner_normals ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t corner_normal_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  ArxTextureIndex* textures ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t texture_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  float* transvals ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t transval_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  float* face_normals ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t face_normal_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+  ArxFaceType* flags ARX_PISTORIS_DETAIL_CXX_DEFAULT(nullptr);
+  size_t flag_count ARX_PISTORIS_DETAIL_CXX_DEFAULT(0);
+} ArxModelFacesOutput;
 
 #undef ARX_PISTORIS_DETAIL_CXX_DEFAULT
 

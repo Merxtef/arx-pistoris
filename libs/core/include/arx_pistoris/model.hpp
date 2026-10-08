@@ -141,6 +141,16 @@ class Model {
     ImageFormat format = ImageFormat::kPng;
   };
 
+  struct FacesOutput {
+    std::optional<std::span<std::uint32_t>> vertex_indices = {};
+    std::optional<std::span<float>> uvs = {};
+    std::optional<std::span<float>> corner_normals = {};
+    std::optional<std::span<TextureIndex>> textures = {};
+    std::optional<std::span<float>> transvals = {};
+    std::optional<std::span<float>> face_normals = {};
+    std::optional<std::span<FaceType>> flags = {};
+  };
+
   // --- Lifetime ---
 
   Model();
@@ -195,7 +205,7 @@ class Model {
   // --- Validation ---
 
   [[nodiscard]] ModelResult<void> validate() const noexcept;
-  [[nodiscard]] ModelResult<void> validateMesh() const noexcept;
+  [[nodiscard]] ModelResult<void> validateGeometry() const noexcept;
   [[nodiscard]] ModelResult<void> validateSkeleton() const noexcept;
   [[nodiscard]] ModelResult<void> validateActionPoints() const noexcept;
   [[nodiscard]] ModelResult<void> validateSelections() const noexcept;
@@ -242,7 +252,7 @@ class Model {
   [[nodiscard]] ModelResult<SelectionActionPointsView> selectionActionPoints(SelectionId id) const noexcept;
   [[nodiscard]] ModelResult<bool> selectionIncludesOrigin(SelectionId id) const noexcept;
 
-  // --- Mesh editing ---
+  // --- Geometry editing ---
 
   [[nodiscard]] ModelResult<void> setVertex(VertexIndex index, const ArxModelVertex& vertex) noexcept;
   [[nodiscard]] ModelResult<VertexIndex> addVertex(const ArxModelVertex& vertex) noexcept;
@@ -262,24 +272,45 @@ class Model {
                                                                    std::string_view extension) noexcept;
   [[nodiscard]] ModelResult<void> setTextureImage(TextureIndex index, ArxEncodedImageView encoded_image) noexcept;
   [[nodiscard]] ModelResult<void> clearTextureImage(TextureIndex index) noexcept;
-  [[nodiscard]] ModelResult<void> replaceMesh(const ArxModelMeshInput& mesh) noexcept;
-  void clearMesh() noexcept;
+  [[nodiscard]] ModelResult<void> replaceVertices(std::span<const float> positions) noexcept;
+  void clearVertices() noexcept;
+  [[nodiscard]] ModelResult<void> replaceFaces(std::span<const std::uint32_t> vertex_indices,
+                                               std::span<const float> uvs, std::span<const float> corner_normals,
+                                               std::span<const TextureIndex> textures, std::span<const float> transvals,
+                                               std::span<const float> face_normals = {},
+                                               std::span<const FaceType> flags = {}) noexcept;
+  [[nodiscard]] ModelResult<void> copyFaces(const FacesOutput& output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyVertexPositions(std::span<float> output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyFaceTextures(std::span<TextureIndex> output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyVertexBones(std::span<BoneIndex> output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyActionPointBones(std::span<BoneIndex> output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyVertexSelectionMasks(std::span<std::uint64_t> output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyBoneSelectionMasks(std::span<std::uint64_t> output) const noexcept;
+  [[nodiscard]] ModelResult<void> copyActionPointSelectionMasks(std::span<std::uint64_t> output) const noexcept;
+  void clearFaces() noexcept;
+  void clearTextures() noexcept;
+  [[nodiscard]] ModelResult<void> replaceFaceTextures(std::span<const TextureIndex> textures) noexcept;
+  [[nodiscard]] ModelResult<void> replaceVertexBones(std::span<const BoneIndex> bones) noexcept;
+  [[nodiscard]] ModelResult<void> replaceActionPointBones(std::span<const BoneIndex> bones) noexcept;
+  [[nodiscard]] ModelResult<void> replaceVertexSelectionMasks(std::span<const std::uint64_t> masks) noexcept;
+  [[nodiscard]] ModelResult<void> replaceBoneSelectionMasks(std::span<const std::uint64_t> masks) noexcept;
+  [[nodiscard]] ModelResult<void> replaceActionPointSelectionMasks(std::span<const std::uint64_t> masks) noexcept;
+  [[nodiscard]] std::uint64_t activeSelectionMask() const noexcept;
+  [[nodiscard]] ModelResult<std::uint64_t> selectionMask(SelectionId id) const noexcept;
 
   // --- Skeleton editing ---
 
   [[nodiscard]] ModelResult<void> setBone(BoneIndex index, const ArxModelBone& bone) noexcept;
   [[nodiscard]] ModelResult<BoneIndex> addBone(const ArxModelBone& bone) noexcept;
   [[nodiscard]] ModelResult<void> removeBone(BoneIndex index) noexcept;
-  [[nodiscard]] ModelResult<void> replaceSkeleton(const ArxModelSkeletonInput& skeleton) noexcept;
   [[nodiscard]] ModelResult<void> setOrigin(ArxModelOrigin origin) noexcept;
-  void clearSkeleton() noexcept;
+  void clearBones() noexcept;
 
   // --- Action points ---
 
   [[nodiscard]] ModelResult<void> setActionPoint(ActionPointIndex index, const ArxModelActionPoint& point) noexcept;
   [[nodiscard]] ModelResult<ActionPointIndex> addActionPoint(const ArxModelActionPoint& point) noexcept;
   [[nodiscard]] ModelResult<void> removeActionPoint(ActionPointIndex index) noexcept;
-  [[nodiscard]] ModelResult<void> replaceActionPoints(const ArxModelActionPointsInput& points) noexcept;
   void clearActionPoints() noexcept;
 
   // --- Selections ---

@@ -16,6 +16,7 @@
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/texture.h"
 
+#include "api/bulk_copy.h"
 #include "api/result_failure.h"
 #include "api/status_boundary.h"
 #include "model/data.h"
@@ -37,6 +38,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -287,6 +289,10 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
       return ARX_MODEL_BAD_FACE_UV;
     case geometry::Error::kDegenerateFace:
       return ARX_MODEL_DEGENERATE_FACE;
+    case geometry::Error::kBadVertexCount:
+      return ARX_MODEL_BAD_VERTEX_COUNT;
+    case geometry::Error::kBadFaceCount:
+      return ARX_MODEL_BAD_FACE_COUNT;
     case geometry::Error::kInvalidOptions:
       return ARX_INVALID_OPTIONS;
     case geometry::Error::kOutOfMemory:
@@ -466,7 +472,7 @@ ModelResult<void> Model::reset() noexcept {
   });
 }
 
-ModelResult<void> Model::validateMesh() const noexcept {
+ModelResult<void> Model::validateGeometry() const noexcept {
   if (!data_)
     return api_detail::modelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
@@ -960,7 +966,7 @@ ModelResult<std::size_t> Model::compactVertices() noexcept {
     return api_detail::modelFailure<std::size_t>(ARX_INVALID_STATE,
                                                  api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
   return api_detail::modelBoundary(resourcePath(), [&]() -> ModelResult<std::size_t> {
-    ModelResult<void> validation = validateMesh();
+    ModelResult<void> validation = validateGeometry();
     if (!validation) return api_detail::modelFailure<std::size_t>(std::move(validation));
     geometry::VertexIndexRemap remap;
     const std::size_t count = geometry::compactVertices(data_->geometry, &remap);
@@ -979,7 +985,7 @@ ModelResult<void> Model::weldVertices(const VertexWeldOptions& options) noexcept
     return api_detail::modelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
   return api_detail::modelBoundary(resourcePath(), [&]() -> ModelResult<void> {
-    auto mesh = validateMesh();
+    auto mesh = validateGeometry();
     if (!mesh) return api_detail::modelFailure<void>(std::move(mesh));
 
     geometry::VertexWeldOptions module_options;
@@ -1047,7 +1053,7 @@ ModelResult<std::size_t> Model::compactTextures() noexcept {
     return api_detail::modelFailure<std::size_t>(ARX_INVALID_STATE,
                                                  api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
   return api_detail::modelBoundary(resourcePath(), [&]() -> ModelResult<std::size_t> {
-    ModelResult<void> validation = validateMesh();
+    ModelResult<void> validation = validateGeometry();
     if (!validation) return api_detail::modelFailure<std::size_t>(std::move(validation));
     std::vector<std::uint8_t> used;
     ArxReturnCode rc = model_detail::geometryError(
@@ -1205,80 +1211,375 @@ ModelResult<void> Model::clearTextureImage(TextureIndex index) noexcept {
       api_detail::resourceLocation(resourcePath(), ModelElement::kTexture, index));
 }
 
-ModelResult<void> Model::replaceMesh(const ArxModelMeshInput& mesh) noexcept {
+ModelResult<void> Model::replaceVertices(std::span<const float> positions) noexcept {
   if (!data_)
     return api_detail::modelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
   return api_detail::modelStatusBoundary<void>(
       resourcePath(),
       [&]() -> ArxReturnCode {
-        ArxReturnCode rc = model_detail::geometryError(geometry::validateCounts(mesh.vertex_count, mesh.face_count));
+        std::vector<Vertex> vertices;
+        const ArxReturnCode rc = model_detail::geometryError(geometry::buildVertices(positions, vertices));
         if (rc != ARX_OK) return rc;
-        if (mesh.texture_count > static_cast<std::size_t>(kNoTexture)) return ARX_MODEL_TOO_MANY_TEXTURES;
-        if ((mesh.vertex_count != 0 && mesh.vertices == nullptr) || (mesh.face_count != 0 && mesh.faces == nullptr) ||
-            (mesh.texture_count != 0 && mesh.textures == nullptr))
-          return ARX_INVALID_DATA_POINTER;
-
-        GeometryData geometry;
-        TexturesData texture_data;
-        std::vector<BoneIndex> vertex_bones;
-        std::vector<SelectionMask> vertex_masks;
-
-        geometry.vertices.reserve(mesh.vertex_count);
-        vertex_bones.reserve(mesh.vertex_count);
-        vertex_masks.reserve(mesh.vertex_count);
-        for (std::size_t i = 0; i < mesh.vertex_count; ++i) {
-          const ArxModelVertex& source = mesh.vertices[i];
-          ArxReturnCode rc = boneReferenceError(source.bone, data_->skeleton.bones.size(), ARX_MODEL_BAD_VERTEX_BONE);
-          if (rc != ARX_OK) return rc;
-          geometry.vertices.push_back(internalVertex(source));
-          vertex_bones.push_back(source.bone);
-          vertex_masks.push_back(0);
-        }
-
-        geometry.faces.reserve(mesh.face_count);
-        std::size_t stripped_quad_flags = 0;
-        for (std::size_t i = 0; i < mesh.face_count; ++i) {
-          stripped_quad_flags += static_cast<std::size_t>((mesh.faces[i].flags & kFaceBitQuad) != 0);
-          geometry.faces.push_back(internalFace(mesh.faces[i]));
-        }
-        texture_data.textures.resize(mesh.texture_count);
-        for (std::size_t i = 0; i < mesh.texture_count; ++i) {
-          if (!internalTexture(mesh.textures[i], texture_data.textures[i])) return ARX_INVALID_DATA_POINTER;
-        }
-        textures::PathRepairInfo texture_repairs;
-        rc = model_detail::textureError(textures::repairPaths(texture_data.textures, &texture_repairs));
-        if (rc != ARX_OK) return rc;
-
-        rc = model_detail::textureError(textures::validate(texture_data.textures));
-        if (rc != ARX_OK) return rc;
-        rc = model_detail::geometryError(geometry::validate(geometry, texture_data.textures.size()));
-        if (rc != ARX_OK) return rc;
-
-        geometry::replace(data_->geometry, std::move(geometry));
-        textures::replaceTextures(data_->textures, std::move(texture_data.textures));
-        skeleton::replaceVertexBones(data_->skeleton, std::move(vertex_bones));
-        selections::replaceVertexMasks(data_->selections, std::move(vertex_masks));
-        for (const textures::PathRepairInfo::Repair& repair : texture_repairs.repairs)
-          log(ARX_LOG_WARN,
-              "Model mesh replacement: texture path '{}' normalized to '{}'",
-              repair.original,
-              repair.repaired);
-        if (stripped_quad_flags != 0)
-          log(ARX_LOG_WARN,
-              "Model mesh replacement: stripped QUAD flag from {} triangular face(s)",
-              stripped_quad_flags);
+        std::vector<BoneIndex> bones(vertices.size(), kInvalidBoneIndex);
+        std::vector<SelectionMask> masks(vertices.size(), 0);
+        geometry::replaceVertices(data_->geometry, std::move(vertices));
+        skeleton::replaceVertexBones(data_->skeleton, std::move(bones));
+        selections::replaceVertexMasks(data_->selections, std::move(masks));
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
 }
 
-void Model::clearMesh() noexcept {
+void Model::clearVertices() noexcept {
   if (!data_) return;
   geometry::clear(data_->geometry);
-  textures::clear(data_->textures);
   skeleton::clearVertexBones(data_->skeleton);
   selections::clearVertexMasks(data_->selections);
+}
+
+ModelResult<void> Model::replaceFaces(std::span<const std::uint32_t> vertex_indices, std::span<const float> uvs,
+                                      std::span<const float> corner_normals, std::span<const TextureIndex> textures,
+                                      std::span<const float> transvals, std::span<const float> face_normals,
+                                      std::span<const FaceType> flags) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        std::vector<Face> faces;
+        const ArxReturnCode rc = model_detail::geometryError(geometry::buildFaces(data_->geometry.vertices,
+                                                                                  data_->textures.textures.size(),
+                                                                                  vertex_indices,
+                                                                                  uvs,
+                                                                                  corner_normals,
+                                                                                  textures,
+                                                                                  transvals,
+                                                                                  face_normals,
+                                                                                  flags,
+                                                                                  faces));
+        if (rc != ARX_OK) return rc;
+        geometry::replaceFaces(data_->geometry, std::move(faces));
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyFaces(const FacesOutput& output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        const std::size_t count = data_->geometry.faces.size();
+        if (count > std::numeric_limits<std::size_t>::max() / 9U) return ARX_INVALID_OPTIONS;
+        const std::size_t corner_components = count * 9U;
+        if (count > std::numeric_limits<std::size_t>::max() / 6U) return ARX_INVALID_OPTIONS;
+        const std::size_t uv_components = count * 6U;
+        if (count > std::numeric_limits<std::size_t>::max() / 3U) return ARX_INVALID_OPTIONS;
+        const std::size_t index_components = count * 3U;
+
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output.vertex_indices, index_components);
+        outputs.add(output.uvs, uv_components);
+        outputs.add(output.corner_normals, corner_components);
+        outputs.add(output.textures, count);
+        outputs.add(output.transvals, count);
+        outputs.add(output.face_normals, index_components);
+        outputs.add(output.flags, count);
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+
+        for (std::size_t face_index = 0; face_index < count; ++face_index) {
+          const Face& face = data_->geometry.faces[face_index];
+          if (output.textures) (*output.textures)[face_index] = face.texture;
+          if (output.transvals) (*output.transvals)[face_index] = face.transval;
+          if (output.face_normals) {
+            const std::size_t offset = face_index * 3U;
+            (*output.face_normals)[offset] = face.normal.x;
+            (*output.face_normals)[offset + 1U] = face.normal.y;
+            (*output.face_normals)[offset + 2U] = face.normal.z;
+          }
+          if (output.flags) (*output.flags)[face_index] = face.flags;
+          for (std::size_t corner_index = 0; corner_index < face.corners.size(); ++corner_index) {
+            const Corner& corner = face.corners[corner_index];
+            const std::size_t index_offset = face_index * 3U + corner_index;
+            if (output.vertex_indices) (*output.vertex_indices)[index_offset] = corner.vertex;
+            if (output.uvs) {
+              const std::size_t uv_offset = index_offset * 2U;
+              (*output.uvs)[uv_offset] = corner.u;
+              (*output.uvs)[uv_offset + 1U] = corner.v;
+            }
+            if (output.corner_normals) {
+              const std::size_t normal_offset = index_offset * 3U;
+              (*output.corner_normals)[normal_offset] = corner.normal.x;
+              (*output.corner_normals)[normal_offset + 1U] = corner.normal.y;
+              (*output.corner_normals)[normal_offset + 2U] = corner.normal.z;
+            }
+          }
+        }
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyVertexPositions(std::span<float> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        const std::size_t count = data_->geometry.vertices.size();
+        if (count > std::numeric_limits<std::size_t>::max() / 3U) return ARX_INVALID_OPTIONS;
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, count * 3U);
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        for (std::size_t i = 0; i < count; ++i) {
+          output[i * 3U] = data_->geometry.vertices[i].position.x;
+          output[i * 3U + 1U] = data_->geometry.vertices[i].position.y;
+          output[i * 3U + 2U] = data_->geometry.vertices[i].position.z;
+        }
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyFaceTextures(std::span<TextureIndex> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, data_->geometry.faces.size());
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        for (std::size_t i = 0; i < output.size(); ++i) output[i] = data_->geometry.faces[i].texture;
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyVertexBones(std::span<BoneIndex> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (data_->skeleton.vertex_bones.size() != data_->geometry.vertices.size())
+          return ARX_MODEL_BAD_VERTEX_BONE_COUNT;
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, data_->geometry.vertices.size());
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        std::copy(data_->skeleton.vertex_bones.begin(), data_->skeleton.vertex_bones.end(), output.begin());
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyActionPointBones(std::span<BoneIndex> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, data_->action_points.points.size());
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        for (std::size_t i = 0; i < output.size(); ++i) output[i] = data_->action_points.points[i].bone;
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyVertexSelectionMasks(std::span<std::uint64_t> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (data_->selections.vertex_masks.size() != data_->geometry.vertices.size())
+          return ARX_MODEL_BAD_SELECTION_VERTEX;
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, data_->geometry.vertices.size());
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        std::copy(data_->selections.vertex_masks.begin(), data_->selections.vertex_masks.end(), output.begin());
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyBoneSelectionMasks(std::span<std::uint64_t> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (data_->selections.bone_masks.size() != data_->skeleton.bones.size()) return ARX_MODEL_BAD_SELECTION_BONE;
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, data_->skeleton.bones.size());
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        std::copy(data_->selections.bone_masks.begin(), data_->selections.bone_masks.end(), output.begin());
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::copyActionPointSelectionMasks(std::span<std::uint64_t> output) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (data_->selections.action_point_masks.size() != data_->action_points.points.size())
+          return ARX_MODEL_BAD_SELECTION_ACTION_POINT;
+        api_detail::BulkCopyOutputs outputs;
+        outputs.add(output, data_->action_points.points.size());
+        const ArxReturnCode rc = outputs.finish();
+        if (rc != ARX_OK) return rc;
+        std::copy(
+            data_->selections.action_point_masks.begin(), data_->selections.action_point_masks.end(), output.begin());
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+void Model::clearFaces() noexcept {
+  if (data_) geometry::clearFaces(data_->geometry);
+}
+
+void Model::clearTextures() noexcept {
+  if (!data_) return;
+  textures::clear(data_->textures);
+  geometry::resetFaceTextures(data_->geometry);
+}
+
+ModelResult<void> Model::replaceFaceTextures(std::span<const TextureIndex> textures) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (textures.size() != data_->geometry.faces.size()) return ARX_MODEL_BAD_FACE_COUNT;
+        for (TextureIndex texture : textures)
+          if (texture != kNoTexture && texture >= data_->textures.textures.size()) return ARX_MODEL_BAD_FACE_TEXTURE;
+        geometry::replaceFaceTextures(data_->geometry, textures);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::replaceVertexBones(std::span<const BoneIndex> bones) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (bones.size() != data_->geometry.vertices.size()) return ARX_MODEL_BAD_VERTEX_BONE_COUNT;
+        for (BoneIndex bone : bones) {
+          const ArxReturnCode rc = boneReferenceError(bone, data_->skeleton.bones.size(), ARX_MODEL_BAD_VERTEX_BONE);
+          if (rc != ARX_OK) return rc;
+        }
+        for (std::size_t i = 0; i < bones.size(); ++i)
+          skeleton::setVertexBone(data_->skeleton, static_cast<VertexIndex>(i), bones[i]);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::replaceActionPointBones(std::span<const BoneIndex> bones) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (bones.size() != data_->action_points.points.size()) return ARX_MODEL_BAD_ACTION_POINT_BONE;
+        for (BoneIndex bone : bones) {
+          const ArxReturnCode rc =
+              boneReferenceError(bone, data_->skeleton.bones.size(), ARX_MODEL_BAD_ACTION_POINT_BONE);
+          if (rc != ARX_OK) return rc;
+        }
+        action_points::replaceBoneReferences(data_->action_points, bones);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+std::uint64_t Model::activeSelectionMask() const noexcept { return data_ ? data_->selections.occupied : 0; }
+
+ModelResult<std::uint64_t> Model::selectionMask(SelectionId id) const noexcept {
+  if (!data_)
+    return api_detail::modelFailure<std::uint64_t>(
+        ARX_INVALID_STATE, api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  if (!selections::occupied(data_->selections, id))
+    return api_detail::modelFailure<std::uint64_t>(
+        ARX_INDEX_OUT_OF_RANGE, api_detail::resourceLocation(resourcePath(), ModelElement::kSelection, id));
+  return ModelResult<std::uint64_t>::success(selections::bit(id));
+}
+
+ModelResult<void> Model::replaceVertexSelectionMasks(std::span<const std::uint64_t> masks) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (masks.size() != data_->selections.vertex_masks.size()) return ARX_MODEL_BAD_SELECTION_VERTEX;
+        for (SelectionMask mask : masks)
+          if ((mask & ~data_->selections.occupied) != 0) return ARX_MODEL_BAD_SELECTION_VERTEX;
+        selections::assignVertexMasks(data_->selections, masks);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::replaceBoneSelectionMasks(std::span<const std::uint64_t> masks) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (masks.size() != data_->selections.bone_masks.size()) return ARX_MODEL_BAD_SELECTION_BONE;
+        for (SelectionMask mask : masks)
+          if ((mask & ~data_->selections.occupied) != 0) return ARX_MODEL_BAD_SELECTION_BONE;
+        selections::assignBoneMasks(data_->selections, masks);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+}
+
+ModelResult<void> Model::replaceActionPointSelectionMasks(std::span<const std::uint64_t> masks) noexcept {
+  if (!data_)
+    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
+  return api_detail::modelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (masks.size() != data_->selections.action_point_masks.size()) return ARX_MODEL_BAD_SELECTION_ACTION_POINT;
+        for (SelectionMask mask : masks)
+          if ((mask & ~data_->selections.occupied) != 0) return ARX_MODEL_BAD_SELECTION_ACTION_POINT;
+        selections::assignActionPointMasks(data_->selections, masks);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
 }
 
 ModelResult<void> Model::setBone(BoneIndex index, const ArxModelBone& value) noexcept {
@@ -1337,10 +1638,6 @@ ModelResult<void> Model::removeBone(BoneIndex index) noexcept {
       resourcePath(),
       [&]() -> ArxReturnCode {
         if (!validIndex(index, data_->skeleton.bones.size())) return ARX_INDEX_OUT_OF_RANGE;
-        if (skeleton::referencesBone(data_->skeleton, index) ||
-            action_points::referencesBone(data_->action_points, index) ||
-            selections::leadingVerticesReferenceBone(data_->selections, index))
-          return ARX_MODEL_BONE_IN_USE;
         skeleton::removeBone(data_->skeleton, index);
         selections::removeBoneMask(data_->selections, index);
         action_points::remapBoneIndicesAfterRemoval(data_->action_points, index);
@@ -1348,37 +1645,6 @@ ModelResult<void> Model::removeBone(BoneIndex index) noexcept {
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), ModelElement::kBone, index));
-}
-
-ModelResult<void> Model::replaceSkeleton(const ArxModelSkeletonInput& input) noexcept {
-  if (!data_)
-    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
-                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
-  return api_detail::modelStatusBoundary<void>(
-      resourcePath(),
-      [&]() -> ArxReturnCode {
-        ArxReturnCode rc = model_detail::skeletonError(skeleton::validateBoneCount(input.bone_count));
-        if (rc != ARX_OK) return rc;
-        if (input.bone_count != 0 && input.bones == nullptr) return ARX_INVALID_DATA_POINTER;
-
-        SkeletonData skeleton_data;
-        skeleton_data.bones.resize(input.bone_count);
-        std::vector<SelectionMask> bone_masks(input.bone_count, 0);
-        for (std::size_t i = 0; i < input.bone_count; ++i) {
-          const ArxReturnCode rc = internalBone(input.bones[i], skeleton_data.bones[i]);
-          if (rc != ARX_OK) return rc;
-        }
-
-        skeleton::repairNames(skeleton_data.bones);
-        rc = model_detail::skeletonError(skeleton::validateBones(skeleton_data));
-        if (rc != ARX_OK) return rc;
-        skeleton::replaceBones(data_->skeleton, std::move(skeleton_data.bones));
-        selections::replaceBoneMasks(data_->selections, std::move(bone_masks));
-        action_points::clearBoneReferences(data_->action_points);
-        selections::clearLeadingBoneReferences(data_->selections);
-        return ARX_OK;
-      },
-      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
 }
 
 ModelResult<void> Model::setOrigin(ArxModelOrigin value) noexcept {
@@ -1397,7 +1663,7 @@ ModelResult<void> Model::setOrigin(ArxModelOrigin value) noexcept {
       api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
 }
 
-void Model::clearSkeleton() noexcept {
+void Model::clearBones() noexcept {
   if (!data_) return;
   skeleton::clearBones(data_->skeleton);
   selections::clearBoneMasks(data_->selections);
@@ -1464,34 +1730,6 @@ ModelResult<void> Model::removeActionPoint(ActionPointIndex index) noexcept {
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), ModelElement::kActionPoint, index));
-}
-
-ModelResult<void> Model::replaceActionPoints(const ArxModelActionPointsInput& input) noexcept {
-  if (!data_)
-    return api_detail::modelFailure<void>(ARX_INVALID_STATE,
-                                          api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
-  return api_detail::modelStatusBoundary<void>(
-      resourcePath(),
-      [&]() -> ArxReturnCode {
-        ArxReturnCode rc = model_detail::actionPointError(action_points::validateCount(input.action_point_count));
-        if (rc != ARX_OK) return rc;
-        if (input.action_point_count != 0 && input.action_points == nullptr) return ARX_INVALID_DATA_POINTER;
-
-        ActionPointsData points;
-        points.points.resize(input.action_point_count);
-        std::vector<SelectionMask> action_point_masks(input.action_point_count, 0);
-        for (std::size_t i = 0; i < input.action_point_count; ++i) {
-          const ArxReturnCode rc = internalActionPoint(input.action_points[i], points.points[i]);
-          if (rc != ARX_OK) return rc;
-        }
-
-        rc = model_detail::actionPointError(action_points::validate(points, data_->skeleton.bones.size()));
-        if (rc != ARX_OK) return rc;
-        action_points::replace(data_->action_points, std::move(points));
-        selections::replaceActionPointMasks(data_->selections, std::move(action_point_masks));
-        return ARX_OK;
-      },
-      api_detail::resourceLocation(resourcePath(), ModelElement::kResource));
 }
 
 void Model::clearActionPoints() noexcept {

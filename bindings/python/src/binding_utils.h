@@ -11,12 +11,14 @@
 #include "utils/resource_path.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <filesystem>
 #include <initializer_list>
+#include <limits>
 #include <nanobind/nanobind.h>
 #include <optional>
 #include <span>
@@ -31,6 +33,177 @@
 namespace pistoris::python {
 
 namespace nb = nanobind;
+
+inline std::size_t checkedBufferProduct(std::size_t left, std::size_t right);
+
+// A borrowed view of a native-endian scalar buffer. Bulk operations
+// accept PEP 3118 providers (including ndarray, array.array, and memoryview)
+// without converting through Python scalar objects or allocating a staging
+// vector. Callers keep this object alive for the full duration of the native
+// call.
+class ScalarBufferView {
+ public:
+  ScalarBufferView(nb::handle source, char expected_format, std::size_t expected_item_size, bool writable = false)
+      : expected_item_size_(expected_item_size) {
+    if (PyObject_GetBuffer(source.ptr(), &view_, PyBUF_FORMAT | PyBUF_STRIDES | (writable ? PyBUF_WRITABLE : 0)) < 0) {
+      throw nb::python_error();
+    }
+    acquired_ = true;
+    try {
+      if (view_.itemsize != static_cast<Py_ssize_t>(expected_item_size) || !formatMatches(expected_format)) {
+        throw nb::type_error("buffer has an incompatible dtype or byte order");
+      }
+      if (view_.ndim < 1 || view_.shape == nullptr) throw nb::value_error("buffer must have at least one dimension");
+      if (!PyBuffer_IsContiguous(&view_, 'C')) throw nb::value_error("buffer must be C-contiguous");
+      if (view_.suboffsets != nullptr) {
+        for (int dimension = 0; dimension < view_.ndim; ++dimension) {
+          if (view_.suboffsets[dimension] >= 0) throw nb::value_error("indirect buffers are not supported");
+        }
+      }
+      if (view_.len < 0 || (view_.len != 0 && view_.buf == nullptr) ||
+          view_.len % static_cast<Py_ssize_t>(expected_item_size) != 0) {
+        throw nb::value_error("buffer has an invalid byte length");
+      }
+      size_ = static_cast<std::size_t>(view_.len) / expected_item_size;
+      std::size_t shape_size = 1;
+      for (int dimension = 0; dimension < view_.ndim; ++dimension) {
+        if (view_.shape[dimension] < 0) throw nb::value_error("buffer has an invalid shape");
+        shape_size = checkedBufferProduct(shape_size, static_cast<std::size_t>(view_.shape[dimension]));
+      }
+      if (shape_size != size_) throw nb::value_error("buffer shape does not match its byte length");
+    } catch (...) {
+      PyBuffer_Release(&view_);
+      acquired_ = false;
+      throw;
+    }
+  }
+
+  ScalarBufferView(const ScalarBufferView&) = delete;
+  ScalarBufferView& operator=(const ScalarBufferView&) = delete;
+  ScalarBufferView(ScalarBufferView&&) = delete;
+  ScalarBufferView& operator=(ScalarBufferView&&) = delete;
+
+  ~ScalarBufferView() {
+    if (acquired_) PyBuffer_Release(&view_);
+  }
+
+  [[nodiscard]] const void* data() const noexcept { return view_.buf; }
+  [[nodiscard]] std::size_t size() const noexcept { return size_; }
+  [[nodiscard]] int ndim() const noexcept { return view_.ndim; }
+  template <class T>
+  [[nodiscard]] std::span<const T> asSpan() const {
+    if (sizeof(T) != expected_item_size_) throw nb::type_error("buffer item size does not match requested span type");
+    if (size_ == 0) return {};
+    if (view_.buf != nullptr && reinterpret_cast<std::uintptr_t>(view_.buf) % alignof(T) != 0) {
+      throw nb::value_error("buffer data is not aligned for its dtype");
+    }
+    return {static_cast<const T*>(view_.buf), size_};
+  }
+  [[nodiscard]] Py_ssize_t shape(int dimension) const {
+    if (dimension < 0 || dimension >= view_.ndim) throw nb::value_error("buffer has the wrong number of dimensions");
+    return view_.shape[dimension];
+  }
+
+  template <class T>
+  [[nodiscard]] std::span<T> asWritableSpan() const {
+    if (view_.readonly) throw nb::value_error("output buffer must be writable");
+    const auto values = asSpan<T>();
+    return {const_cast<T*>(values.data()), values.size()};
+  }
+
+  void requireShape(std::initializer_list<Py_ssize_t> expected) const {
+    if (view_.ndim != static_cast<int>(expected.size())) throw nb::value_error("buffer has the wrong shape");
+    int dimension = 0;
+    for (const Py_ssize_t extent : expected) {
+      if (view_.shape[dimension++] != extent) throw nb::value_error("buffer has the wrong shape");
+    }
+  }
+
+  void requireFlatOrShape(std::size_t flat_size, std::initializer_list<Py_ssize_t> expected) const {
+    if (flat_size > static_cast<std::size_t>(std::numeric_limits<Py_ssize_t>::max()))
+      throw nb::value_error("expected buffer length is too large");
+    if (view_.ndim == 1 && view_.shape[0] == static_cast<Py_ssize_t>(flat_size)) return;
+    requireShape(expected);
+  }
+
+  [[nodiscard]] std::size_t tupleCount(std::size_t width) const {
+    if (width == 0) throw nb::value_error("tuple width must be positive");
+    if (ndim() == 1) {
+      if (size_ % width != 0) throw nb::value_error("buffer length does not contain complete tuples");
+      return size_ / width;
+    }
+    if (ndim() != 2 || shape(1) != static_cast<Py_ssize_t>(width)) throw nb::value_error("buffer has the wrong shape");
+    return static_cast<std::size_t>(shape(0));
+  }
+
+ private:
+  [[nodiscard]] bool formatMatches(char expected) const noexcept {
+    if (view_.format == nullptr || view_.format[0] == '\0') return false;
+    const char* format = view_.format;
+    bool format_is_little_endian = std::endian::native == std::endian::little;
+    if (*format == '@' || *format == '=') {
+      ++format;
+    } else if (*format == '<' || *format == '>') {
+      format_is_little_endian = *format == '<';
+      ++format;
+    } else if (*format == '!') {
+      format_is_little_endian = false;
+      ++format;
+    }
+    if (format_is_little_endian != (std::endian::native == std::endian::little)) return false;
+    if (format[1] != '\0') return false;
+    if (format[0] == expected) return true;
+    if (expected == 'I' && format[0] == 'L' && sizeof(unsigned long) == sizeof(std::uint32_t)) return true;
+    // PEP 3118 aliases for native-width scalar formats vary between buffer
+    // providers (notably NumPy's uint64 uses 'L' on some platforms).
+    if (expected == 'Q' && sizeof(unsigned long) == sizeof(std::uint64_t)) return format[0] == 'L';
+    if (expected == 'L' && sizeof(unsigned long long) == sizeof(std::uint64_t)) return format[0] == 'Q';
+    return false;
+  }
+
+  Py_buffer view_{};
+  bool acquired_ = false;
+  std::size_t expected_item_size_ = 0;
+  std::size_t size_ = 0;
+};
+
+inline std::size_t checkedBufferProduct(std::size_t left, std::size_t right) {
+  if (right != 0 && left > std::numeric_limits<std::size_t>::max() / right)
+    throw nb::value_error("buffer dimensions are too large");
+  return left * right;
+}
+
+inline void requireCopyDestinations(std::initializer_list<nb::handle> destinations) {
+  if (std::none_of(destinations.begin(), destinations.end(), [](nb::handle value) { return !value.is_none(); }))
+    throw nb::value_error("copy requires at least one destination buffer");
+}
+
+template <class T>
+class ScalarBufferOutput {
+ public:
+  ScalarBufferOutput(nb::handle destination, std::size_t size, std::initializer_list<Py_ssize_t> shape) {
+    if (destination.is_none()) return;
+    view_.emplace(destination,
+                  std::is_same_v<T, float>             ? 'f'
+                  : sizeof(T) == sizeof(std::uint64_t) ? 'Q'
+                                                       : 'I',
+                  sizeof(T),
+                  true);
+    view_->requireFlatOrShape(size, shape);
+  }
+
+  [[nodiscard]] std::optional<std::span<T>> span() const {
+    return view_ ? std::optional{view_->template asWritableSpan<T>()} : std::nullopt;
+  }
+
+  [[nodiscard]] std::span<T> requiredSpan() const {
+    if (!view_) throw nb::value_error("copy requires a destination buffer");
+    return view_->template asWritableSpan<T>();
+  }
+
+ private:
+  std::optional<ScalarBufferView> view_;
+};
 
 template <class Collection>
 void registerCollectionProtocol(nb::class_<Collection>& binding, const char* protocol_name,

@@ -17,10 +17,12 @@ namespace pistoris::glb_level {
 struct DiscoveredGeometryNode {
   std::size_t node = 0;
   std::size_t room = glb::kInvalidNodeIndex;
+  bool unassigned = false;
 };
 
 struct LevelDiscovery {
   std::vector<std::size_t> rooms;
+  std::vector<std::size_t> void_rooms;
   std::vector<std::size_t> portals;
   std::vector<std::size_t> anchors;
   std::vector<std::size_t> lights;

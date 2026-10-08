@@ -734,8 +734,54 @@ Level state. Do not retain indices across another editing operation.
 
 ### Editing and Generation
 
-Level provides add, set, remove, clear, and replacement operations for all
-authored data. Mesh operations maintain room assignments and corner colors.
+Level and Model expose per-collection geometry replacement through
+`replaceVertices` and `replaceFaces`. C++ accepts borrowed scalar spans; C uses
+pointer/count pairs, with parallel face arrays grouped in `ArxLevelFacesInput`
+or `ArxModelFacesInput`. Counts are scalar counts. Buffers are borrowed only
+until the call returns; failures leave existing state unchanged.
+
+| Input | Scalar layout |
+| --- | --- |
+| Vertex positions | float `3V`, xyz triples |
+| Face vertex indices | uint32 `3F`, triangle indices |
+| Corner UVs | float `6F`, uv pairs |
+| Corner normals | float `9F`, xyz triples |
+| Texture indices | uint32 `F`, existing texture or `ARX_NO_TEXTURE` |
+| Transvals | float `F` |
+| Face normals | float `3F`, or empty to derive |
+| Face flags | uint32 `F`, or empty for zero |
+| Level corner colors | float `9F`, or one RGB triplet broadcast to all corners |
+
+Bulk replacement normalizes supplied finite normals of length greater than
+`1e-4`. Validation requires unit face and corner normals within `1e-4` and does
+not modify them. Stored face normals remain authorable independently of corner
+normals and vertex positions.
+
+Replacement creates new identities even when values are equal. Replacing or
+clearing vertices discards faces and Model vertex bone/selection links.
+Replacing or clearing Level faces discards navigation surfaces, anchors, and
+anchor connections. Bulk-replaced Level faces start with `ARX_NO_ROOM`; assign rooms
+separately with `replaceFaceRooms`. This sentinel is valid during full
+validation. Clearing rooms preserves faces as unassigned and removes portals
+and distances. Clearing textures preserves faces and resets their texture
+links. Texture and room affiliation replacements preserve face identity.
+
+Selections, bones, action points, textures, rooms, and portals use individual
+insertion and clearing. Model selection affiliations have separate uint64 mask
+replacements for vertices, bones, and action points. Each mask may contain only
+occupied selection bits. Bone affiliations take one uint32 index per vertex or
+action point, with `ARX_INVALID_INDEX` meaning unassigned.
+
+Python exposes the same raw collections with destination-only `copy(...)`
+methods. Requested outputs are writable, aligned, native-endian C-contiguous
+buffers of the matching scalar type and count; flat arrays and semantic-shaped
+arrays are both accepted. Each call preflights every output before writing,
+rejects overlapping destinations, and leaves resource state and live
+references unchanged. Pass `None` to skip an output, and request at least one
+output. NumPy is optional; `array.array` and `memoryview` also work. See the
+[Python buffer reference](../bindings/python/README.md#bulk-geometry-buffers)
+for the complete collection and field list.
+
 Every public face exposes a color for each corner. When no lighting has been
 authored, those colors are neutral gray (`0.5, 0.5, 0.5`); this does not expose
 whether the Level uses compact default storage internally. `resetCornerColors`

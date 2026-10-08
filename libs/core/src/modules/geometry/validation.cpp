@@ -128,7 +128,7 @@ Error validateFaces(std::span<const Face> faces, std::span<const Vertex> vertice
       log(ARX_LOG_DEBUG, "Geometry validation: face {} has invalid transval {}", face_index, face.transval);
       return Error::kBadFaceTransval;
     }
-    if (!math::finite(face.normal)) {
+    if (!math::finite(face.normal) || std::abs(math::length(face.normal) - 1.0) > kNormalLengthEpsilon) {
       log(ARX_LOG_DEBUG,
           "Geometry validation: face {} has invalid normal ({}, {}, {})",
           face_index,

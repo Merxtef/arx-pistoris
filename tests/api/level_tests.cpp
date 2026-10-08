@@ -23,16 +23,6 @@ namespace {
 
 ArxStringView view(std::string_view value) { return {value.data(), value.size()}; }
 
-ArxLevelFace triangle() {
-  ArxLevelFace face{};
-  face.corners[0] = {0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f, {}};
-  face.corners[1] = {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f, {}};
-  face.corners[2] = {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f, {}};
-  face.texture = ARX_NO_TEXTURE;
-  face.room = 0;
-  return face;
-}
-
 ArxLevel* makeMinimalLevel() {
   ArxLevel* level = nullptr;
   REQUIRE(arx_pistoris_level_create(&level, nullptr) == ARX_OK);
@@ -41,14 +31,35 @@ ArxLevel* makeMinimalLevel() {
   ArxRoomIndex room_index = ARX_INVALID_INDEX;
   REQUIRE(arx_pistoris_level_add_room(level, &room, &room_index, nullptr) == ARX_OK);
 
-  const std::array<ArxLevelVertex, 3> vertices = {
-      ArxLevelVertex{{0.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{1.0f, 0.0f, 0.0f}},
-      ArxLevelVertex{{0.0f, 0.0f, 1.0f}},
-  };
-  const std::array<ArxLevelFace, 1> faces = {triangle()};
-  const ArxLevelMeshInput mesh{vertices.data(), vertices.size(), faces.data(), faces.size(), nullptr, 0};
-  REQUIRE(arx_pistoris_level_replace_mesh(level, &mesh, nullptr) == ARX_OK);
+  const std::array<float, 9> positions = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f};
+  const std::array<std::uint32_t, 3> vertex_indices = {0, 1, 2};
+  const std::array<float, 6> uvs = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f};
+  const std::array<float, 9> corner_normals = {0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f};
+  const std::array<std::uint32_t, 1> textures = {ARX_NO_TEXTURE};
+  const std::array<float, 1> transvals = {0.0f};
+  const std::array<float, 9> corner_colors = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
+  const std::array<float, 3> face_normals = {0.0f, -1.0f, 0.0f};
+  const std::array<ArxFaceType, 1> flags = {0};
+  const std::array<ArxRoomIndex, 1> rooms = {0};
+  const ArxLevelFacesInput faces{vertex_indices.data(),
+                                 vertex_indices.size(),
+                                 uvs.data(),
+                                 uvs.size(),
+                                 corner_normals.data(),
+                                 corner_normals.size(),
+                                 textures.data(),
+                                 textures.size(),
+                                 transvals.data(),
+                                 transvals.size(),
+                                 corner_colors.data(),
+                                 corner_colors.size(),
+                                 face_normals.data(),
+                                 face_normals.size(),
+                                 flags.data(),
+                                 flags.size()};
+  REQUIRE(arx_pistoris_level_replace_vertices(level, positions.data(), positions.size(), nullptr) == ARX_OK);
+  REQUIRE(arx_pistoris_level_replace_faces(level, &faces, nullptr) == ARX_OK);
+  REQUIRE(arx_pistoris_level_replace_face_rooms(level, rooms.data(), rooms.size(), nullptr) == ARX_OK);
   REQUIRE(arx_pistoris_level_validate(level, nullptr) == ARX_OK);
   return level;
 }
@@ -71,6 +82,72 @@ TEST_SUITE("C Level API") {
     ArxLevelPortalSnapOptions options = ARX_LEVEL_PORTAL_SNAP_OPTIONS_INIT;
     options.radius = 0.0f;
     CHECK(arx_pistoris_level_snap_geometry_to_portals(level, &options, nullptr) == ARX_INVALID_OPTIONS);
+    arx_pistoris_level_destroy(level);
+  }
+
+  TEST_CASE("C raw Level copies preflight grouped outputs") {
+    ArxLevel* level = makeMinimalLevel();
+    std::array<float, 9> positions{};
+    REQUIRE(arx_pistoris_level_copy_vertex_positions(level, positions.data(), positions.size(), nullptr) == ARX_OK);
+    CHECK(positions[3] == doctest::Approx(1.0f));
+    CHECK(arx_pistoris_level_copy_vertex_positions(level, positions.data(), positions.size() - 1U, nullptr) ==
+          ARX_BUFFER_TOO_SMALL);
+    CHECK(arx_pistoris_level_copy_vertex_positions(level, nullptr, positions.size(), nullptr) ==
+          ARX_INVALID_DATA_POINTER);
+
+    std::array<std::uint32_t, 3> indices{};
+    std::array<float, 6> uvs{};
+    ArxLevelFacesOutput faces{};
+    faces.vertex_indices = indices.data();
+    faces.vertex_index_count = indices.size();
+    faces.uvs = uvs.data();
+    faces.uv_count = uvs.size();
+    REQUIRE(arx_pistoris_level_copy_face_data(level, &faces, nullptr) == ARX_OK);
+    CHECK(indices == std::array<std::uint32_t, 3>{0, 1, 2});
+    CHECK(uvs[2] == doctest::Approx(1.0f));
+
+    indices.fill(77);
+    faces.uv_count = uvs.size() - 1U;
+    CHECK(arx_pistoris_level_copy_face_data(level, &faces, nullptr) == ARX_BUFFER_TOO_SMALL);
+    CHECK(indices == std::array<std::uint32_t, 3>{77, 77, 77});
+    faces.uv_count = uvs.size();
+    CHECK(arx_pistoris_level_copy_face_data(level, &faces, nullptr) == ARX_OK);
+
+    ArxLevelFacesOutput no_fields{};
+    CHECK(arx_pistoris_level_copy_face_data(level, &no_fields, nullptr) == ARX_INVALID_OPTIONS);
+    ArxLevelFacesOutput overlapping{};
+    overlapping.vertex_indices = indices.data();
+    overlapping.vertex_index_count = indices.size();
+    overlapping.textures = indices.data();
+    overlapping.texture_count = 1;
+    CHECK(arx_pistoris_level_copy_face_data(level, &overlapping, nullptr) == ARX_INVALID_OPTIONS);
+
+    std::array<ArxTextureIndex, 1> textures{};
+    REQUIRE(arx_pistoris_level_copy_face_textures(level, textures.data(), textures.size(), nullptr) == ARX_OK);
+    CHECK(textures[0] == ARX_NO_TEXTURE);
+    std::array<ArxRoomIndex, 1> rooms{};
+    REQUIRE(arx_pistoris_level_copy_face_rooms(level, rooms.data(), rooms.size(), nullptr) == ARX_OK);
+    CHECK(rooms[0] == 0);
+
+    float zero_distance = 0.0f;
+    ArxPortalIndex zero_portal = 0;
+    ArxLevelRoomDistancesOutput distances{&zero_distance, 0, &zero_portal, 0};
+    REQUIRE(arx_pistoris_level_copy_room_distance_data(level, &distances, nullptr) == ARX_OK);
+    ArxLevelRoomDistancesOutput no_distances{};
+    CHECK(arx_pistoris_level_copy_room_distance_data(level, &no_distances, nullptr) == ARX_INVALID_OPTIONS);
+
+    float zero_position = 0.0f;
+    ArxNavSurfaceVertexIndex zero_index = 0;
+    ArxLevelNavSurfaceOutput no_surface{&zero_position, 0, &zero_index, 0};
+    REQUIRE(arx_pistoris_level_copy_nav_surface_data(level, &no_surface, nullptr) == ARX_OK);
+    ArxLevelNavSurfaceOutput no_surface_fields{};
+    CHECK(arx_pistoris_level_copy_nav_surface_data(level, &no_surface_fields, nullptr) == ARX_INVALID_OPTIONS);
+    float zero_scalar = 0.0f;
+    std::uint32_t zero_flags = 0;
+    ArxLevelAnchorsOutput no_anchors{&zero_position, 0, &zero_scalar, 0, &zero_scalar, 0, &zero_flags, 0};
+    REQUIRE(arx_pistoris_level_copy_anchor_data(level, &no_anchors, nullptr) == ARX_OK);
+    ArxAnchorIndex zero_endpoint = 0;
+    REQUIRE(arx_pistoris_level_copy_anchor_connection_endpoints(level, &zero_endpoint, 0, nullptr) == ARX_OK);
     arx_pistoris_level_destroy(level);
   }
 
@@ -190,14 +267,7 @@ TEST_SUITE("C Level API") {
     CHECK(std::string_view(resource_path.data, resource_path.size) == "graph/levels/level7/level7.dlf");
     CHECK(arx_pistoris_level_set_resource_path(level, view("ambiance:cave"), nullptr) == ARX_LEVEL_BAD_RESOURCE_PATH);
 
-    ArxLevelMeshInput oversized{};
-    oversized.vertex_count = std::numeric_limits<std::size_t>::max();
-    if constexpr (std::numeric_limits<std::size_t>::max() > static_cast<std::size_t>(ARX_INVALID_INDEX))
-      CHECK(arx_pistoris_level_replace_mesh(level, &oversized, nullptr) == ARX_LEVEL_TOO_MANY_VERTICES);
-
-    ArxLevelMeshInput maximum_count{};
-    maximum_count.vertex_count = ARX_INVALID_INDEX;
-    CHECK(arx_pistoris_level_replace_mesh(level, &maximum_count, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_level_replace_vertices(level, nullptr, 1, nullptr) == ARX_INVALID_DATA_POINTER);
 
     char name[] = "room";
     const ArxLevelRoom room{{name, 4}};
@@ -528,8 +598,8 @@ f 1 2 3
 
     ArxLevelPortal portal{};
     portal.name = view("portal");
-    portal.room_1 = 0;
-    portal.room_2 = 1;
+    portal.room_front = 0;
+    portal.room_back = 1;
     portal.shape = ARX_PORTAL_TRIANGLE + 256U;
     portal.vertices[0] = {0.0f, 0.0f, 0.0f};
     portal.vertices[1] = {1.0f, 0.0f, 0.0f};
@@ -574,8 +644,8 @@ f 1 2 3
 
     ArxLevelPortal portal{};
     portal.name = view("portal");
-    portal.room_1 = 0;
-    portal.room_2 = 1;
+    portal.room_front = 0;
+    portal.room_back = 1;
     portal.shape = ARX_PORTAL_TRIANGLE;
     portal.vertices[0] = {0.0f, 0.0f, 0.0f};
     portal.vertices[1] = {1.0f, 0.0f, 0.0f};

@@ -168,6 +168,8 @@ ArxReturnCode arx_pistoris_cinematic_clear_texture_image(ArxCinematic* cinematic
 ArxReturnCode arx_pistoris_cinematic_compact_sounds(ArxCinematic* cinematic, ArxSoundKind kind, size_t* out_removed,
                                                     ArxError* error) noexcept {
   if (!cinematic) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (kind != ARX_SOUND_EFFECT && kind != ARX_SOUND_SPEECH)
+    return pistoris::c_api::publishCode(ARX_INVALID_OPTIONS, error);
   auto result = cinematic->value.compactSounds(static_cast<pistoris::SoundKind>(kind));
   if (!result) return pistoris::c_api::publish(result, error);
   if (out_removed) *out_removed = *result;
@@ -178,6 +180,8 @@ ArxReturnCode arx_pistoris_cinematic_rebase_sound_paths(ArxCinematic* cinematic,
                                                         ArxStringView directory, ArxError* error) noexcept {
   if (!cinematic) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   if (!pistoris::c_api::valid(directory)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (kind != ARX_SOUND_EFFECT && kind != ARX_SOUND_SPEECH)
+    return pistoris::c_api::publishCode(ARX_INVALID_OPTIONS, error);
   return pistoris::c_api::guard(error, [&] {
     auto result = cinematic->value.rebaseSoundPaths(static_cast<pistoris::SoundKind>(kind),
                                                     pistoris::c_api::stringView(directory));
@@ -199,6 +203,8 @@ ArxReturnCode arx_pistoris_cinematic_add_sound(ArxCinematic* cinematic, ArxSound
   if (!cinematic) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   if (!out_sound || !pistoris::c_api::valid(path)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
   *out_sound = ARX_NO_SOUND_HANDLE;
+  if (kind != ARX_SOUND_EFFECT && kind != ARX_SOUND_SPEECH)
+    return pistoris::c_api::publishCode(ARX_INVALID_OPTIONS, error);
   return pistoris::c_api::guard(error, [&]() -> ArxReturnCode {
     auto result = cinematic->value.addSound(static_cast<pistoris::SoundKind>(kind), pistoris::c_api::stringView(path));
     if (!result) return pistoris::c_api::publish(result, error);

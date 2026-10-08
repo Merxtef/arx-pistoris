@@ -234,20 +234,112 @@ ArxReturnCode arx_pistoris_model_clear_texture_image(ArxModel* model, ArxTexture
   return pistoris::c_api::publish(model->value.clearTextureImage(index), error);
 }
 
-ArxReturnCode arx_pistoris_model_replace_mesh(ArxModel* model, const ArxModelMeshInput* mesh,
-                                              ArxError* error) noexcept {
+ArxReturnCode arx_pistoris_model_replace_faces(ArxModel* model, const ArxModelFacesInput* faces,
+                                               ArxError* error) noexcept {
   if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!mesh || (pistoris::c_api::validModelMeshCounts(*mesh) && !pistoris::c_api::valid(*mesh)))
+  if (!faces) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (!pistoris::c_api::valid(faces->vertex_indices, faces->vertex_index_count) ||
+      !pistoris::c_api::valid(faces->uvs, faces->uv_count) ||
+      !pistoris::c_api::valid(faces->corner_normals, faces->corner_normal_count) ||
+      !pistoris::c_api::valid(faces->textures, faces->texture_count) ||
+      !pistoris::c_api::valid(faces->transvals, faces->transval_count) ||
+      !pistoris::c_api::valid(faces->face_normals, faces->face_normal_count) ||
+      !pistoris::c_api::valid(faces->flags, faces->flag_count))
     return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  return pistoris::c_api::publish(model->value.replaceMesh(*mesh), error);
+  return pistoris::c_api::publish(model->value.replaceFaces({faces->vertex_indices, faces->vertex_index_count},
+                                                            {faces->uvs, faces->uv_count},
+                                                            {faces->corner_normals, faces->corner_normal_count},
+                                                            {faces->textures, faces->texture_count},
+                                                            {faces->transvals, faces->transval_count},
+                                                            {faces->face_normals, faces->face_normal_count},
+                                                            {faces->flags, faces->flag_count}),
+                                  error);
 }
 
-ArxReturnCode arx_pistoris_model_clear_mesh(ArxModel* model, ArxError* error) noexcept {
+ArxReturnCode arx_pistoris_model_replace_vertices(ArxModel* model, const float* data, size_t count,
+                                                  ArxError* error) noexcept {
   if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  return pistoris::c_api::guard(error, [&] {
-    model->value.clearMesh();
-    return pistoris::c_api::publishCode(ARX_OK, error);
-  });
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceVertices({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_replace_face_textures(ArxModel* model, const ArxTextureIndex* data, size_t count,
+                                                       ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceFaceTextures({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_replace_vertex_bones(ArxModel* model, const ArxBoneIndex* data, size_t count,
+                                                      ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceVertexBones({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_replace_action_point_bones(ArxModel* model, const ArxBoneIndex* data, size_t count,
+                                                            ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceActionPointBones({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_replace_vertex_selection_masks(ArxModel* model, const ArxSelectionMask* data,
+                                                                size_t count, ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceVertexSelectionMasks({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_replace_bone_selection_masks(ArxModel* model, const ArxSelectionMask* data,
+                                                              size_t count, ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceBoneSelectionMasks({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_replace_action_point_selection_masks(ArxModel* model, const ArxSelectionMask* data,
+                                                                      size_t count, ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(data, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::publish(model->value.replaceActionPointSelectionMasks({data, count}), error);
+}
+
+ArxReturnCode arx_pistoris_model_clear_vertices(ArxModel* model, ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  model->value.clearVertices();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
+ArxReturnCode arx_pistoris_model_clear_faces(ArxModel* model, ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  model->value.clearFaces();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
+ArxReturnCode arx_pistoris_model_clear_textures(ArxModel* model, ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  model->value.clearTextures();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
+ArxReturnCode arx_pistoris_model_active_selection_mask(const ArxModel* model, ArxSelectionMask* out_mask,
+                                                       ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!out_mask) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  *out_mask = model->value.activeSelectionMask();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
+ArxReturnCode arx_pistoris_model_selection_mask(const ArxModel* model, ArxSelectionId id, ArxSelectionMask* out_mask,
+                                                ArxError* error) noexcept {
+  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!out_mask) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  *out_mask = 0;
+  auto result = model->value.selectionMask(id);
+  if (!result) return pistoris::c_api::publish(result, error);
+  *out_mask = *result;
+  return pistoris::c_api::publishCode(ARX_OK, error);
 }
 
 ArxReturnCode arx_pistoris_model_set_bone(ArxModel* model, ArxBoneIndex index, const ArxModelBone* bone,
@@ -274,23 +366,15 @@ ArxReturnCode arx_pistoris_model_remove_bone(ArxModel* model, ArxBoneIndex index
   return pistoris::c_api::publish(model->value.removeBone(index), error);
 }
 
-ArxReturnCode arx_pistoris_model_replace_skeleton(ArxModel* model, const ArxModelSkeletonInput* skeleton,
-                                                  ArxError* error) noexcept {
-  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!skeleton || (pistoris::c_api::validModelSkeletonCount(*skeleton) && !pistoris::c_api::valid(*skeleton)))
-    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  return pistoris::c_api::publish(model->value.replaceSkeleton(*skeleton), error);
-}
-
 ArxReturnCode arx_pistoris_model_set_origin(ArxModel* model, ArxModelOrigin origin, ArxError* error) noexcept {
   if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   return pistoris::c_api::publish(model->value.setOrigin(origin), error);
 }
 
-ArxReturnCode arx_pistoris_model_clear_skeleton(ArxModel* model, ArxError* error) noexcept {
+ArxReturnCode arx_pistoris_model_clear_bones(ArxModel* model, ArxError* error) noexcept {
   if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   return pistoris::c_api::guard(error, [&] {
-    model->value.clearSkeleton();
+    model->value.clearBones();
     return pistoris::c_api::publishCode(ARX_OK, error);
   });
 }
@@ -318,14 +402,6 @@ ArxReturnCode arx_pistoris_model_remove_action_point(ArxModel* model, ArxActionP
                                                      ArxError* error) noexcept {
   if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   return pistoris::c_api::publish(model->value.removeActionPoint(index), error);
-}
-
-ArxReturnCode arx_pistoris_model_replace_action_points(ArxModel* model, const ArxModelActionPointsInput* points,
-                                                       ArxError* error) noexcept {
-  if (!model) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!points || (pistoris::c_api::validModelActionPointCount(*points) && !pistoris::c_api::valid(*points)))
-    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  return pistoris::c_api::publish(model->value.replaceActionPoints(*points), error);
 }
 
 ArxReturnCode arx_pistoris_model_clear_action_points(ArxModel* model, ArxError* error) noexcept {

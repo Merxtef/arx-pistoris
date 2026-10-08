@@ -53,11 +53,13 @@ enum class LevelValidation : std::uint32_t {
   kPaths = 1U << 16,
   kMinimap = 1U << 17,
   kLoadingScreen = 1U << 18,
+  kEffectiveBounds = 1U << 19,
 };
 
 struct LevelDerivedState {
   std::optional<ArxAabb> bounds;
   std::optional<ArxAabb> referenced_bounds;
+  std::optional<ArxAabb> effective_bounds;
 };
 
 struct LevelValidationState {

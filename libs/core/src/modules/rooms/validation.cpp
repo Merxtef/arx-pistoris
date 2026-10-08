@@ -47,20 +47,17 @@ Error validatePortalDefinition(const Portal& portal) {
 Error validateRoom(const Room& room) noexcept { return isIdentifier(room.name) ? Error::kNone : Error::kBadRoomName; }
 
 Error validateRoomCount(std::size_t count) noexcept {
-  if (count == 0) return Error::kNoRooms;
   return count > static_cast<std::size_t>(kInvalidRoomIndex) ? Error::kTooManyRooms : Error::kNone;
 }
 
 Error validateRoomRemoval(const RoomsData& rooms, RoomIndex index) noexcept {
   if (static_cast<std::size_t>(index) >= rooms.definitions.size()) return Error::kBadIndex;
-  for (RoomIndex room : rooms.face_rooms)
-    if (room == index) return Error::kBadFaceRoomIndex;
   return Error::kNone;
 }
 
 Error validateFaceRoomIndices(std::span<const RoomIndex> face_rooms, std::size_t room_count) noexcept {
   for (RoomIndex room : face_rooms)
-    if (room >= room_count) return Error::kBadFaceRoomIndex;
+    if (room != kNoRoom && room >= room_count) return Error::kBadFaceRoomIndex;
   return Error::kNone;
 }
 
@@ -71,10 +68,6 @@ Error validateRoomDefinitions(const RoomsData& rooms) {
         rooms.definitions.size(),
         static_cast<std::size_t>(kInvalidRoomIndex));
     return Error::kTooManyRooms;
-  }
-  if (rooms.definitions.empty()) {
-    log(ARX_LOG_DEBUG, "Room validation: no rooms");
-    return Error::kNoRooms;
   }
   std::unordered_set<std::string_view> names;
   names.reserve(rooms.definitions.size());
@@ -104,7 +97,7 @@ Error validateFaceRooms(std::span<const RoomIndex> face_rooms, std::size_t face_
   const Error error = validateFaceRoomIndices(face_rooms, room_count);
   if (error == Error::kNone) return Error::kNone;
   for (std::size_t face = 0; face < face_rooms.size(); ++face) {
-    if (face_rooms[face] < room_count) continue;
+    if (face_rooms[face] == kNoRoom || face_rooms[face] < room_count) continue;
     log(ARX_LOG_DEBUG,
         "Room validation: face {} references room {} with room count {}",
         face,

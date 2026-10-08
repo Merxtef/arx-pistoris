@@ -40,7 +40,6 @@
 #include "topology.h"
 #include "utils/identifier.h"
 #include "utils/log.h"
-#include "utils/math/bounds.h"
 #include "utils/math/mat4.h"
 #include "zones.h"
 
@@ -76,24 +75,6 @@ using glb_level_import::navSurfaceComponents;
 using glb_level_import::readGeometryPrimitive;
 using glb_level_import::detail::logLevelObjectFailure;
 using glb_level_import::detail::nodeName;
-
-ArxAabb referencedGeometryBounds(const LevelModules& level) {
-  ArxAabb bounds{};
-  bool initialized = false;
-  for (const Face& face : level.geometry.faces) {
-    for (const Corner& corner : face.corners) {
-      const ArxVector3& position = level.geometry.vertices[corner.vertex].position;
-      if (!initialized) {
-        bounds.min = position;
-        bounds.max = position;
-        initialized = true;
-      } else {
-        math::expand(bounds, position);
-      }
-    }
-  }
-  return bounds;
-}
 
 void logWarnings(const ImportWarnings& diagnostics) {
   if (diagnostics.regenerated_normals != 0 || diagnostics.normalized_normals != 0 || diagnostics.discarded_faces != 0 ||
@@ -241,7 +222,7 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
     logLevelObjectFailure("fog import", rc);
     return rc;
   }
-  const bool has_explicit_rooms = !discovery.rooms.empty();
+  const bool has_explicit_rooms = !discovery.rooms.empty() || !discovery.void_rooms.empty();
   const bool has_reserved_portals = !discovery.portals.empty();
 
   auto add_room = [&](std::string name, std::uint32_t& out_room) -> ArxReturnCode {
@@ -291,6 +272,17 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
       return rc;
     }
     rooms_by_node[node_index] = room;
+  }
+
+  for (std::size_t node_index : discovery.void_rooms) {
+    const cgltf_node& node = data.nodes[node_index];
+    const std::string_view name = nodeName(node);
+    glb::setFailureLocation(failure,
+                            glb::failureLocation(GlbElement::kNode, node_index, kNoElementIndex, name, "void room"));
+    glb::ParsedLabel label;
+    if (node.camera != nullptr || node.light != nullptr || !glb_level::isVoidRoomRootName(name, &label))
+      return ARX_GLB_BAD_LEVEL_ROOM;
+    glb::reportConventionLabel("GLB -> Level void room", name, label);
   }
 
   auto import_geometry_node =
@@ -362,6 +354,12 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
 
   if (has_explicit_rooms) {
     for (const glb_level::DiscoveredGeometryNode& geometry : discovery.geometry) {
+      if (geometry.unassigned) {
+        rc = import_geometry_node(
+            data.nodes[geometry.node], geometry.node, nodeName(data.nodes[geometry.node]), kNoRoom);
+        if (rc != ARX_OK) return rc;
+        continue;
+      }
       if (geometry.room == glb::kInvalidNodeIndex || geometry.room >= rooms_by_node.size() ||
           rooms_by_node[geometry.room] == kInvalidRoomIndex) {
         log(ARX_LOG_DEBUG,
@@ -564,7 +562,7 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
   if (!glb::makeTexturePathsUnique(tmp.textures.textures, "GLB -> Level")) return ARX_GLB_BAD_LEVEL_MATERIAL;
   diagnostics.discarded_vertices = compactLevelVertices(tmp);
   if (!pending_zones.empty()) {
-    const ArxAabb zone_bounds = referencedGeometryBounds(tmp);
+    const ArxAabb zone_bounds = rooms::effectiveGeometryBounds(tmp.geometry, tmp.rooms.face_rooms).value_or(ArxAabb{});
     tmp.scene.zones = glb_level::finalizeImportedZones(std::move(pending_zones), zone_bounds);
   }
   const std::size_t repaired_portals = rooms::repairPortalNames(tmp.rooms.portals);
@@ -582,7 +580,7 @@ ArxReturnCode importLevelFromGlb(std::span<const std::uint8_t> bytes, LevelModul
       failure, glb::failureLocation(GlbElement::kDocument, kNoElementIndex, kNoElementIndex, {}, "placement"));
   rc = glb_level::applyGlbImportPlacement(tmp, options, import_info);
   if (rc != ARX_OK) return rc;
-  ArxAabb bounds = referencedGeometryBounds(tmp);
+  const ArxAabb bounds = rooms::effectiveGeometryBounds(tmp.geometry, tmp.rooms.face_rooms).value_or(ArxAabb{});
   std::size_t outside_geometry_anchors = 0;
   for (std::size_t anchor_index = 0; anchor_index < tmp.navigation.anchors.size(); ++anchor_index) {
     const Anchor& anchor = tmp.navigation.anchors[anchor_index];

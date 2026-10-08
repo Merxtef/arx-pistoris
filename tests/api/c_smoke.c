@@ -10,7 +10,7 @@ _Static_assert(sizeof(ArxVector2) == 8, "ArxVector2 ABI mismatch");
 _Static_assert(sizeof(ArxVector3) == 12, "ArxVector3 ABI mismatch");
 _Static_assert(sizeof(ArxResourceKind) == 1, "ArxResourceKind ABI mismatch");
 _Static_assert(sizeof(ArxLevelCorner) == 36, "ArxLevelCorner ABI mismatch");
-_Static_assert(sizeof(ArxLevelFace) == 124, "ArxLevelFace ABI mismatch");
+_Static_assert(sizeof(ArxLevelFace) == 136, "ArxLevelFace ABI mismatch");
 _Static_assert(offsetof(ArxLevelFace, texture) == 108, "ArxLevelFace ABI mismatch");
 _Static_assert(sizeof(ArxLevelNavSurfaceTriangle) == 12, "ArxLevelNavSurfaceTriangle ABI mismatch");
 _Static_assert((ARX_LEVEL_FACE_BITS_ALL & ARX_FACE_BIT_QUAD) == 0, "Level face mask includes QUAD");
@@ -108,6 +108,7 @@ int main(void) {
     }
 
     ArxLevelFace face = {0};
+    face.normal.y = -1.0f;
     for (ArxVertexIndex corner = 0; corner < 3; ++corner) {
       face.corners[corner].vertex = corner;
       face.corners[corner].normal.y = -1.0f;
@@ -132,8 +133,8 @@ int main(void) {
     ArxLevelPortal portal = {0};
     portal.name.data = name;
     portal.name.size = sizeof(name) - 1;
-    portal.room_1 = 0;
-    portal.room_2 = 1;
+    portal.room_front = 0;
+    portal.room_back = 1;
     portal.shape = ARX_PORTAL_TRIANGLE;
     portal.vertices[0] = (ArxVector3){0.0f, 0.0f, 0.0f};
     portal.vertices[1] = (ArxVector3){1.0f, 0.0f, 0.0f};

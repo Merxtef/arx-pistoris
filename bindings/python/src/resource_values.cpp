@@ -931,9 +931,11 @@ void bindLevelValues(nb::module_& module) {
                        const std::optional<std::string>& texture,
                        const std::optional<std::string>& room,
                        FaceTypeBitmask flags,
-                       float transval) {
+                       float transval,
+                       const std::optional<ArxVector3>& normal) {
              auto* value = new LevelFace;
              if (corners) value->corners = *corners;
+             value->normal = normal;
              value->texture = canonicalOptionalResourcePath(texture);
              value->room = canonicalOptionalIdentifier(room);
              value->flags = flags;
@@ -945,7 +947,8 @@ void bindLevelValues(nb::module_& module) {
            nb::arg("texture") = nb::none(),
            nb::arg("room") = nb::none(),
            nb::arg("flags") = static_cast<FaceTypeBitmask>(0),
-           nb::arg("transval") = 0.0f)
+           nb::arg("transval") = 0.0f,
+           nb::arg("normal") = nb::none())
       .def_prop_rw(
           "corners",
           [](nb::pointer_and_handle<LevelFace> value) {
@@ -970,6 +973,10 @@ void bindLevelValues(nb::module_& module) {
           "flags",
           [](const LevelFace& value) { return static_cast<FaceTypeBitmask>(value.flags); },
           [](LevelFace& value, FaceTypeBitmask flags) { value.flags = flags; })
+      .def_prop_rw(
+          "normal",
+          [](const LevelFace& value) { return value.normal.value_or(levelFaceNormal(value)); },
+          [](LevelFace& value, ArxVector3 normal) { value.normal = normal; })
       .def_rw("transval", &LevelFace::transval);
   nb::class_<LevelRoomDistanceValue>(module, "LevelRoomDistance")
       .def(nb::new_([](float distance,
@@ -1088,23 +1095,23 @@ void bindLevelValues(nb::module_& module) {
   auto portal = nb::class_<LevelPortal>(module, "LevelPortal");
   portal
       .def(nb::new_([](const std::string& name,
-                       const std::optional<std::string>& room_1,
-                       const std::optional<std::string>& room_2,
+                       const std::optional<std::string>& room_front,
+                       const std::optional<std::string>& room_back,
                        PortalShape shape,
                        std::array<ArxVector3, 4>
                            vertices) {
              auto* value = new LevelPortal;
              value->name = canonicalIdentifier(name);
-             value->room_1 = canonicalOptionalIdentifier(room_1);
-             value->room_2 = canonicalOptionalIdentifier(room_2);
+             value->room_front = canonicalOptionalIdentifier(room_front);
+             value->room_back = canonicalOptionalIdentifier(room_back);
              value->shape = static_cast<ArxPortalShape>(shape);
              value->vertices = vertices;
              return value;
            }),
            nb::kw_only(),
            nb::arg("name") = "",
-           nb::arg("room_1") = nb::none(),
-           nb::arg("room_2") = nb::none(),
+           nb::arg("room_front") = nb::none(),
+           nb::arg("room_back") = nb::none(),
            nb::arg("shape") = PortalShape::kQuad,
            nb::arg("vertices") = std::array<ArxVector3, 4>{})
       .def_prop_rw(
@@ -1112,16 +1119,16 @@ void bindLevelValues(nb::module_& module) {
           [](const LevelPortal& value) { return value.name; },
           [](LevelPortal& value, std::string_view name) { value.name = canonicalIdentifier(name); })
       .def_prop_rw(
-          "room_1",
-          [](const LevelPortal& value) { return value.room_1; },
+          "room_front",
+          [](const LevelPortal& value) { return value.room_front; },
           [](LevelPortal& value, const std::optional<std::string>& room) {
-            value.room_1 = canonicalOptionalIdentifier(room);
+            value.room_front = canonicalOptionalIdentifier(room);
           })
       .def_prop_rw(
-          "room_2",
-          [](const LevelPortal& value) { return value.room_2; },
+          "room_back",
+          [](const LevelPortal& value) { return value.room_back; },
           [](LevelPortal& value, const std::optional<std::string>& room) {
-            value.room_2 = canonicalOptionalIdentifier(room);
+            value.room_back = canonicalOptionalIdentifier(room);
           })
       .def_prop_rw(
           "shape",

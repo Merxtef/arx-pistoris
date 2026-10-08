@@ -391,7 +391,7 @@ ArxReturnCode arx_pistoris_model_validate(const ArxModel* model, ArxError* error
     return pistoris::c_api::publish(result, error);                                                   \
   }
 
-ARX_MODEL_VALIDATE(mesh, validateMesh)
+ARX_MODEL_VALIDATE(geometry, validateGeometry)
 ARX_MODEL_VALIDATE(skeleton, validateSkeleton)
 ARX_MODEL_VALIDATE(action_points, validateActionPoints)
 ARX_MODEL_VALIDATE(selections, validateSelections)

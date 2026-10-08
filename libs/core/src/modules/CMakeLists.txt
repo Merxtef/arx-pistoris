@@ -27,6 +27,7 @@ arx_add_internal_object_library(arx_pistoris_module_cinematic
 
 arx_add_internal_object_library(arx_pistoris_module_geometry
   geometry/adjacency.cpp
+  geometry/bulk.cpp
   geometry/index.cpp
   geometry/operations.cpp
   geometry/position_index.cpp

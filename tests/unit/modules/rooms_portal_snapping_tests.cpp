@@ -33,6 +33,7 @@ GeometryData makeGeometry(const std::vector<ArxVector3>& positions, std::vector<
   result.vertices.reserve(positions.size());
   for (const ArxVector3& position : positions) result.vertices.push_back({position});
   result.faces = std::move(faces);
+  for (Face& source : result.faces) source.normal = geometry::faceNormalOr(result, source, {});
   return result;
 }
 
@@ -65,7 +66,7 @@ TEST_SUITE("rooms::portal_snapping") {
     REQUIRE(rooms::snapGeometryToPortals(mesh, room_data, {.radius = 0.5f}, &statistics) == rooms::Error::kNone);
     CHECK(mesh.vertices[0].position == ArxVector3{0.0f, 0.5f, 0.5f});
     CHECK(mesh.vertices[1].position == ArxVector3{2.0f, 0.0f, 0.0f});
-    CHECK(mesh.faces[0].normal == geometry::faceNormalOr(mesh, mesh.faces[0], {}));
+    CHECK(mesh.faces[0].normal == ArxVector3{1.0f, 0.0f, 0.0f});
     CHECK(statistics.candidates == 1);
     CHECK(statistics.snapped == 1);
   }
@@ -240,7 +241,8 @@ TEST_SUITE("rooms::portal_snapping") {
   }
 
   TEST_CASE("Rejects invalid face references without partial output") {
-    GeometryData mesh = makeGeometry({{0.1f, 0.5f, 0.5f}, {2.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 0.0f}}, {face(0, 1, 3)});
+    GeometryData mesh = makeGeometry({{0.1f, 0.5f, 0.5f}, {2.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 0.0f}}, {face(0, 1, 2)});
+    mesh.faces[0].corners[2].vertex = 3;
     const GeometryData original = mesh;
     rooms::PortalSnapStatistics statistics{.candidates = 7};
 
@@ -248,5 +250,17 @@ TEST_SUITE("rooms::portal_snapping") {
           rooms::Error::kBadFaceVertex);
     CHECK(mesh.vertices[0].position == original.vertices[0].position);
     CHECK(statistics.candidates == 7);
+  }
+
+  TEST_CASE("Ignores unassigned faces when collecting portal snap candidates") {
+    GeometryData mesh = makeGeometry({{0.1f, 0.5f, 0.5f}, {2.0f, 0.0f, 0.0f}, {2.0f, 1.0f, 0.0f}}, {face(0, 1, 2)});
+    const GeometryData original = mesh;
+    rooms::PortalSnapStatistics statistics;
+
+    REQUIRE(rooms::snapGeometryToPortals(
+                mesh, makeRooms({portalAtX(0.0f)}, {kNoRoom}), {.radius = 0.5f}, &statistics) == rooms::Error::kNone);
+    CHECK(mesh.vertices[0].position == original.vertices[0].position);
+    CHECK(statistics.candidates == 0);
+    CHECK(statistics.snapped == 0);
   }
 }

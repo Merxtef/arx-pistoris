@@ -29,12 +29,6 @@ bool validWeldOptions(const ArxLevelVertexWeldOptions& options) noexcept {
   return valid_metric && valid_policy;
 }
 
-bool validMeshCounts(const ArxLevelMeshInput& mesh) noexcept {
-  return mesh.vertex_count <= static_cast<std::size_t>(pistoris::kInvalidVertexIndex) &&
-         mesh.face_count <= static_cast<std::size_t>(pistoris::kInvalidFaceIndex) &&
-         mesh.texture_count <= static_cast<std::size_t>(pistoris::kNoTexture);
-}
-
 template <class Result, class T>
 ArxReturnCode publishValue(Result&& result, T& out, ArxError* error) {
   if (!result) return pistoris::c_api::publish(result, error);
@@ -260,32 +254,76 @@ ArxReturnCode arx_pistoris_level_reset_corner_colors(ArxLevel* level, ArxError* 
   });
 }
 
-ArxReturnCode arx_pistoris_level_replace_mesh(ArxLevel* level, const ArxLevelMeshInput* mesh,
-                                              ArxError* error) noexcept {
+ArxReturnCode arx_pistoris_level_replace_vertices(ArxLevel* level, const float* positions, size_t position_count,
+                                                  ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!mesh) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  const bool counts_valid = validMeshCounts(*mesh);
-  if (counts_valid && (!pistoris::c_api::valid(mesh->vertices, mesh->vertex_count) ||
-                       !pistoris::c_api::valid(mesh->faces, mesh->face_count) ||
-                       !pistoris::c_api::valid(mesh->textures, mesh->texture_count)))
+  if (!pistoris::c_api::valid(positions, position_count))
     return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  if (counts_valid) {
-    for (std::size_t i = 0; i < mesh->texture_count; ++i) {
-      if (!pistoris::c_api::valid(mesh->textures[i]))
-        return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-    }
-  }
-
-  return pistoris::c_api::guard(error,
-                                [&] { return pistoris::c_api::publish(level->value.replaceMesh(*mesh), error); });
+  return pistoris::c_api::guard(error, [&] {
+    return pistoris::c_api::publish(level->value.replaceVertices(std::span(positions, position_count)), error);
+  });
 }
 
-ArxReturnCode arx_pistoris_level_clear_mesh(ArxLevel* level, ArxError* error) noexcept {
+ArxReturnCode arx_pistoris_level_clear_vertices(ArxLevel* level, ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   return pistoris::c_api::guard(error, [&] {
-    level->value.clearMesh();
+    level->value.clearVertices();
     return pistoris::c_api::publishCode(ARX_OK, error);
   });
+}
+
+ArxReturnCode arx_pistoris_level_replace_faces(ArxLevel* level, const ArxLevelFacesInput* faces,
+                                               ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!faces || !pistoris::c_api::valid(faces->vertex_indices, faces->vertex_index_count) ||
+      !pistoris::c_api::valid(faces->uvs, faces->uv_count) ||
+      !pistoris::c_api::valid(faces->corner_normals, faces->corner_normal_count) ||
+      !pistoris::c_api::valid(faces->textures, faces->texture_count) ||
+      !pistoris::c_api::valid(faces->transvals, faces->transval_count) ||
+      !pistoris::c_api::valid(faces->corner_colors, faces->corner_color_count) ||
+      !pistoris::c_api::valid(faces->face_normals, faces->face_normal_count) ||
+      !pistoris::c_api::valid(faces->flags, faces->flag_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::guard(error, [&] {
+    const auto result = level->value.replaceFaces(std::span(faces->vertex_indices, faces->vertex_index_count),
+                                                  std::span(faces->uvs, faces->uv_count),
+                                                  std::span(faces->corner_normals, faces->corner_normal_count),
+                                                  std::span(faces->textures, faces->texture_count),
+                                                  std::span(faces->transvals, faces->transval_count),
+                                                  std::span(faces->corner_colors, faces->corner_color_count),
+                                                  std::span(faces->face_normals, faces->face_normal_count),
+                                                  std::span(faces->flags, faces->flag_count));
+    return pistoris::c_api::publish(result, error);
+  });
+}
+
+ArxReturnCode arx_pistoris_level_clear_faces(ArxLevel* level, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  level->value.clearFaces();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
+ArxReturnCode arx_pistoris_level_clear_textures(ArxLevel* level, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  level->value.clearTextures();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
+ArxReturnCode arx_pistoris_level_replace_face_textures(ArxLevel* level, const ArxTextureIndex* textures, size_t count,
+                                                       ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(textures, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::guard(error, [&] {
+    return pistoris::c_api::publish(level->value.replaceFaceTextures(std::span(textures, count)), error);
+  });
+}
+
+ArxReturnCode arx_pistoris_level_replace_face_rooms(ArxLevel* level, const ArxRoomIndex* rooms, size_t count,
+                                                    ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(rooms, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::guard(
+      error, [&] { return pistoris::c_api::publish(level->value.replaceFaceRooms(std::span(rooms, count)), error); });
 }
 
 ArxReturnCode arx_pistoris_level_set_room(ArxLevel* level, ArxRoomIndex index, const ArxLevelRoom* room,
@@ -308,6 +346,12 @@ ArxReturnCode arx_pistoris_level_add_room(ArxLevel* level, const ArxLevelRoom* r
 ArxReturnCode arx_pistoris_level_remove_room(ArxLevel* level, ArxRoomIndex index, ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   return pistoris::c_api::guard(error, [&] { return pistoris::c_api::publish(level->value.removeRoom(index), error); });
+}
+
+ArxReturnCode arx_pistoris_level_clear_rooms(ArxLevel* level, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  level->value.clearRooms();
+  return pistoris::c_api::publishCode(ARX_OK, error);
 }
 
 ArxReturnCode arx_pistoris_level_set_portal(ArxLevel* level, ArxPortalIndex index, const ArxLevelPortal* portal,
@@ -339,6 +383,12 @@ ArxReturnCode arx_pistoris_level_flatten_portals(ArxLevel* level, ArxError* erro
   return pistoris::c_api::guard(error, [&] { return pistoris::c_api::publish(level->value.flattenPortals(), error); });
 }
 
+ArxReturnCode arx_pistoris_level_clear_portals(ArxLevel* level, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  level->value.clearPortals();
+  return pistoris::c_api::publishCode(ARX_OK, error);
+}
+
 ArxReturnCode arx_pistoris_level_set_room_distance(ArxLevel* level, const ArxLevelRoomDistance* distance,
                                                    ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
@@ -347,12 +397,18 @@ ArxReturnCode arx_pistoris_level_set_room_distance(ArxLevel* level, const ArxLev
       error, [&] { return pistoris::c_api::publish(level->value.setRoomDistance(*distance), error); });
 }
 
-ArxReturnCode arx_pistoris_level_replace_room_distances(ArxLevel* level, const ArxLevelRoomDistance* distances,
-                                                        size_t count, ArxError* error) noexcept {
+ArxReturnCode arx_pistoris_level_replace_room_distances(ArxLevel* level, const float* distances, size_t distance_count,
+                                                        const ArxPortalIndex* endpoint_portals,
+                                                        size_t endpoint_portal_count, ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!pistoris::c_api::valid(distances, count)) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  if (!pistoris::c_api::valid(distances, distance_count) ||
+      !pistoris::c_api::valid(endpoint_portals, endpoint_portal_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
   return pistoris::c_api::guard(error, [&] {
-    return pistoris::c_api::publish(level->value.replaceRoomDistances(std::span(distances, count)), error);
+    return pistoris::c_api::publish(
+        level->value.replaceRoomDistances(std::span(distances, distance_count),
+                                          std::span(endpoint_portals, endpoint_portal_count)),
+        error);
   });
 }
 
@@ -414,16 +470,34 @@ ArxReturnCode arx_pistoris_level_remove_anchor_connection(ArxLevel* level, ArxAn
 ArxReturnCode arx_pistoris_level_replace_anchors(ArxLevel* level, const ArxLevelAnchorsInput* anchors,
                                                  ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!anchors || !pistoris::c_api::valid(anchors->anchors, anchors->anchor_count) ||
-      !pistoris::c_api::valid(anchors->connections, anchors->connection_count))
+  if (!anchors || !pistoris::c_api::valid(anchors->positions, anchors->position_count) ||
+      !pistoris::c_api::valid(anchors->radii, anchors->radius_count) ||
+      !pistoris::c_api::valid(anchors->heights, anchors->height_count) ||
+      !pistoris::c_api::valid(anchors->flags, anchors->flag_count))
     return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  for (std::size_t i = 0; i < anchors->anchor_count; ++i) {
-    if (!pistoris::c_api::valid(anchors->anchors[i]))
-      return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  }
+  return pistoris::c_api::guard(error, [&] {
+    return pistoris::c_api::publish(level->value.replaceAnchors(std::span(anchors->positions, anchors->position_count),
+                                                                std::span(anchors->radii, anchors->radius_count),
+                                                                std::span(anchors->heights, anchors->height_count),
+                                                                std::span(anchors->flags, anchors->flag_count)),
+                                    error);
+  });
+}
 
-  return pistoris::c_api::guard(error,
-                                [&] { return pistoris::c_api::publish(level->value.replaceAnchors(*anchors), error); });
+ArxReturnCode arx_pistoris_level_replace_anchor_connections(ArxLevel* level, const ArxAnchorIndex* endpoints,
+                                                            size_t endpoint_count, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  if (!pistoris::c_api::valid(endpoints, endpoint_count))
+    return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
+  return pistoris::c_api::guard(error, [&] {
+    return pistoris::c_api::publish(level->value.replaceAnchorConnections(std::span(endpoints, endpoint_count)), error);
+  });
+}
+
+ArxReturnCode arx_pistoris_level_clear_anchor_connections(ArxLevel* level, ArxError* error) noexcept {
+  if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
+  level->value.clearAnchorConnections();
+  return pistoris::c_api::publishCode(ARX_OK, error);
 }
 
 ArxReturnCode arx_pistoris_level_clear_anchors(ArxLevel* level, ArxError* error) noexcept {
@@ -437,11 +511,15 @@ ArxReturnCode arx_pistoris_level_clear_anchors(ArxLevel* level, ArxError* error)
 ArxReturnCode arx_pistoris_level_set_nav_surface(ArxLevel* level, const ArxLevelNavSurfaceInput* surface,
                                                  ArxError* error) noexcept {
   if (!level) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  if (!surface || !pistoris::c_api::valid(surface->vertices, surface->vertex_count) ||
-      !pistoris::c_api::valid(surface->triangles, surface->triangle_count))
+  if (!surface || !pistoris::c_api::valid(surface->positions, surface->position_count) ||
+      !pistoris::c_api::valid(surface->triangle_indices, surface->triangle_index_count))
     return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  return pistoris::c_api::guard(error,
-                                [&] { return pistoris::c_api::publish(level->value.setNavSurface(*surface), error); });
+  return pistoris::c_api::guard(error, [&] {
+    return pistoris::c_api::publish(
+        level->value.setNavSurface(std::span(surface->positions, surface->position_count),
+                                   std::span(surface->triangle_indices, surface->triangle_index_count)),
+        error);
+  });
 }
 
 ArxReturnCode arx_pistoris_level_clear_nav_surface(ArxLevel* level, ArxError* error) noexcept {

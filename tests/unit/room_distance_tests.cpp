@@ -111,13 +111,13 @@ pistoris::Level makePublicLevel(const pistoris::LevelModules& src) {
     REQUIRE(test::addRoom(level, room) == expected);
   }
 
-  test::MeshSnapshot mesh;
+  test::GeometrySnapshot mesh;
   mesh.vertices = src.geometry.vertices;
   mesh.faces = src.geometry.faces;
   mesh.textures = src.textures.textures;
   mesh.face_rooms = src.rooms.face_rooms;
   mesh.corner_colors = src.lighting.corner_colors;
-  REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+  REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
   for (const pistoris::Portal& portal : src.rooms.portals) {
     const pistoris::PortalIndex expected = static_cast<pistoris::PortalIndex>(level.portalCount());

@@ -64,9 +64,9 @@ ArxReturnCode arx_pistoris_cinematic_sound_count(const ArxCinematic* cinematic, 
                                                  ArxError* error) noexcept {
   if (!cinematic) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
   if (!out_count) return pistoris::c_api::publishCode(ARX_INVALID_DATA_POINTER, error);
-  const auto cpp_kind = static_cast<pistoris::SoundKind>(kind);
-  if (cpp_kind != pistoris::SoundKind::kEffect && cpp_kind != pistoris::SoundKind::kSpeech)
+  if (kind != ARX_SOUND_EFFECT && kind != ARX_SOUND_SPEECH)
     return pistoris::c_api::publishCode(ARX_INVALID_OPTIONS, error);
+  const auto cpp_kind = static_cast<pistoris::SoundKind>(kind);
   *out_count = cinematic->value.soundCount(cpp_kind);
   return pistoris::c_api::publishCode(ARX_OK, error);
 }
@@ -109,9 +109,9 @@ ArxReturnCode arx_pistoris_cinematic_copy_sound_views(const ArxCinematic* cinema
                                                       size_t count, ArxCinematicSoundView* out_values,
                                                       ArxError* error) noexcept {
   if (!cinematic) return pistoris::c_api::publishCode(ARX_INVALID_HANDLE, error);
-  const auto cpp_kind = static_cast<pistoris::SoundKind>(kind);
-  if (cpp_kind != pistoris::SoundKind::kEffect && cpp_kind != pistoris::SoundKind::kSpeech)
+  if (kind != ARX_SOUND_EFFECT && kind != ARX_SOUND_SPEECH)
     return pistoris::c_api::publishCode(ARX_INVALID_OPTIONS, error);
+  const auto cpp_kind = static_cast<pistoris::SoundKind>(kind);
   const pistoris::Cinematic::SoundsView values = cinematic->value.sounds(cpp_kind);
   if (offset > values.size() || count > values.size() - offset)
     return pistoris::c_api::publishCode(ARX_INDEX_OUT_OF_RANGE, error);

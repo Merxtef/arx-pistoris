@@ -208,7 +208,7 @@ ARX_API ArxReturnCode arx_pistoris_model_bake_native(const ArxModel* model, cons
 // --- Validation ---
 
 ARX_API ArxReturnCode arx_pistoris_model_validate(const ArxModel* model, ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_validate_mesh(const ArxModel* model, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_validate_geometry(const ArxModel* model, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_validate_skeleton(const ArxModel* model, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_validate_action_points(const ArxModel* model, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_validate_selections(const ArxModel* model, ArxError* error) ARX_NOEXCEPT;
@@ -260,6 +260,23 @@ ARX_API ArxReturnCode arx_pistoris_model_copy_vertices(const ArxModel* model, si
                                                        ArxModelVertex* out_vertices, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_copy_faces(const ArxModel* model, size_t offset, size_t count,
                                                     ArxModelFace* out_faces, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_face_data(const ArxModel* model, const ArxModelFacesOutput* output,
+                                                        ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_vertex_positions(const ArxModel* model, float* output, size_t count,
+                                                               ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_face_textures(const ArxModel* model, ArxTextureIndex* output,
+                                                            size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_vertex_bones(const ArxModel* model, ArxBoneIndex* output, size_t count,
+                                                           ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_action_point_bones(const ArxModel* model, ArxBoneIndex* output,
+                                                                 size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_vertex_selection_masks(const ArxModel* model, ArxSelectionMask* output,
+                                                                     size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_bone_selection_masks(const ArxModel* model, ArxSelectionMask* output,
+                                                                   size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_copy_action_point_selection_masks(const ArxModel* model,
+                                                                           ArxSelectionMask* output, size_t count,
+                                                                           ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_copy_texture_views(const ArxModel* model, size_t offset, size_t count,
                                                             ArxTextureView* out_views, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_copy_bones(const ArxModel* model, size_t offset, size_t count,
@@ -293,7 +310,7 @@ ARX_API ArxReturnCode arx_pistoris_model_copy_selection_action_points(const ArxM
 ARX_API ArxReturnCode arx_pistoris_model_selection_includes_origin(const ArxModel* model, ArxSelectionId id,
                                                                    uint8_t* out_includes, ArxError* error) ARX_NOEXCEPT;
 
-// --- Mesh editing ---
+// --- Geometry editing ---
 
 ARX_API ArxReturnCode arx_pistoris_model_set_vertex(ArxModel* model, ArxVertexIndex index, const ArxModelVertex* vertex,
                                                     ArxError* error) ARX_NOEXCEPT;
@@ -327,9 +344,31 @@ ARX_API ArxReturnCode arx_pistoris_model_set_texture_image(ArxModel* model, ArxT
                                                            size_t size, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_clear_texture_image(ArxModel* model, ArxTextureIndex index,
                                                              ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_replace_mesh(ArxModel* model, const ArxModelMeshInput* mesh,
-                                                      ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_clear_mesh(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_faces(ArxModel* model, const ArxModelFacesInput* faces,
+                                                       ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_vertices(ArxModel* model, const float* data, size_t count,
+                                                          ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_face_textures(ArxModel* model, const ArxTextureIndex* data,
+                                                               size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_vertex_bones(ArxModel* model, const ArxBoneIndex* data, size_t count,
+                                                              ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_action_point_bones(ArxModel* model, const ArxBoneIndex* data,
+                                                                    size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_vertex_selection_masks(ArxModel* model, const ArxSelectionMask* data,
+                                                                        size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_bone_selection_masks(ArxModel* model, const ArxSelectionMask* data,
+                                                                      size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_replace_action_point_selection_masks(ArxModel* model,
+                                                                              const ArxSelectionMask* data,
+                                                                              size_t count,
+                                                                              ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_clear_vertices(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_clear_faces(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_clear_textures(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_active_selection_mask(const ArxModel* model, ArxSelectionMask* out_mask,
+                                                               ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_selection_mask(const ArxModel* model, ArxSelectionId id,
+                                                        ArxSelectionMask* out_mask, ArxError* error) ARX_NOEXCEPT;
 
 // --- Skeleton editing ---
 
@@ -338,11 +377,9 @@ ARX_API ArxReturnCode arx_pistoris_model_set_bone(ArxModel* model, ArxBoneIndex 
 ARX_API ArxReturnCode arx_pistoris_model_add_bone(ArxModel* model, const ArxModelBone* bone, ArxBoneIndex* out_index,
                                                   ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_remove_bone(ArxModel* model, ArxBoneIndex index, ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_replace_skeleton(ArxModel* model, const ArxModelSkeletonInput* skeleton,
-                                                          ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_set_origin(ArxModel* model, ArxModelOrigin origin,
                                                     ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_clear_skeleton(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_model_clear_bones(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
 
 // --- Action points ---
 
@@ -353,8 +390,6 @@ ARX_API ArxReturnCode arx_pistoris_model_add_action_point(ArxModel* model, const
                                                           ArxActionPointIndex* out_index, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_remove_action_point(ArxModel* model, ArxActionPointIndex index,
                                                              ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_model_replace_action_points(ArxModel* model, const ArxModelActionPointsInput* points,
-                                                               ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_model_clear_action_points(ArxModel* model, ArxError* error) ARX_NOEXCEPT;
 
 // --- Selections ---

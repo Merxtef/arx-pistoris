@@ -51,15 +51,15 @@ ArxReturnCode generateMinimapImpl(LevelModules& modules, LevelValidationState& v
       !validImageView(options.water.image) || !validImageView(options.lava.image)) {
     return ARX_INVALID_DATA_POINTER;
   }
-  ArxReturnCode rc = level_validation::faces(modules, validation);
+  ArxReturnCode rc = level_validation::faceRooms(modules, validation);
   if (rc != ARX_OK) return rc;
-  if (!validation.derived.referenced_bounds) return ARX_LEVEL_NO_GEOMETRY;
+  if (!validation.derived.effective_bounds) return ARX_LEVEL_NO_GEOMETRY;
 
   MinimapData generated;
   minimap::GenerationDiagnostics local_diagnostics;
   minimap::GenerationDiagnostics* generated_diagnostics = diagnostics != nullptr ? diagnostics : &local_diagnostics;
-  rc = level_validation::minimapError(
-      minimap::generate(generated, modules.geometry, toModuleOptions(options), generated_diagnostics));
+  rc = level_validation::minimapError(minimap::generateAssigned(
+      generated, modules.geometry, modules.rooms.face_rooms, toModuleOptions(options), generated_diagnostics));
   if (rc != ARX_OK) return rc;
   rc = level_validation::minimapError(minimap::validate(generated));
   if (rc != ARX_OK) return rc;

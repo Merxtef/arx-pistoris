@@ -37,6 +37,9 @@ ASSERTION_MACROS = (
     "REQUIRE_MESSAGE",
 )
 
+# Kept as a stable public code, but Model bone removal now detaches references instead.
+NON_EMITTED_CODES = {"ARX_MODEL_BONE_IN_USE"}
+
 def mask_comments_and_literals(source: str) -> str:
     masked = list(source)
     index = 0
@@ -130,7 +133,7 @@ for code in sorted(messages - assigned):
 
 for prefix in CODE_PREFIXES:
     for code in re.findall(rf"({prefix}\w+)", header):
-        if code not in covered:
+        if code not in covered and code not in NON_EMITTED_CODES:
             missing.append(code)
 
 for code in missing:

@@ -25,6 +25,7 @@ struct NodeContext {
   std::size_t terminal = glb::kInvalidNodeIndex;
   bool ignored = false;
   bool diagnostic = false;
+  bool unassigned = false;
 };
 
 struct IgnoredDescendants {
@@ -58,6 +59,8 @@ std::string_view objectKindName(LevelObjectKind kind) {
       return "minimap";
     case LevelObjectKind::kRoom:
       return "room";
+    case LevelObjectKind::kVoidRoom:
+      return "void room";
     case LevelObjectKind::kNone:
       return "ordinary";
   }
@@ -68,6 +71,9 @@ void appendObject(LevelDiscovery& discovery, LevelObjectKind kind, std::size_t n
   switch (kind) {
     case LevelObjectKind::kRoom:
       discovery.rooms.push_back(node);
+      break;
+    case LevelObjectKind::kVoidRoom:
+      discovery.void_rooms.push_back(node);
       break;
     case LevelObjectKind::kPortal:
       discovery.portals.push_back(node);
@@ -107,6 +113,7 @@ void appendObject(LevelDiscovery& discovery, LevelObjectKind kind, std::size_t n
 void sortObjectLists(LevelDiscovery& discovery) {
   auto sort = [](std::vector<std::size_t>& values) { std::ranges::sort(values); };
   sort(discovery.rooms);
+  sort(discovery.void_rooms);
   sort(discovery.portals);
   sort(discovery.anchors);
   sort(discovery.lights);
@@ -164,7 +171,7 @@ ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& g
     const std::string_view name = nodeName(node);
     const LevelObjectKind kind = levelObjectKind(node);
     objects[node_index] = kind;
-    if (kind == LevelObjectKind::kRoom) {
+    if (kind == LevelObjectKind::kRoom || kind == LevelObjectKind::kVoidRoom) {
       if (context.room != glb::kInvalidNodeIndex) {
         log(ARX_LOG_DEBUG,
             "GLB -> Level object failure: room node {} '{}' is nested inside room node {} '{}'",
@@ -175,8 +182,9 @@ ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& g
         return ARX_GLB_BAD_LEVEL_HIERARCHY;
       }
       context.room = node_index;
+      context.unassigned = kind == LevelObjectKind::kVoidRoom;
       appendObject(discovery, kind, node_index);
-      if (node.mesh != nullptr) discovery.geometry.push_back({node_index, node_index});
+      if (node.mesh != nullptr) discovery.geometry.push_back({node_index, node_index, context.unassigned});
       contexts[node_index] = context;
       continue;
     }
@@ -198,7 +206,7 @@ ArxReturnCode discoverLevelNodes(const cgltf_data& data, const glb::NodeGraph& g
           node_index,
           name);
     }
-    if (node.mesh != nullptr) discovery.geometry.push_back({node_index, context.room});
+    if (node.mesh != nullptr) discovery.geometry.push_back({node_index, context.room, context.unassigned});
     contexts[node_index] = context;
   }
 

@@ -62,6 +62,7 @@ struct NativeBuildWarnings {
 struct NativeBakeWarnings {
   std::uint64_t discarded_fragments = 0;
   std::uint64_t fully_discarded_faces = 0;
+  std::uint64_t omitted_unassigned_faces = 0;
   std::uint64_t rescaled_texture_images = 0;
 };
 

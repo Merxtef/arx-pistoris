@@ -288,7 +288,7 @@ ARX_API ArxReturnCode arx_pistoris_level_bake_dlf(const ArxLevel* level, const A
 // --- Validation ---
 
 ARX_API ArxReturnCode arx_pistoris_level_validate(const ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_level_validate_mesh(const ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_validate_geometry(const ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_validate_vertices(const ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_validate_textures(const ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_validate_faces(const ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
@@ -425,7 +425,31 @@ ARX_API ArxReturnCode arx_pistoris_level_room_distance(const ArxLevel* level, Ar
                                                        ArxLevelRoomDistance* out_distance,
                                                        ArxError* error) ARX_NOEXCEPT;
 
-// --- Mesh editing ---
+/* Raw collection copies require exact scalar counts. Grouped output fields are optional: null + zero omits a field,
+ *
+ * nonnull + zero requests an empty field. All requested fields are checked before any output is written. */
+ARX_API ArxReturnCode arx_pistoris_level_copy_vertex_positions(const ArxLevel* level, float* positions,
+                                                               size_t position_count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_face_data(const ArxLevel* level, const ArxLevelFacesOutput* output,
+                                                        ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_face_textures(const ArxLevel* level, ArxTextureIndex* textures,
+                                                            size_t texture_count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_face_rooms(const ArxLevel* level, ArxRoomIndex* rooms, size_t room_count,
+                                                         ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_room_distance_data(const ArxLevel* level,
+                                                                 const ArxLevelRoomDistancesOutput* output,
+                                                                 ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_anchor_data(const ArxLevel* level, const ArxLevelAnchorsOutput* output,
+                                                          ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_anchor_connection_endpoints(const ArxLevel* level,
+                                                                          ArxAnchorIndex* endpoints,
+                                                                          size_t endpoint_count,
+                                                                          ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_copy_nav_surface_data(const ArxLevel* level,
+                                                               const ArxLevelNavSurfaceOutput* output,
+                                                               ArxError* error) ARX_NOEXCEPT;
+
+// --- Geometry editing ---
 
 ARX_API ArxReturnCode arx_pistoris_level_set_vertex(ArxLevel* level, ArxVertexIndex index, ArxLevelVertex vertex,
                                                     ArxError* error) ARX_NOEXCEPT;
@@ -467,9 +491,17 @@ ARX_API ArxReturnCode arx_pistoris_level_set_face_room(ArxLevel* level, ArxFaceI
 ARX_API ArxReturnCode arx_pistoris_level_set_corner_color(ArxLevel* level, ArxFaceIndex face, uint32_t corner,
                                                           ArxColor3 color, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_reset_corner_colors(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_level_replace_mesh(ArxLevel* level, const ArxLevelMeshInput* mesh,
-                                                      ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_level_clear_mesh(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_replace_vertices(ArxLevel* level, const float* positions,
+                                                          size_t position_count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_clear_vertices(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_replace_faces(ArxLevel* level, const ArxLevelFacesInput* faces,
+                                                       ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_clear_faces(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_clear_textures(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_replace_face_textures(ArxLevel* level, const ArxTextureIndex* textures,
+                                                               size_t count, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_replace_face_rooms(ArxLevel* level, const ArxRoomIndex* rooms, size_t count,
+                                                            ArxError* error) ARX_NOEXCEPT;
 
 // --- Rooms ---
 
@@ -478,6 +510,7 @@ ARX_API ArxReturnCode arx_pistoris_level_set_room(ArxLevel* level, ArxRoomIndex 
 ARX_API ArxReturnCode arx_pistoris_level_add_room(ArxLevel* level, const ArxLevelRoom* room, ArxRoomIndex* out_index,
                                                   ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_remove_room(ArxLevel* level, ArxRoomIndex index, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_clear_rooms(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_set_portal(ArxLevel* level, ArxPortalIndex index, const ArxLevelPortal* portal,
                                                     ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_add_portal(ArxLevel* level, const ArxLevelPortal* portal,
@@ -485,10 +518,17 @@ ARX_API ArxReturnCode arx_pistoris_level_add_portal(ArxLevel* level, const ArxLe
 ARX_API ArxReturnCode arx_pistoris_level_remove_portal(ArxLevel* level, ArxPortalIndex index,
                                                        ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_flatten_portals(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_clear_portals(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_set_room_distance(ArxLevel* level, const ArxLevelRoomDistance* distance,
                                                            ArxError* error) ARX_NOEXCEPT;
-ARX_API ArxReturnCode arx_pistoris_level_replace_room_distances(ArxLevel* level, const ArxLevelRoomDistance* distances,
-                                                                size_t count, ArxError* error) ARX_NOEXCEPT;
+/* Distances contain R*(R-1)/2 values in (0,1),(0,2),(1,2),(0,3),... order;
+   endpoint_portals contains two portal
+ * indices for each distance, low-room then high-room. */
+ARX_API ArxReturnCode arx_pistoris_level_replace_room_distances(ArxLevel* level, const float* distances,
+                                                                size_t distance_count,
+                                                                const ArxPortalIndex* endpoint_portals,
+                                                                size_t endpoint_portal_count,
+                                                                ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_clear_room_distances(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 
 // --- Navigation ---
@@ -509,6 +549,10 @@ ARX_API ArxReturnCode arx_pistoris_level_remove_anchor_connection(ArxLevel* leve
                                                                   ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_replace_anchors(ArxLevel* level, const ArxLevelAnchorsInput* anchors,
                                                          ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_replace_anchor_connections(ArxLevel* level, const ArxAnchorIndex* endpoints,
+                                                                    size_t endpoint_count,
+                                                                    ArxError* error) ARX_NOEXCEPT;
+ARX_API ArxReturnCode arx_pistoris_level_clear_anchor_connections(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_clear_anchors(ArxLevel* level, ArxError* error) ARX_NOEXCEPT;
 ARX_API ArxReturnCode arx_pistoris_level_set_nav_surface(ArxLevel* level, const ArxLevelNavSurfaceInput* surface,
                                                          ArxError* error) ARX_NOEXCEPT;
