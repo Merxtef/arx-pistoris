@@ -17,10 +17,13 @@ inline constexpr char kNavSurfaceRootName[] = "arx_nav_surface";
 inline constexpr char kExportNavSurfaceRootName[] = "arx_nav_surface__surface";
 inline constexpr char kMinimapRootName[] = "arx_minimap";
 inline constexpr char kExportMinimapRootName[] = "arx_minimap__map";
+inline constexpr char kVoidRoomRootName[] = "arx_void_room";
+inline constexpr char kExportVoidRoomRootName[] = "arx_void_room__unassigned";
 
 enum class LevelObjectKind : std::uint8_t {
   kNone,
   kRoom,
+  kVoidRoom,
   kPortal,
   kAnchor,
   kLight,
@@ -36,6 +39,7 @@ enum class LevelObjectKind : std::uint8_t {
 bool isPlayerSpawnRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
 bool isNavSurfaceRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
 bool isMinimapRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
+bool isVoidRoomRootName(std::string_view name, glb::ParsedLabel* label = nullptr);
 LevelObjectKind levelObjectKind(const cgltf_node& node);
 bool directLevelHelper(LevelObjectKind owner, std::string_view name);
 bool levelDiagnosticRootName(std::string_view name);

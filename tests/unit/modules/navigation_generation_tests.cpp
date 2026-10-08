@@ -6,6 +6,7 @@
 #include "arx_pistoris/base/flags.h"
 #include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
+#include "arx_pistoris/base/math.hpp"
 
 #include "modules/geometry.h"
 #include "modules/navigation.h"
@@ -19,7 +20,7 @@ using namespace pistoris;
 
 namespace {
 
-Face makeFace(GeometryData&, VertexIndex a, VertexIndex b, VertexIndex c,
+Face makeFace(GeometryData& geometry, VertexIndex a, VertexIndex b, VertexIndex c,
               const ArxVector3& normal = {0.0f, -1.0f, 0.0f}, FaceType flags = 0) {
   Face face;
   face.flags = flags;
@@ -27,6 +28,10 @@ Face makeFace(GeometryData&, VertexIndex a, VertexIndex b, VertexIndex c,
   face.corners[1].vertex = b;
   face.corners[2].vertex = c;
   for (Corner& corner : face.corners) corner.normal = normal;
+  const ArxVector3& first = geometry.vertices[a].position;
+  const ArxVector3& second = geometry.vertices[b].position;
+  const ArxVector3& third = geometry.vertices[c].position;
+  face.normal = math::normalizeFiniteOr(math::cross(second - first, third - first), normal);
   return face;
 }
 

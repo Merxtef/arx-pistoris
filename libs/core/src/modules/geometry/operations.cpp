@@ -16,6 +16,24 @@
 
 namespace pistoris::geometry {
 
+void replaceVertices(GeometryData& geometry, std::vector<Vertex>&& vertices) noexcept {
+  geometry.vertices = std::move(vertices);
+  geometry.faces.clear();
+}
+
+void replaceFaces(GeometryData& geometry, std::vector<Face>&& faces) noexcept { geometry.faces = std::move(faces); }
+
+void clearFaces(GeometryData& geometry) noexcept { geometry.faces.clear(); }
+
+void resetFaceTextures(GeometryData& geometry) noexcept {
+  for (Face& face : geometry.faces) face.texture = kNoTexture;
+}
+
+void replaceFaceTextures(GeometryData& geometry, std::span<const TextureIndex> textures) noexcept {
+  assert(textures.size() == geometry.faces.size());
+  for (std::size_t i = 0; i < textures.size(); ++i) geometry.faces[i].texture = textures[i];
+}
+
 void reserveVertexCapacity(GeometryData& geometry, std::size_t capacity) { geometry.vertices.reserve(capacity); }
 
 void reserveFaceCapacity(GeometryData& geometry, std::size_t capacity) { geometry.faces.reserve(capacity); }

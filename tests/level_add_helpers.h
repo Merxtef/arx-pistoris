@@ -14,6 +14,7 @@
 #include "modules/textures.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -49,6 +50,7 @@ inline ArxLevelFace publicFace(const pistoris::Face& value, pistoris::RoomIndex 
   out.room = room;
   out.flags = value.flags;
   out.transval = value.transval;
+  out.normal = value.normal;
   return out;
 }
 
@@ -63,8 +65,8 @@ inline ArxTextureView publicTexture(const pistoris::Texture& value) {
 inline ArxLevelPortal publicPortal(const pistoris::Portal& value) {
   ArxLevelPortal out{};
   out.name = stringView(value.name);
-  out.room_1 = value.room_1;
-  out.room_2 = value.room_2;
+  out.room_front = value.room_1;
+  out.room_back = value.room_2;
   out.shape = static_cast<ArxPortalShape>(value.shape);
   for (std::size_t vertex = 0; vertex < value.vertices.size(); ++vertex) out.vertices[vertex] = value.vertices[vertex];
   return out;
@@ -145,12 +147,13 @@ inline ArxLevelPathInput publicPath(const pistoris::Path& value, std::vector<Arx
 
 }  // namespace detail
 
-struct MeshSnapshot {
+struct GeometrySnapshot {
   std::vector<pistoris::Vertex> vertices;
   std::vector<pistoris::Face> faces;
   std::vector<pistoris::Texture> textures;
   std::vector<pistoris::RoomIndex> face_rooms;
   std::vector<ArxColor3> corner_colors;
+  std::vector<ArxVector3> face_normals;
 };
 
 struct AnchorsSnapshot {
@@ -158,43 +161,97 @@ struct AnchorsSnapshot {
   std::vector<pistoris::AnchorConnection> connections;
 };
 
-inline ArxReturnCode replaceMesh(pistoris::Level& level, const MeshSnapshot& value) {
-  std::vector<ArxLevelVertex> vertices;
-  vertices.reserve(value.vertices.size());
-  for (const pistoris::Vertex& vertex : value.vertices) vertices.push_back(detail::publicVertex(vertex));
-
-  std::vector<ArxLevelFace> faces;
-  faces.reserve(value.faces.size());
-  for (std::size_t face = 0; face < value.faces.size(); ++face) {
-    const pistoris::RoomIndex room = face < value.face_rooms.size() ? value.face_rooms[face] : 0;
-    ArxLevelFace projected = detail::publicFace(value.faces[face], room);
-    if (value.corner_colors.size() == value.faces.size() * 3U) {
-      for (std::size_t corner = 0; corner < 3; ++corner) {
-        projected.corners[corner].color = value.corner_colors[face * 3U + corner];
-      }
+inline ArxReturnCode replaceGeometry(pistoris::Level& level, const GeometrySnapshot& value) {
+  const auto normalized_or = [](ArxVector3 vector, ArxVector3 fallback) {
+    const float length = std::sqrt(vector.x * vector.x + vector.y * vector.y + vector.z * vector.z);
+    if (std::isfinite(length) && length > 1.0e-10f) {
+      return ArxVector3{vector.x / length, vector.y / length, vector.z / length};
     }
-    faces.push_back(projected);
+    return fallback;
+  };
+  std::vector<float> positions;
+  positions.reserve(value.vertices.size() * 3U);
+  for (const pistoris::Vertex& vertex : value.vertices) {
+    positions.insert(positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
+  }
+  auto status = level.replaceVertices(positions);
+  if (!status) return status.code();
+
+  level.clearTextures();
+  for (const pistoris::Texture& texture : value.textures) {
+    auto added = level.addTexture(detail::publicTexture(texture));
+    if (!added) return added.code();
   }
 
-  std::vector<ArxTextureView> textures;
-  textures.reserve(value.textures.size());
-  for (const pistoris::Texture& texture : value.textures) textures.push_back(detail::publicTexture(texture));
-  return level
-      .replaceMesh({vertices.data(), vertices.size(), faces.data(), faces.size(), textures.data(), textures.size()})
-      .code();
+  std::vector<std::uint32_t> vertex_indices;
+  std::vector<float> uvs;
+  std::vector<float> corner_normals;
+  std::vector<std::uint32_t> textures;
+  std::vector<float> transvals;
+  std::vector<float> corner_colors;
+  std::vector<float> face_normals;
+  std::vector<pistoris::FaceType> flags;
+  std::vector<pistoris::RoomIndex> face_rooms;
+  vertex_indices.reserve(value.faces.size() * 3U);
+  uvs.reserve(value.faces.size() * 6U);
+  corner_normals.reserve(value.faces.size() * 9U);
+  textures.reserve(value.faces.size());
+  transvals.reserve(value.faces.size());
+  corner_colors.reserve(value.faces.size() * 9U);
+  if (value.face_normals.size() == value.faces.size()) face_normals.reserve(value.faces.size() * 3U);
+  flags.reserve(value.faces.size());
+  face_rooms.reserve(value.faces.size());
+  for (std::size_t face_index = 0; face_index < value.faces.size(); ++face_index) {
+    const pistoris::Face& face = value.faces[face_index];
+    ArxVector3 derived_normal{0.0f, -1.0f, 0.0f};
+    if (face.corners[0].vertex < value.vertices.size() && face.corners[1].vertex < value.vertices.size() &&
+        face.corners[2].vertex < value.vertices.size()) {
+      const ArxVector3 a = value.vertices[face.corners[0].vertex].position;
+      const ArxVector3 b = value.vertices[face.corners[1].vertex].position;
+      const ArxVector3 c = value.vertices[face.corners[2].vertex].position;
+      const ArxVector3 ab{b.x - a.x, b.y - a.y, b.z - a.z};
+      const ArxVector3 ac{c.x - a.x, c.y - a.y, c.z - a.z};
+      derived_normal = normalized_or({ab.y * ac.z - ab.z * ac.y, ab.z * ac.x - ab.x * ac.z, ab.x * ac.y - ab.y * ac.x},
+                                     derived_normal);
+    }
+    for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
+      const auto& item = face.corners[corner];
+      vertex_indices.push_back(item.vertex);
+      uvs.insert(uvs.end(), {item.u, item.v});
+      const ArxVector3 normal = normalized_or(item.normal, derived_normal);
+      corner_normals.insert(corner_normals.end(), {normal.x, normal.y, normal.z});
+      const ArxColor3 color = value.corner_colors.size() == value.faces.size() * 3U
+                                  ? value.corner_colors[face_index * 3U + corner]
+                                  : ArxColor3{0.5f, 0.5f, 0.5f};
+      corner_colors.insert(corner_colors.end(), {color.r, color.g, color.b});
+    }
+    textures.push_back(face.texture);
+    transvals.push_back(face.transval);
+    if (value.face_normals.size() == value.faces.size()) {
+      const ArxVector3 normal = value.face_normals[face_index];
+      face_normals.insert(face_normals.end(), {normal.x, normal.y, normal.z});
+    }
+    flags.push_back(face.flags);
+    face_rooms.push_back(face_index < value.face_rooms.size() ? value.face_rooms[face_index] : 0);
+  }
+  status =
+      level.replaceFaces(vertex_indices, uvs, corner_normals, textures, transvals, corner_colors, face_normals, flags);
+  if (!status) return status.code();
+  return level.replaceFaceRooms(face_rooms).code();
 }
 
-inline ArxReturnCode copyMesh(const pistoris::Level& level, MeshSnapshot& out) {
+inline ArxReturnCode copyGeometry(const pistoris::Level& level, GeometrySnapshot& out) {
   const auto vertices = level.vertices();
   const auto faces = level.faces();
   const auto textures = level.textures();
 
-  MeshSnapshot copied;
+  GeometrySnapshot copied;
   copied.vertices.reserve(vertices.size());
   for (const ArxLevelVertex& vertex : vertices) copied.vertices.push_back({vertex.position});
   copied.faces.reserve(faces.size());
   copied.face_rooms.reserve(faces.size());
   copied.corner_colors.reserve(faces.size() * 3U);
+  copied.face_normals.reserve(faces.size());
   for (const ArxLevelFace& face : faces) {
     pistoris::Face internal{};
     for (std::size_t corner = 0; corner < internal.corners.size(); ++corner) {
@@ -203,10 +260,12 @@ inline ArxReturnCode copyMesh(const pistoris::Level& level, MeshSnapshot& out) {
       copied.corner_colors.push_back(face.corners[corner].color);
     }
     internal.texture = face.texture;
+    internal.normal = face.normal;
     internal.flags = face.flags;
     internal.transval = face.transval;
     copied.faces.push_back(internal);
     copied.face_rooms.push_back(face.room);
+    copied.face_normals.push_back(face.normal);
   }
   copied.textures.reserve(textures.size());
   for (const ArxTextureView& texture : textures) {
@@ -219,43 +278,117 @@ inline ArxReturnCode copyMesh(const pistoris::Level& level, MeshSnapshot& out) {
   return ARX_OK;
 }
 
-inline ArxReturnCode replaceAnchors(pistoris::Level& level, const AnchorsSnapshot& value) {
-  std::vector<ArxLevelAnchor> anchors;
-  anchors.reserve(value.anchors.size());
-  for (const pistoris::Anchor& anchor : value.anchors) anchors.push_back(detail::publicAnchor(anchor));
-
-  std::vector<ArxLevelAnchorConnection> connections;
-  connections.reserve(value.connections.size());
-  for (const pistoris::AnchorConnection& connection : value.connections) {
-    connections.push_back({connection.first, connection.second});
+inline ArxReturnCode replaceGeometry(pistoris::Level& level, std::span<const ArxLevelVertex> source_vertices,
+                                     std::span<const ArxLevelFace> source_faces,
+                                     std::span<const ArxTextureView> source_textures = {}) {
+  std::vector<float> positions;
+  positions.reserve(source_vertices.size() * 3U);
+  for (const ArxLevelVertex& vertex : source_vertices) {
+    positions.insert(positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
   }
-  return level.replaceAnchors({anchors.data(), anchors.size(), connections.data(), connections.size()}).code();
+  auto status = level.replaceVertices(positions);
+  if (!status) return status.code();
+  level.clearTextures();
+  for (const ArxTextureView& texture : source_textures) {
+    auto added = level.addTexture(texture);
+    if (!added) return added.code();
+  }
+
+  std::vector<std::uint32_t> vertex_indices;
+  std::vector<float> uvs;
+  std::vector<float> corner_normals;
+  std::vector<std::uint32_t> texture_indices;
+  std::vector<float> transvals;
+  std::vector<float> corner_colors;
+  std::vector<float> face_normals;
+  std::vector<pistoris::FaceType> flags;
+  std::vector<pistoris::RoomIndex> rooms;
+  bool all_face_normals_valid = true;
+  for (const ArxLevelFace& face : source_faces) {
+    const float norm = face.normal.x * face.normal.x + face.normal.y * face.normal.y + face.normal.z * face.normal.z;
+    if (!std::isfinite(norm) || norm < 0.99f || norm > 1.01f) all_face_normals_valid = false;
+  }
+  vertex_indices.reserve(source_faces.size() * 3U);
+  uvs.reserve(source_faces.size() * 6U);
+  corner_normals.reserve(source_faces.size() * 9U);
+  texture_indices.reserve(source_faces.size());
+  transvals.reserve(source_faces.size());
+  corner_colors.reserve(source_faces.size() * 9U);
+  flags.reserve(source_faces.size());
+  rooms.reserve(source_faces.size());
+  if (all_face_normals_valid) face_normals.reserve(source_faces.size() * 3U);
+  for (const ArxLevelFace& face : source_faces) {
+    for (const ArxLevelCorner& corner : face.corners) {
+      vertex_indices.push_back(corner.vertex);
+      uvs.insert(uvs.end(), {corner.u, corner.v});
+      corner_normals.insert(corner_normals.end(), {corner.normal.x, corner.normal.y, corner.normal.z});
+      corner_colors.insert(corner_colors.end(), {corner.color.r, corner.color.g, corner.color.b});
+    }
+    texture_indices.push_back(face.texture);
+    transvals.push_back(face.transval);
+    if (all_face_normals_valid) {
+      face_normals.insert(face_normals.end(), {face.normal.x, face.normal.y, face.normal.z});
+    }
+    flags.push_back(face.flags);
+    rooms.push_back(face.room);
+  }
+  status = level.replaceFaces(
+      vertex_indices, uvs, corner_normals, texture_indices, transvals, corner_colors, face_normals, flags);
+  if (!status) return status.code();
+  return level.replaceFaceRooms(rooms).code();
+}
+
+inline ArxReturnCode replaceAnchors(pistoris::Level& level, const AnchorsSnapshot& value) {
+  std::vector<float> positions;
+  std::vector<float> radii;
+  std::vector<float> heights;
+  std::vector<std::uint32_t> flags;
+  positions.reserve(value.anchors.size() * 3U);
+  radii.reserve(value.anchors.size());
+  heights.reserve(value.anchors.size());
+  flags.reserve(value.anchors.size());
+  for (const pistoris::Anchor& anchor : value.anchors) {
+    positions.insert(positions.end(), {anchor.position.x, anchor.position.y, anchor.position.z});
+    radii.push_back(anchor.radius);
+    heights.push_back(anchor.height);
+    flags.push_back(anchor.flags);
+  }
+  auto status = level.replaceAnchors(positions, radii, heights, flags);
+  if (!status) return status.code();
+
+  std::vector<pistoris::AnchorIndex> endpoints;
+  endpoints.reserve(value.connections.size() * 2U);
+  for (const pistoris::AnchorConnection& connection : value.connections) {
+    endpoints.push_back(connection.first);
+    endpoints.push_back(connection.second);
+  }
+  return level.replaceAnchorConnections(endpoints).code();
 }
 
 inline ArxReturnCode replaceRoomDistances(pistoris::Level& level, std::span<const pistoris::RoomDistance> values) {
-  std::vector<ArxLevelRoomDistance> distances;
+  std::vector<float> distances;
+  std::vector<pistoris::PortalIndex> endpoints;
   distances.reserve(values.size());
-  std::size_t source = 0;
-  for (pistoris::RoomIndex second = 1; second < level.roomCount() && source < values.size(); ++second) {
-    for (pistoris::RoomIndex first = 0; first < second && source < values.size(); ++first, ++source) {
-      distances.push_back(
-          {first, second, values[source].distance, values[source].low_room_portal, values[source].high_room_portal});
-    }
+  endpoints.reserve(values.size() * 2U);
+  for (const pistoris::RoomDistance& value : values) {
+    distances.push_back(value.distance);
+    endpoints.push_back(value.low_room_portal);
+    endpoints.push_back(value.high_room_portal);
   }
-  if (source != values.size()) distances.resize(values.size());
-  return level.replaceRoomDistances(distances).code();
+  return level.replaceRoomDistances(distances, endpoints).code();
 }
 
 inline ArxReturnCode setNavSurface(pistoris::Level& level, const pistoris::NavSurface& value) {
-  std::vector<ArxLevelVertex> vertices;
-  vertices.reserve(value.vertices.size());
-  for (const pistoris::Vertex& vertex : value.vertices) vertices.push_back(detail::publicVertex(vertex));
-  std::vector<ArxLevelNavSurfaceTriangle> triangles;
-  triangles.reserve(value.triangles.size());
+  std::vector<float> positions;
+  positions.reserve(value.vertices.size() * 3U);
+  for (const pistoris::Vertex& vertex : value.vertices)
+    positions.insert(positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
+  std::vector<std::uint32_t> triangle_indices;
+  triangle_indices.reserve(value.triangles.size() * 3U);
   for (const pistoris::NavSurfaceTriangle& triangle : value.triangles) {
-    triangles.push_back({triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]});
+    triangle_indices.insert(triangle_indices.end(), {triangle.vertices[0], triangle.vertices[1], triangle.vertices[2]});
   }
-  return level.setNavSurface({vertices.data(), vertices.size(), triangles.data(), triangles.size()}).code();
+  return level.setNavSurface(positions, triangle_indices).code();
 }
 
 inline ArxReturnCode setVertex(pistoris::Level& level, pistoris::VertexIndex index, const pistoris::Vertex& value) {
@@ -278,6 +411,10 @@ inline ArxReturnCode setFace(pistoris::Level& level, pistoris::FaceIndex index, 
   if (index >= level.faces().size()) return ARX_INDEX_OUT_OF_RANGE;
   const ArxLevelFace current = level.faces()[index];
   ArxLevelFace projected = detail::publicFace(value, current.room);
+  const float normal_length = projected.normal.x * projected.normal.x + projected.normal.y * projected.normal.y +
+                              projected.normal.z * projected.normal.z;
+  if (!std::isfinite(normal_length) || normal_length < 0.99f || normal_length > 1.01f)
+    projected.normal = current.normal;
   for (std::size_t corner = 0; corner < 3; ++corner) projected.corners[corner].color = current.corners[corner].color;
   return level.setFace(index, projected).code();
 }
@@ -348,8 +485,8 @@ inline pistoris::Portal portal(const pistoris::Level& level, pistoris::PortalInd
   const ArxLevelPortal value = level.portals()[index];
   pistoris::Portal out{};
   out.name = detail::string(value.name);
-  out.room_1 = value.room_1;
-  out.room_2 = value.room_2;
+  out.room_1 = value.room_front;
+  out.room_2 = value.room_back;
   out.shape = static_cast<pistoris::PortalShape>(value.shape);
   for (std::size_t vertex = 0; vertex < out.vertices.size(); ++vertex) out.vertices[vertex] = value.vertices[vertex];
   return out;
@@ -588,7 +725,33 @@ inline pistoris::VertexIndex addVertex(pistoris::Level& level, const pistoris::V
 }
 
 inline pistoris::FaceIndex addFace(pistoris::Level& level, const pistoris::Face& value, pistoris::RoomIndex room) {
-  auto result = level.addFace(detail::publicFace(value, room));
+  ArxLevelFace projected = detail::publicFace(value, room);
+  const float normal_length = projected.normal.x * projected.normal.x + projected.normal.y * projected.normal.y +
+                              projected.normal.z * projected.normal.z;
+  if (!std::isfinite(normal_length) || normal_length < 0.99f || normal_length > 1.01f) {
+    const auto vertices = level.vertices();
+    bool valid_indices = true;
+    for (const ArxLevelCorner& corner : projected.corners) valid_indices &= corner.vertex < vertices.size();
+    if (valid_indices) {
+      const ArxVector3 a = vertices[projected.corners[0].vertex].position;
+      const ArxVector3 b = vertices[projected.corners[1].vertex].position;
+      const ArxVector3 c = vertices[projected.corners[2].vertex].position;
+      const double abx = static_cast<double>(b.x) - a.x;
+      const double aby = static_cast<double>(b.y) - a.y;
+      const double abz = static_cast<double>(b.z) - a.z;
+      const double acx = static_cast<double>(c.x) - a.x;
+      const double acy = static_cast<double>(c.y) - a.y;
+      const double acz = static_cast<double>(c.z) - a.z;
+      const double nx = aby * acz - abz * acy;
+      const double ny = abz * acx - abx * acz;
+      const double nz = abx * acy - aby * acx;
+      const double length = std::hypot(nx, ny, nz);
+      if (length > 0.0 && std::isfinite(length))
+        projected.normal = {
+            static_cast<float>(nx / length), static_cast<float>(ny / length), static_cast<float>(nz / length)};
+    }
+  }
+  auto result = level.addFace(projected);
   return result ? *result : pistoris::kInvalidFaceIndex;
 }
 

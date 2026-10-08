@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Merxtef
 
 cmake_minimum_required(VERSION 3.26)
-project(arx-pistoris VERSION 0.6.1 LANGUAGES C CXX)
+project(arx-pistoris VERSION 0.6.2 LANGUAGES C CXX)
 
 if(APPLE AND CMAKE_OSX_DEPLOYMENT_TARGET AND CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS 14.0)
   message(FATAL_ERROR "arx-pistoris requires macOS 14.0 or newer")
@@ -35,6 +35,11 @@ option(ARX_FUZZING "Build libFuzzer fuzz targets (requires clang -fsanitize=fuzz
 option(ARX_BUILD_CLI "Build the arx-pistor command-line application" ON)
 option(ARX_BUILD_PYTHON_BINDINGS "Enable the Pistoris Python bindings build" OFF)
 option(ARX_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+if(WIN32 AND (ARX_SANITIZERS OR ARX_FUZZING))
+  # Clang's fake stack breaks Windows exception handlers: llvm/llvm-project#215376
+  add_compile_options($<$<CONFIG:RelWithDebInfo>:-fsanitize-address-use-after-return=never>)
+endif()
 
 # MSVC STL annotations clash with clang_rt.fuzzer
 if(WIN32 AND ARX_FUZZING)
@@ -239,6 +244,12 @@ elseif(ARX_SANITIZERS)
     $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
   target_link_options(arx_pistoris_stb PRIVATE
     $<$<CONFIG:RelWithDebInfo>:-fsanitize=address,undefined>)
+endif()
+if(ARX_FUZZING OR (ARX_SANITIZERS AND NOT ARX_COVERAGE))
+  target_compile_options(arx_pistoris_stb PRIVATE
+    "$<$<CONFIG:RelWithDebInfo>:-fsanitize-ignorelist=${CMAKE_CURRENT_SOURCE_DIR}/cmake/stb_sanitizer_ignorelist.txt>")
+  set_property(SOURCE ${ARX_PISTORIS_CORE_SOURCE_DIR}/utils/stb_impl.cpp APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/stb_sanitizer_ignorelist.txt")
 endif()
 
 add_library(arx_pistoris_audio_codecs STATIC

@@ -236,7 +236,7 @@ ArxReturnCode arx_pistoris_level_validate(const ArxLevel* level, ArxError* error
   });
 }
 
-ARX_LEVEL_VALIDATE_C(mesh, validateMesh)
+ARX_LEVEL_VALIDATE_C(geometry, validateGeometry)
 ARX_LEVEL_VALIDATE_C(vertices, validateVertices)
 ARX_LEVEL_VALIDATE_C(textures, validateTextures)
 ARX_LEVEL_VALIDATE_C(faces, validateFaces)

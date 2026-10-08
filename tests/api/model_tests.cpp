@@ -398,8 +398,11 @@ f 1 2 3
       point.name = view("hit_30");
       point.bone = ARX_INVALID_INDEX;
     }
-    const ArxModelActionPointsInput input{action_points.data(), action_points.size()};
-    REQUIRE(arx_pistoris_model_replace_action_points(model, &input, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_clear_action_points(model, nullptr) == ARX_OK);
+    for (const ArxModelActionPoint& point : action_points) {
+      ArxActionPointIndex index = ARX_INVALID_INDEX;
+      REQUIRE(arx_pistoris_model_add_action_point(model, &point, &index, nullptr) == ARX_OK);
+    }
     CHECK(arx_pistoris_model_validate(model, nullptr) == ARX_OK);
 
     const ArxNativeModelBakeOptions options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
@@ -574,6 +577,163 @@ f 1 2 3
     arx_pistoris_model_destroy(model);
   }
 
+  TEST_CASE("Copies grouped Model arrays after preflighting all outputs") {
+    ArxModel* model = nullptr;
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
+
+    ArxModelBone bone{};
+    bone.name = view("root");
+    ArxBoneIndex root = ARX_INVALID_INDEX;
+    REQUIRE(arx_pistoris_model_add_bone(model, &bone, &root, nullptr) == ARX_OK);
+
+    ArxModelActionPoint point{};
+    point.name = view("hit_30");
+    point.bone = root;
+    ArxActionPointIndex action = ARX_INVALID_INDEX;
+    REQUIRE(arx_pistoris_model_add_action_point(model, &point, &action, nullptr) == ARX_OK);
+
+    ArxModelSelection selection{};
+    selection.name = view("selected");
+    ArxSelectionId selection_id = ARX_INVALID_SELECTION_ID;
+    REQUIRE(arx_pistoris_model_add_selection(model, &selection, &selection_id, nullptr) == ARX_OK);
+
+    const std::array<ArxModelVertex, 3> vertices = {
+        ArxModelVertex{{0.0f, 0.0f, 0.0f}, root},
+        ArxModelVertex{{1.0f, 0.0f, 0.0f}, root},
+        ArxModelVertex{{0.0f, 1.0f, 0.0f}, root},
+    };
+    ArxVertexIndex first_vertex = ARX_INVALID_INDEX;
+    REQUIRE(arx_pistoris_model_add_vertices(model, vertices.data(), vertices.size(), &first_vertex, nullptr) == ARX_OK);
+    CHECK(first_vertex == 0);
+
+    ArxModelFace face{};
+    face.normal = {0.0f, 0.0f, 1.0f};
+    face.texture = ARX_NO_TEXTURE;
+    face.flags = ARX_FACE_BIT_TRANS;
+    face.transval = 0.25f;
+    for (std::size_t corner = 0; corner < 3U; ++corner) {
+      face.corners[corner].vertex = static_cast<ArxVertexIndex>(corner);
+      face.corners[corner].normal = {0.0f, 0.0f, 1.0f};
+      face.corners[corner].u = static_cast<float>(corner) * 0.5f;
+      face.corners[corner].v = static_cast<float>(corner) * 0.25f;
+    }
+    ArxFaceIndex face_index = ARX_INVALID_INDEX;
+    REQUIRE(arx_pistoris_model_add_face(model, &face, &face_index, nullptr) == ARX_OK);
+
+    const ArxVertexIndex selected_vertex = 1;
+    ArxModelSelectionMembersInput members{};
+    members.vertices = &selected_vertex;
+    members.vertex_count = 1;
+    members.bones = &root;
+    members.bone_count = 1;
+    members.action_points = &action;
+    members.action_point_count = 1;
+    REQUIRE(arx_pistoris_model_update_selection_members(model, selection_id, &members, nullptr) == ARX_OK);
+
+    std::array<std::uint32_t, 3> vertex_indices{};
+    std::array<float, 6> uvs{};
+    std::array<float, 9> corner_normals{};
+    std::array<ArxTextureIndex, 1> textures{};
+    std::array<float, 1> transvals{};
+    std::array<float, 3> face_normals{};
+    std::array<ArxFaceType, 1> flags{};
+    const ArxModelFacesOutput output{
+        .vertex_indices = vertex_indices.data(),
+        .vertex_index_count = vertex_indices.size(),
+        .uvs = uvs.data(),
+        .uv_count = uvs.size(),
+        .corner_normals = corner_normals.data(),
+        .corner_normal_count = corner_normals.size(),
+        .textures = textures.data(),
+        .texture_count = textures.size(),
+        .transvals = transvals.data(),
+        .transval_count = transvals.size(),
+        .face_normals = face_normals.data(),
+        .face_normal_count = face_normals.size(),
+        .flags = flags.data(),
+        .flag_count = flags.size(),
+    };
+    REQUIRE(arx_pistoris_model_copy_face_data(model, &output, nullptr) == ARX_OK);
+    CHECK(vertex_indices == std::array<std::uint32_t, 3>{0U, 1U, 2U});
+    CHECK(uvs == std::array<float, 6>{0.0f, 0.0f, 0.5f, 0.25f, 1.0f, 0.5f});
+    CHECK(textures[0] == ARX_NO_TEXTURE);
+    CHECK(transvals[0] == face.transval);
+    CHECK(face_normals == std::array<float, 3>{0.0f, 0.0f, 1.0f});
+    CHECK(flags[0] == face.flags);
+    for (std::size_t i = 0; i < 3U; ++i) CHECK(corner_normals[i * 3U + 2U] == 1.0f);
+
+    std::array<float, 9> positions{};
+    REQUIRE(arx_pistoris_model_copy_vertex_positions(model, positions.data(), positions.size(), nullptr) == ARX_OK);
+    CHECK(positions == std::array<float, 9>{0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f});
+    std::array<ArxTextureIndex, 1> copied_face_textures{};
+    REQUIRE(arx_pistoris_model_copy_face_textures(
+                model, copied_face_textures.data(), copied_face_textures.size(), nullptr) == ARX_OK);
+    CHECK(copied_face_textures == textures);
+    std::array<ArxBoneIndex, 3> vertex_bones{};
+    REQUIRE(arx_pistoris_model_copy_vertex_bones(model, vertex_bones.data(), vertex_bones.size(), nullptr) == ARX_OK);
+    CHECK(vertex_bones == std::array<ArxBoneIndex, 3>{root, root, root});
+    std::array<ArxBoneIndex, 1> action_bones{};
+    REQUIRE(arx_pistoris_model_copy_action_point_bones(model, action_bones.data(), action_bones.size(), nullptr) ==
+            ARX_OK);
+    CHECK(action_bones[0] == root);
+    std::array<ArxSelectionMask, 3> vertex_masks{};
+    REQUIRE(arx_pistoris_model_copy_vertex_selection_masks(model, vertex_masks.data(), vertex_masks.size(), nullptr) ==
+            ARX_OK);
+    CHECK(vertex_masks == std::array<ArxSelectionMask, 3>{0U, 1U, 0U});
+    std::array<ArxSelectionMask, 1> bone_masks{};
+    REQUIRE(arx_pistoris_model_copy_bone_selection_masks(model, bone_masks.data(), bone_masks.size(), nullptr) ==
+            ARX_OK);
+    CHECK(bone_masks[0] == 1U);
+    std::array<ArxSelectionMask, 1> action_masks{};
+    REQUIRE(arx_pistoris_model_copy_action_point_selection_masks(
+                model, action_masks.data(), action_masks.size(), nullptr) == ARX_OK);
+    CHECK(action_masks[0] == 1U);
+
+    std::array<float, 6> overlap{};
+    const ArxModelFacesOutput aliased{
+        .uvs = overlap.data(),
+        .uv_count = overlap.size(),
+        .face_normals = overlap.data() + 3,
+        .face_normal_count = 3,
+    };
+    CHECK(arx_pistoris_model_copy_face_data(model, &aliased, nullptr) == ARX_INVALID_OPTIONS);
+    CHECK(std::all_of(overlap.begin(), overlap.end(), [](float value) { return value == 0.0f; }));
+
+    std::array<std::uint32_t, 2> too_small{99U, 99U};
+    std::array<float, 6> untouched_uvs{};
+    untouched_uvs.fill(44.0f);
+    const ArxModelFacesOutput undersized{
+        .vertex_indices = too_small.data(),
+        .vertex_index_count = too_small.size(),
+        .uvs = untouched_uvs.data(),
+        .uv_count = untouched_uvs.size(),
+    };
+    CHECK(arx_pistoris_model_copy_face_data(model, &undersized, nullptr) == ARX_BUFFER_TOO_SMALL);
+    CHECK(too_small == std::array<std::uint32_t, 2>{99U, 99U});
+    CHECK(std::all_of(untouched_uvs.begin(), untouched_uvs.end(), [](float value) { return value == 44.0f; }));
+    const ArxModelFacesOutput none{};
+    CHECK(arx_pistoris_model_copy_face_data(model, &none, nullptr) == ARX_INVALID_OPTIONS);
+    std::uint32_t empty_destination = 0;
+    const ArxModelFacesOutput explicitly_empty{
+        .vertex_indices = &empty_destination,
+        .vertex_index_count = 0,
+    };
+    CHECK(arx_pistoris_model_copy_face_data(model, &explicitly_empty, nullptr) == ARX_BUFFER_TOO_SMALL);
+    CHECK(arx_pistoris_model_copy_face_data(model, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_copy_face_data(nullptr, &output, nullptr) == ARX_INVALID_HANDLE);
+    CHECK(arx_pistoris_model_copy_vertex_positions(model, nullptr, 1, nullptr) == ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_copy_vertex_positions(
+              model, positions.data(), std::numeric_limits<std::size_t>::max(), nullptr) == ARX_INVALID_DATA_POINTER);
+    alignas(float) std::array<std::byte, 8> unaligned_storage{};
+    auto* unaligned_output = reinterpret_cast<float*>(unaligned_storage.data() + 1);
+    CHECK(arx_pistoris_model_copy_vertex_positions(model, unaligned_output, positions.size(), nullptr) ==
+          ARX_INVALID_DATA_POINTER);
+    CHECK(arx_pistoris_model_copy_vertex_positions(model, positions.data(), positions.size() - 1U, nullptr) ==
+          ARX_BUFFER_TOO_SMALL);
+
+    arx_pistoris_model_destroy(model);
+  }
+
   TEST_CASE("Validates opaque handles and submitted pointers") {
     CHECK(arx_pistoris_strerror(ARX_MODEL_TOO_MANY_NATIVE_VERTICES) != nullptr);
     CHECK(arx_pistoris_model_create(nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
@@ -615,18 +775,7 @@ f 1 2 3
     CHECK(std::string(copied_texture.external_image_extension.data, copied_texture.external_image_extension.size) ==
           ".bmp");
 
-    ArxModelMeshInput oversized{};
-    oversized.vertex_count = std::numeric_limits<std::size_t>::max();
-    CHECK(arx_pistoris_model_replace_mesh(model, &oversized, nullptr) == ARX_MODEL_TOO_MANY_VERTICES);
-
-    ArxModelSkeletonInput oversized_skeleton{};
-    oversized_skeleton.bone_count = 1025;
-    CHECK(arx_pistoris_model_replace_skeleton(model, &oversized_skeleton, nullptr) == ARX_MODEL_TOO_MANY_BONES);
-
-    ArxModelActionPointsInput oversized_action_points{};
-    oversized_action_points.action_point_count = std::numeric_limits<std::size_t>::max();
-    CHECK(arx_pistoris_model_replace_action_points(model, &oversized_action_points, nullptr) ==
-          ARX_MODEL_TOO_MANY_ACTION_POINTS);
+    CHECK(arx_pistoris_model_replace_vertices(model, nullptr, 1, nullptr) == ARX_INVALID_DATA_POINTER);
 
     ArxModelVertex vertex{};
     ArxVertexIndex index = 42;
@@ -652,6 +801,59 @@ f 1 2 3
     CHECK(arx_pistoris_model_bake_native(model, nullptr, nullptr, nullptr, nullptr) == ARX_INVALID_OPTIONS);
     const ArxNativeModelBakeOptions bake_options = ARX_NATIVE_MODEL_BAKE_OPTIONS_INIT;
     CHECK(arx_pistoris_model_bake_native(model, &bake_options, nullptr, nullptr, nullptr) == ARX_INVALID_DATA_POINTER);
+    arx_pistoris_model_destroy(model);
+  }
+
+  TEST_CASE("Raw Model geometry replacement normalizes and keeps indexed topology") {
+    ArxModel* model = nullptr;
+    REQUIRE(arx_pistoris_model_create(&model, nullptr) == ARX_OK);
+    const std::array<float, 9> positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    REQUIRE(arx_pistoris_model_replace_vertices(model, positions.data(), positions.size(), nullptr) == ARX_OK);
+    const std::array<std::uint32_t, 3> indices = {0, 1, 2};
+    const std::array<float, 6> uvs = {0, 0, 1, 0, 0, 1};
+    const std::array<float, 9> corner_normals = {0, 0, 2, 0, 0, 2, 0, 0, 2};
+    const std::array<ArxTextureIndex, 1> textures = {ARX_NO_TEXTURE};
+    const std::array<float, 1> transvals = {0};
+    const std::array<float, 3> face_normals = {0, 0, 3};
+    const ArxModelFacesInput input{indices.data(),
+                                   indices.size(),
+                                   uvs.data(),
+                                   uvs.size(),
+                                   corner_normals.data(),
+                                   corner_normals.size(),
+                                   textures.data(),
+                                   textures.size(),
+                                   transvals.data(),
+                                   transvals.size(),
+                                   face_normals.data(),
+                                   face_normals.size(),
+                                   nullptr,
+                                   0};
+    REQUIRE(arx_pistoris_model_replace_faces(model, &input, nullptr) == ARX_OK);
+    std::size_t count = 0;
+    REQUIRE(arx_pistoris_model_vertex_count(model, &count, nullptr) == ARX_OK);
+    CHECK(count == 3);
+    REQUIRE(arx_pistoris_model_face_count(model, &count, nullptr) == ARX_OK);
+    CHECK(count == 1);
+    ArxModelFace copied{};
+    REQUIRE(arx_pistoris_model_copy_faces(model, 0, 1, &copied, nullptr) == ARX_OK);
+    CHECK(copied.normal.z == doctest::Approx(1.0f));
+    CHECK(copied.corners[0].normal.z == doctest::Approx(1.0f));
+
+    auto invalid = input;
+    std::array<std::uint32_t, 3> invalid_indices = {0, 1, 3};
+    invalid.vertex_indices = invalid_indices.data();
+    CHECK(arx_pistoris_model_replace_faces(model, &invalid, nullptr) == ARX_MODEL_BAD_FACE_VERTEX);
+    REQUIRE(arx_pistoris_model_face_count(model, &count, nullptr) == ARX_OK);
+    CHECK(count == 1);
+    REQUIRE(arx_pistoris_model_copy_faces(model, 0, 1, &copied, nullptr) == ARX_OK);
+    CHECK(copied.corners[2].vertex == 2);
+
+    REQUIRE(arx_pistoris_model_clear_vertices(model, nullptr) == ARX_OK);
+    REQUIRE(arx_pistoris_model_vertex_count(model, &count, nullptr) == ARX_OK);
+    CHECK(count == 0);
+    REQUIRE(arx_pistoris_model_face_count(model, &count, nullptr) == ARX_OK);
+    CHECK(count == 0);
     arx_pistoris_model_destroy(model);
   }
 

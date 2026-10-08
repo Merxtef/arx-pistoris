@@ -290,7 +290,7 @@ ArxReturnCode exportRoomDistanceDebugGlb(const Level& level, std::vector<std::ui
                                          const Level::GlbExportOptions& options) noexcept {
   return api_detail::statusBoundary([&]() -> ArxReturnCode {
     std::vector<std::uint8_t> tmp;
-    ArxReturnCode rc = level.validateMesh().code();
+    ArxReturnCode rc = level.validateGeometry().code();
     if (rc != ARX_OK) return rc;
     rc = level.validateRooms().code();
     if (rc != ARX_OK) return rc;

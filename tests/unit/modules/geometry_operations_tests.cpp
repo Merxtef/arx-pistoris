@@ -45,6 +45,7 @@ TEST_SUITE("geometry::operations") {
     CHECK(geometry::vertexCapacityForAppend(geometry, 2, 100) == 5);
 
     Face face = makeFace(0, 1, 2);
+    face.normal = {0.0f, 1.0f, 0.0f};
     for (Corner& corner : face.corners) corner.normal = {0.0f, 1.0f, 0.0f};
     REQUIRE(geometry::validateFaces(std::span<const Face>(&face, 1), geometry.vertices, 0) == geometry::Error::kNone);
     FaceIndex face_index = geometry::addFace(geometry, face);
@@ -261,8 +262,8 @@ TEST_SUITE("geometry::operations") {
     CHECK(geometry.faces[1].corners[0].vertex == 0);
     CHECK(geometry.faces[1].corners[1].vertex == 1);
     CHECK(geometry.faces[1].corners[2].vertex == 2);
-    CHECK(geometry.faces[0].normal == geometry::faceNormalOr(geometry, geometry.faces[0], {}));
-    CHECK(geometry.faces[1].normal == geometry::faceNormalOr(geometry, geometry.faces[1], {}));
+    CHECK(geometry.faces[0].normal == ArxVector3{1.0f, 0.0f, 0.0f});
+    CHECK(geometry.faces[1].normal == ArxVector3{1.0f, 0.0f, 0.0f});
   }
 
   TEST_CASE("Weld rejects degenerate face collapse without mutation") {

@@ -3,6 +3,7 @@
 
 #include "doctest/doctest.h"
 
+#include "arx_pistoris/base/flags.h"
 #include "arx_pistoris/base/image.h"
 #include "arx_pistoris/base/image.hpp"
 #include "arx_pistoris/base/indices.h"
@@ -25,6 +26,7 @@
 #include <cstdint>
 #include <limits>
 #include <ostream>  // IWYU pragma: keep
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -44,20 +46,17 @@ pistoris::Level makeImageLevel() {
   const ArxLevelRoom room_data{view("room")};
   const pistoris::RoomIndex room = take(level.addRoom(room_data));
 
-  const std::array<ArxLevelVertex, 3> vertices = {
-      ArxLevelVertex{{100.0f, 0.0f, 200.0f}},
-      ArxLevelVertex{{200.0f, 0.0f, 200.0f}},
-      ArxLevelVertex{{100.0f, 0.0f, 300.0f}},
-  };
-  ArxLevelFace face{};
-  face.texture = ARX_NO_TEXTURE;
-  face.room = room;
-  for (std::size_t index = 0; index < 3; ++index) {
-    face.corners[index].vertex = static_cast<pistoris::VertexIndex>(index);
-    face.corners[index].normal = {0.0f, -1.0f, 0.0f};
-  }
-  const ArxLevelMeshInput mesh{vertices.data(), vertices.size(), &face, 1, nullptr, 0};
-  REQUIRE(level.replaceMesh(mesh));
+  const std::array<float, 9> positions = {100, 0, 200, 200, 0, 200, 100, 0, 300};
+  const std::array<std::uint32_t, 3> indices = {0, 1, 2};
+  const std::array<float, 6> uvs = {0, 0, 1, 0, 0, 1};
+  const std::array<float, 9> normals = {0, -1, 0, 0, -1, 0, 0, -1, 0};
+  const std::array<pistoris::TextureIndex, 1> textures = {ARX_NO_TEXTURE};
+  const std::array<float, 1> transvals = {0};
+  const std::array<float, 9> colors = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
+  const std::array<pistoris::RoomIndex, 1> rooms = {room};
+  REQUIRE(level.replaceVertices(positions));
+  REQUIRE(level.replaceFaces(indices, uvs, normals, textures, transvals, colors));
+  REQUIRE(level.replaceFaceRooms(rooms));
   return pistoris::Level(level);
 }
 
@@ -92,6 +91,106 @@ std::array<std::uint8_t, 4> pixel(const std::vector<std::uint8_t>& encoded, int 
 }  // namespace
 
 TEST_SUITE("C++ Level images") {
+  TEST_CASE("Raw Level copies preflight grouped spans and flatten collection data") {
+    pistoris::Level level = makeImageLevel();
+    std::array<float, 9> positions{};
+    REQUIRE(level.copyVertexPositions(positions));
+    CHECK(positions[3] == doctest::Approx(200.0f));
+
+    std::array<std::uint32_t, 3> indices{};
+    std::array<float, 6> uvs{};
+    std::array<float, 9> corner_normals{};
+    std::array<pistoris::TextureIndex, 1> textures{};
+    std::array<float, 1> transvals{};
+    std::array<float, 9> colors{};
+    std::array<float, 3> face_normals{};
+    std::array<pistoris::FaceType, 1> flags{};
+    pistoris::Level::FacesOutput faces;
+    faces.vertex_indices = indices;
+    faces.uvs = uvs;
+    faces.corner_normals = corner_normals;
+    faces.textures = textures;
+    faces.transvals = transvals;
+    faces.corner_colors = colors;
+    faces.face_normals = face_normals;
+    faces.flags = flags;
+    REQUIRE(level.copyFaces(faces));
+    CHECK(indices == std::array<std::uint32_t, 3>{0, 1, 2});
+    CHECK(textures[0] == ARX_NO_TEXTURE);
+    CHECK(colors[0] == doctest::Approx(0.5f));
+    CHECK(face_normals[1] == doctest::Approx(-1.0f));
+
+    indices.fill(99);
+    pistoris::Level::FacesOutput invalid;
+    invalid.vertex_indices = indices;
+    invalid.uvs = std::span<float>(uvs.data(), uvs.size() - 1U);
+    CHECK(level.copyFaces(invalid).code() == ARX_BUFFER_TOO_SMALL);
+    CHECK(indices == std::array<std::uint32_t, 3>{99, 99, 99});
+
+    pistoris::Level::FacesOutput none;
+    CHECK(level.copyFaces(none).code() == ARX_INVALID_OPTIONS);
+    pistoris::Level::FacesOutput overlapping;
+    overlapping.vertex_indices = std::span<std::uint32_t>(indices.data(), 3U);
+    overlapping.flags = std::span<pistoris::FaceType>(reinterpret_cast<pistoris::FaceType*>(indices.data()), 1U);
+    CHECK(level.copyFaces(overlapping).code() == ARX_INVALID_OPTIONS);
+
+    std::array<pistoris::RoomIndex, 1> rooms{};
+    REQUIRE(level.copyFaceRooms(rooms));
+    CHECK(rooms[0] == 0);
+    std::array<pistoris::TextureIndex, 1> face_textures{};
+    REQUIRE(level.copyFaceTextures(face_textures));
+    CHECK(face_textures[0] == ARX_NO_TEXTURE);
+  }
+
+  TEST_CASE("Raw Level copies expose room distances and navigation collections") {
+    pistoris::Level level = makeImageLevel();
+    const ArxLevelRoom room{view("second")};
+    REQUIRE(take(level.addRoom(room)) == 1);
+    std::array<float, 1> distances = {};
+    std::array<pistoris::PortalIndex, 2> portals = {};
+    pistoris::Level::RoomDistancesOutput room_output;
+    room_output.distances = distances;
+    room_output.endpoint_portals = portals;
+    REQUIRE(level.copyRoomDistances(room_output));
+    CHECK(distances[0] == -1.0f);
+    CHECK(portals[0] == ARX_INVALID_INDEX);
+
+    const std::array<float, 6> anchor_positions = {0, 0, 0, 100, 0, 0};
+    const std::array<float, 2> radii = {50, 50};
+    const std::array<float, 2> heights = {-165, -165};
+    const std::array<std::uint32_t, 2> anchor_flags = {0, 0};
+    REQUIRE(level.replaceAnchors(anchor_positions, radii, heights, anchor_flags));
+    const std::array<pistoris::AnchorIndex, 2> connection = {0, 1};
+    REQUIRE(level.replaceAnchorConnections(connection));
+    std::array<float, 6> copied_anchor_positions{};
+    std::array<float, 2> copied_radii{};
+    std::array<float, 2> copied_heights{};
+    std::array<std::uint32_t, 2> copied_flags{};
+    pistoris::Level::AnchorsOutput anchors;
+    anchors.positions = copied_anchor_positions;
+    anchors.radii = copied_radii;
+    anchors.heights = copied_heights;
+    anchors.flags = copied_flags;
+    REQUIRE(level.copyAnchors(anchors));
+    CHECK(copied_anchor_positions[3] == doctest::Approx(100.0f));
+    CHECK(copied_radii[0] == doctest::Approx(50.0f));
+    std::array<pistoris::AnchorIndex, 2> copied_connection{};
+    REQUIRE(level.copyAnchorConnections(copied_connection));
+    CHECK(copied_connection == connection);
+
+    const std::array<pistoris::NavSurfaceVertexIndex, 3> triangles = {0, 1, 2};
+    const std::array<float, 9> surface_positions = {0, 0, 0, 1, 0, 0, 0, 0, 1};
+    REQUIRE(level.setNavSurface(surface_positions, triangles));
+    std::array<float, 9> copied_surface_positions{};
+    std::array<pistoris::NavSurfaceVertexIndex, 3> copied_triangles{};
+    pistoris::Level::NavSurfaceOutput nav_surface;
+    nav_surface.positions = copied_surface_positions;
+    nav_surface.triangle_indices = copied_triangles;
+    REQUIRE(level.copyNavSurface(nav_surface));
+    CHECK(copied_surface_positions[3] == doctest::Approx(1.0f));
+    CHECK(copied_triangles == triangles);
+  }
+
   TEST_CASE("Minimap projection uses Arx units") {
     pistoris::Level level = makeImageLevel();
     const std::vector<std::uint8_t> image = makeSolidTestBmp(2, 1);
@@ -114,6 +213,96 @@ TEST_SUITE("C++ Level images") {
     CHECK(compact.projection_offset.x == doctest::Approx(25.0f));
     CHECK(compact.projection_offset.y == doctest::Approx(50.0f));
     checkImage(compact.encoded_image, 2, 1);
+  }
+
+  TEST_CASE("Void geometry does not re-anchor Level minimap projection") {
+    pistoris::Level level = makeImageLevel();
+    const std::array<float, 18> positions = {
+        100,
+        0,
+        200,
+        200,
+        0,
+        200,
+        100,
+        0,
+        300,
+        1000,
+        0,
+        1000,
+        1100,
+        0,
+        1000,
+        1000,
+        0,
+        1100,
+    };
+    const std::array<std::uint32_t, 6> indices = {0, 1, 2, 3, 4, 5};
+    const std::array<float, 12> uvs = {0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+    const std::array<float, 18> normals = {
+        0,
+        -1,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        -1,
+        0,
+        0,
+        -1,
+        0,
+    };
+    const std::array<pistoris::TextureIndex, 2> textures = {ARX_NO_TEXTURE, ARX_NO_TEXTURE};
+    const std::array<float, 2> transvals = {0, 0};
+    const std::array<float, 18> colors = {
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+        0.5f,
+    };
+    const std::array<pistoris::RoomIndex, 2> rooms = {0, ARX_NO_ROOM};
+    REQUIRE(level.replaceVertices(positions));
+    REQUIRE(level.replaceFaces(indices, uvs, normals, textures, transvals, colors));
+    REQUIRE(level.replaceFaceRooms(rooms));
+
+    const std::vector<std::uint8_t> image = makeSolidTestBmp(2, 1);
+    REQUIRE(level.setMinimapFromProjection({image.data(), image.size()}, {25.0f, 50.0f}));
+    const pistoris::Level::MinimapView stored = level.minimap();
+    CHECK(stored.world_xz_bounds.min.x == doctest::Approx(75.0f));
+    CHECK(stored.world_xz_bounds.min.y == doctest::Approx(325.0f));
+    CHECK(stored.world_xz_bounds.max.x == doctest::Approx(125.0f));
+    CHECK(stored.world_xz_bounds.max.y == doctest::Approx(350.0f));
+    const pistoris::Level::RenderedMinimap compact = take(level.renderMinimap());
+    CHECK(compact.projection_offset.x == doctest::Approx(25.0f));
+    CHECK(compact.projection_offset.y == doctest::Approx(50.0f));
+  }
+
+  TEST_CASE("Void-only Level cannot generate a minimap") {
+    pistoris::Level level = makeImageLevel();
+    const std::array<pistoris::RoomIndex, 1> rooms = {ARX_NO_ROOM};
+    REQUIRE(level.replaceFaceRooms(rooms));
+    CHECK(level.generateMinimap().code() == ARX_LEVEL_NO_GEOMETRY);
   }
 
   TEST_CASE("Game minimap rendering overwrites a one-pixel perimeter") {

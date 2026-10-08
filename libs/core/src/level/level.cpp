@@ -17,6 +17,7 @@
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/texture.h"
 
+#include "api/bulk_copy.h"
 #include "api/result_failure.h"
 #include "api/status_boundary.h"
 #include "level/data.h"
@@ -62,6 +63,12 @@ bool validIndex(Index index, std::size_t size) noexcept {
 template <typename Index>
 bool canAppendIndex(std::size_t size) noexcept {
   return size < static_cast<std::size_t>(std::numeric_limits<Index>::max());
+}
+
+bool checkedScalarCount(std::size_t count, std::size_t width, std::size_t& out) noexcept {
+  if (count > std::numeric_limits<std::size_t>::max() / width) return false;
+  out = count * width;
+  return true;
 }
 
 ArxStringView borrowedString(const std::string& value) noexcept { return {value.data(), value.size()}; }
@@ -145,6 +152,7 @@ Face internalFace(const ArxLevelFace& face) noexcept {
   result.texture = face.texture;
   result.flags = face.flags & ~kFaceBitQuad;
   result.transval = face.transval;
+  result.normal = face.normal;
   return result;
 }
 
@@ -180,8 +188,8 @@ bool internalRoom(const ArxLevelRoom& room, Room& out) { return copyString(room.
 
 bool internalPortal(const ArxLevelPortal& portal, Portal& out) {
   if (!copyString(portal.name, out.name)) return false;
-  out.room_1 = portal.room_1;
-  out.room_2 = portal.room_2;
+  out.room_1 = portal.room_front;
+  out.room_2 = portal.room_back;
   out.shape = static_cast<PortalShape>(portal.shape);
   out.vertices = {};
   const std::size_t vertex_count = portal.shape == ARX_PORTAL_TRIANGLE ? 3U : 4U;
@@ -409,7 +417,7 @@ LevelResult<void> Level::reset() noexcept {
   });
 }
 
-LevelResult<void> Level::validateMesh() const noexcept {
+LevelResult<void> Level::validateGeometry() const noexcept {
   if (!data_)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
@@ -693,17 +701,17 @@ LevelResult<void> Level::setMinimapFromProjection(ArxEncodedImageView encoded_im
   return api_detail::levelBoundary(resourcePath(), [&]() -> LevelResult<void> {
     const LevelLocation minimap_location = api_detail::resourceLocation(resourcePath(), LevelElement::kMinimap);
     if (encoded_image.size == 0) return api_detail::levelFailure<void>(ARX_LEVEL_BAD_MINIMAP_IMAGE, minimap_location);
-    LevelResult<void> faces = validateFaces();
+    LevelResult<void> faces = validateFaceRooms();
     if (!faces)
       return api_detail::levelFailure<void>(api_detail::withResourceIdentity(std::move(faces), resourcePath()));
-    if (!data_->validation.derived.referenced_bounds)
+    if (!data_->validation.derived.effective_bounds)
       return api_detail::levelFailure<void>(ARX_LEVEL_NO_GEOMETRY, minimap_location);
     std::vector<std::uint8_t> copy;
     if (!copyImage(encoded_image, copy))
       return api_detail::levelFailure<void>(ARX_INVALID_DATA_POINTER, minimap_location);
     ArxRect bounds;
     const ArxReturnCode rc = level_validation::minimapError(
-        minimap::projectedBounds(copy, *data_->validation.derived.referenced_bounds, projection_offset, bounds));
+        minimap::projectedBounds(copy, *data_->validation.derived.effective_bounds, projection_offset, bounds));
     if (rc != ARX_OK) return api_detail::levelFailure<void>(rc, minimap_location);
     minimap::setImage(data_->minimap, std::move(copy), bounds);
     level_validation::markValid(data_->validation, LevelValidation::kMinimap);
@@ -756,21 +764,21 @@ LevelResult<Level::RenderedMinimap> Level::renderMinimap(const MinimapRenderOpti
     if (data_->minimap.encoded_image.empty()) return result;
     LevelResult<void> validation = validateMinimap();
     if (!validation) return api_detail::levelFailure<RenderedMinimap>(std::move(validation));
-    LevelResult<void> faces = validateFaces();
+    LevelResult<void> faces = validateFaceRooms();
     if (!faces) return api_detail::levelFailure<RenderedMinimap>(std::move(faces));
-    if (!data_->validation.derived.referenced_bounds)
+    if (!data_->validation.derived.effective_bounds)
       return api_detail::levelFailure<RenderedMinimap>(
           ARX_LEVEL_NO_GEOMETRY, api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
     if (!options.projection_offset) {
       rc = level_validation::minimapError(minimap::compactProjectionOffset(
-          data_->minimap, *data_->validation.derived.referenced_bounds, result.projection_offset));
+          data_->minimap, *data_->validation.derived.effective_bounds, result.projection_offset));
       if (rc != ARX_OK) return api_detail::levelFailure<RenderedMinimap>(rc, minimap_location);
     }
     minimap::RenderInfo info;
     auto effective_options = render_options;
     effective_options.projection_offset = result.projection_offset;
     rc = level_validation::minimapError(minimap::render(
-        data_->minimap, *data_->validation.derived.referenced_bounds, effective_options, result.encoded_image, &info));
+        data_->minimap, *data_->validation.derived.effective_bounds, effective_options, result.encoded_image, &info));
     if (rc != ARX_OK) return api_detail::levelFailure<RenderedMinimap>(rc, minimap_location);
     if (info.invisible) {
       log(ARX_LOG_WARN, "Level minimap is outside the requested projection; output omitted");
@@ -866,9 +874,10 @@ ArxLevelFace Level::faceAt(const void* owner, std::size_t, std::size_t index) no
                    : lights::kDefaultCornerColor;
   }
   target.texture = source.texture;
-  target.room = has_room ? data.rooms.face_rooms[index] : kInvalidRoomIndex;
+  target.room = has_room ? data.rooms.face_rooms[index] : kNoRoom;
   target.flags = source.flags;
   target.transval = source.transval;
+  target.normal = source.normal;
   return target;
 }
 
@@ -887,8 +896,8 @@ ArxLevelPortal Level::portalAt(const void* owner, std::size_t, std::size_t index
   const Portal& source = static_cast<const Data*>(owner)->rooms.portals[index];
   ArxLevelPortal target{};
   target.name = borrowedString(source.name);
-  target.room_1 = source.room_1;
-  target.room_2 = source.room_2;
+  target.room_front = source.room_1;
+  target.room_back = source.room_2;
   target.shape = static_cast<ArxPortalShape>(source.shape);
   std::copy(source.vertices.begin(), source.vertices.end(), target.vertices);
   return target;
@@ -1140,6 +1149,240 @@ LevelResult<ArxLevelRoomDistance> Level::roomDistance(RoomIndex room_a, RoomInde
                               .portal_b = source.high_room_portal};
 }
 
+LevelResult<void> Level::copyVertexPositions(std::span<float> positions) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  std::size_t expected = 0;
+  if (!checkedScalarCount(data_->geometry.vertices.size(), 3U, expected))
+    return api_detail::levelFailure<void>(ARX_INVALID_OPTIONS,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kVertex));
+  api_detail::BulkCopyOutputs outputs;
+  const ArxReturnCode rc = outputs.add(positions, expected);
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(rc, api_detail::resourceLocation(resourcePath(), LevelElement::kVertex));
+  for (std::size_t i = 0; i < data_->geometry.vertices.size(); ++i) {
+    const ArxVector3 position = data_->geometry.vertices[i].position;
+    positions[i * 3U] = position.x;
+    positions[i * 3U + 1U] = position.y;
+    positions[i * 3U + 2U] = position.z;
+  }
+  return {};
+}
+
+LevelResult<void> Level::copyFaces(const FacesOutput& output) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  const std::size_t count = data_->geometry.faces.size();
+  std::size_t index_count = 0;
+  std::size_t uv_count = 0;
+  std::size_t normal_count = 0;
+  if (!checkedScalarCount(count, 3U, index_count) || !checkedScalarCount(count, 6U, uv_count) ||
+      !checkedScalarCount(count, 9U, normal_count))
+    return api_detail::levelFailure<void>(ARX_INVALID_OPTIONS,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+  api_detail::BulkCopyOutputs outputs;
+  ArxReturnCode rc = outputs.add(output.vertex_indices, index_count);
+  rc = outputs.add(output.uvs, uv_count);
+  rc = outputs.add(output.corner_normals, normal_count);
+  rc = outputs.add(output.textures, count);
+  rc = outputs.add(output.transvals, count);
+  rc = outputs.add(output.corner_colors, normal_count);
+  rc = outputs.add(output.face_normals, index_count);
+  rc = outputs.add(output.flags, count);
+  rc = outputs.finish();
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(rc, api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+
+  const std::size_t stored_color_count = data_->lighting.corner_colors.size();
+  if (output.corner_colors && stored_color_count != 0 && stored_color_count != count * 3U)
+    return api_detail::levelFailure<void>(ARX_LEVEL_BAD_CORNER_COLOR_COUNT,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+  const bool has_colors = data_->lighting.corner_colors.size() == count * 3U;
+  for (std::size_t i = 0; i < count; ++i) {
+    const Face& face = data_->geometry.faces[i];
+    if (output.textures) (*output.textures)[i] = face.texture;
+    if (output.transvals) (*output.transvals)[i] = face.transval;
+    if (output.face_normals) {
+      (*output.face_normals)[i * 3U] = face.normal.x;
+      (*output.face_normals)[i * 3U + 1U] = face.normal.y;
+      (*output.face_normals)[i * 3U + 2U] = face.normal.z;
+    }
+    if (output.flags) (*output.flags)[i] = face.flags;
+    for (std::size_t corner = 0; corner < 3U; ++corner) {
+      const std::size_t scalar = i * 3U + corner;
+      const Corner& source = face.corners[corner];
+      if (output.vertex_indices) (*output.vertex_indices)[scalar] = source.vertex;
+      if (output.uvs) {
+        (*output.uvs)[scalar * 2U] = source.u;
+        (*output.uvs)[scalar * 2U + 1U] = source.v;
+      }
+      if (output.corner_normals) {
+        (*output.corner_normals)[scalar * 3U] = source.normal.x;
+        (*output.corner_normals)[scalar * 3U + 1U] = source.normal.y;
+        (*output.corner_normals)[scalar * 3U + 2U] = source.normal.z;
+      }
+      if (output.corner_colors) {
+        const ArxColor3 color = has_colors ? data_->lighting.corner_colors[scalar] : lights::kDefaultCornerColor;
+        (*output.corner_colors)[scalar * 3U] = color.r;
+        (*output.corner_colors)[scalar * 3U + 1U] = color.g;
+        (*output.corner_colors)[scalar * 3U + 2U] = color.b;
+      }
+    }
+  }
+  return {};
+}
+
+LevelResult<void> Level::copyFaceTextures(std::span<TextureIndex> face_textures) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  api_detail::BulkCopyOutputs outputs;
+  const ArxReturnCode rc = outputs.add(face_textures, data_->geometry.faces.size());
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(rc, api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+  for (std::size_t i = 0; i < data_->geometry.faces.size(); ++i) face_textures[i] = data_->geometry.faces[i].texture;
+  return {};
+}
+
+LevelResult<void> Level::copyFaceRooms(std::span<RoomIndex> face_rooms) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  api_detail::BulkCopyOutputs outputs;
+  const ArxReturnCode rc = outputs.add(face_rooms, data_->geometry.faces.size());
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(rc, api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+  if (data_->rooms.face_rooms.size() != data_->geometry.faces.size())
+    return api_detail::levelFailure<void>(ARX_LEVEL_BAD_FACE_ROOM_COUNT,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+  for (std::size_t i = 0; i < data_->geometry.faces.size(); ++i) face_rooms[i] = data_->rooms.face_rooms[i];
+  return {};
+}
+
+LevelResult<void> Level::copyRoomDistances(const RoomDistancesOutput& output) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  const std::size_t count = roomDistanceCount();
+  std::size_t endpoint_count = 0;
+  if (!checkedScalarCount(count, 2U, endpoint_count))
+    return api_detail::levelFailure<void>(ARX_INVALID_OPTIONS,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kRoomDistance));
+  api_detail::BulkCopyOutputs outputs;
+  ArxReturnCode rc = outputs.add(output.distances, count);
+  rc = outputs.add(output.endpoint_portals, endpoint_count);
+  rc = outputs.finish();
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(rc,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kRoomDistance));
+
+  if ((output.distances || output.endpoint_portals) && !data_->rooms.distances.empty() &&
+      data_->rooms.distances.size() != count)
+    return api_detail::levelFailure<void>(ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kRoomDistance));
+  const bool has_distances = data_->rooms.distances.size() == count;
+  for (std::size_t index = 0; index < count; ++index) {
+    const RoomDistance value = has_distances ? data_->rooms.distances[index] : RoomDistance{};
+    if (output.distances) (*output.distances)[index] = value.distance;
+    if (output.endpoint_portals) {
+      (*output.endpoint_portals)[index * 2U] = value.low_room_portal;
+      (*output.endpoint_portals)[index * 2U + 1U] = value.high_room_portal;
+    }
+  }
+  return {};
+}
+
+LevelResult<void> Level::copyAnchors(const AnchorsOutput& output) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  const std::size_t count = data_->navigation.anchors.size();
+  std::size_t position_count = 0;
+  if (!checkedScalarCount(count, 3U, position_count))
+    return api_detail::levelFailure<void>(ARX_INVALID_OPTIONS,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kAnchor));
+  api_detail::BulkCopyOutputs outputs;
+  ArxReturnCode rc = outputs.add(output.positions, position_count);
+  rc = outputs.add(output.radii, count);
+  rc = outputs.add(output.heights, count);
+  rc = outputs.add(output.flags, count);
+  rc = outputs.finish();
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(rc, api_detail::resourceLocation(resourcePath(), LevelElement::kAnchor));
+  for (std::size_t i = 0; i < count; ++i) {
+    const Anchor& anchor = data_->navigation.anchors[i];
+    if (output.positions) {
+      (*output.positions)[i * 3U] = anchor.position.x;
+      (*output.positions)[i * 3U + 1U] = anchor.position.y;
+      (*output.positions)[i * 3U + 2U] = anchor.position.z;
+    }
+    if (output.radii) (*output.radii)[i] = anchor.radius;
+    if (output.heights) (*output.heights)[i] = anchor.height;
+    if (output.flags) (*output.flags)[i] = static_cast<std::uint32_t>(anchor.flags);
+  }
+  return {};
+}
+
+LevelResult<void> Level::copyAnchorConnections(std::span<AnchorIndex> endpoints) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  std::size_t endpoint_count = 0;
+  if (!checkedScalarCount(data_->navigation.connections.size(), 2U, endpoint_count))
+    return api_detail::levelFailure<void>(
+        ARX_INVALID_OPTIONS, api_detail::resourceLocation(resourcePath(), LevelElement::kAnchorConnection));
+  api_detail::BulkCopyOutputs outputs;
+  const ArxReturnCode rc = outputs.add(endpoints, endpoint_count);
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(
+        rc, api_detail::resourceLocation(resourcePath(), LevelElement::kAnchorConnection));
+  for (std::size_t i = 0; i < data_->navigation.connections.size(); ++i) {
+    endpoints[i * 2U] = data_->navigation.connections[i].first;
+    endpoints[i * 2U + 1U] = data_->navigation.connections[i].second;
+  }
+  return {};
+}
+
+LevelResult<void> Level::copyNavSurface(const NavSurfaceOutput& output) const noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  const NavSurface* surface = data_->navigation.surface ? &*data_->navigation.surface : nullptr;
+  const std::size_t vertex_count = surface ? surface->vertices.size() : 0U;
+  const std::size_t triangle_count = surface ? surface->triangles.size() : 0U;
+  std::size_t position_count = 0;
+  std::size_t triangle_index_count = 0;
+  if (!checkedScalarCount(vertex_count, 3U, position_count) ||
+      !checkedScalarCount(triangle_count, 3U, triangle_index_count))
+    return api_detail::levelFailure<void>(
+        ARX_INVALID_OPTIONS, api_detail::resourceLocation(resourcePath(), LevelElement::kNavSurfaceTriangle));
+  api_detail::BulkCopyOutputs outputs;
+  ArxReturnCode rc = outputs.add(output.positions, position_count);
+  rc = outputs.add(output.triangle_indices, triangle_index_count);
+  rc = outputs.finish();
+  if (rc != ARX_OK)
+    return api_detail::levelFailure<void>(
+        rc, api_detail::resourceLocation(resourcePath(), LevelElement::kNavSurfaceTriangle));
+  if (!surface) return {};
+  if (output.positions) {
+    for (std::size_t i = 0; i < vertex_count; ++i) {
+      const ArxVector3 position = surface->vertices[i].position;
+      (*output.positions)[i * 3U] = position.x;
+      (*output.positions)[i * 3U + 1U] = position.y;
+      (*output.positions)[i * 3U + 2U] = position.z;
+    }
+  }
+  if (output.triangle_indices) {
+    for (std::size_t i = 0; i < triangle_count; ++i)
+      std::copy(surface->triangles[i].vertices.begin(),
+                surface->triangles[i].vertices.end(),
+                output.triangle_indices->begin() + static_cast<std::ptrdiff_t>(i * 3U));
+  }
+  return {};
+}
+
 LevelResult<void> Level::setVertex(VertexIndex index, ArxLevelVertex value) noexcept {
   if (!data_)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
@@ -1270,7 +1513,8 @@ LevelResult<void> Level::setFace(FaceIndex index, const ArxLevelFace& value) noe
       [&]() -> ArxReturnCode {
         if (!validIndex(index, data_->geometry.faces.size())) return ARX_INDEX_OUT_OF_RANGE;
         if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
-        if (!validIndex(value.room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
+        if (value.room != kNoRoom && !validIndex(value.room, data_->rooms.definitions.size()))
+          return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
         const std::size_t expected_colors = lights::expectedCornerColorCount(data_->geometry);
         if (!data_->lighting.corner_colors.empty() && data_->lighting.corner_colors.size() != expected_colors)
           return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
@@ -1279,7 +1523,6 @@ LevelResult<void> Level::setFace(FaceIndex index, const ArxLevelFace& value) noe
         ArxReturnCode rc = level_validation::geometryError(geometry::validateFaces(
             std::span<const Face>(&face, 1), data_->geometry.vertices, data_->textures.textures.size()));
         if (rc != ARX_OK) return rc;
-        face.normal = geometry::faceNormalOr(data_->geometry, face, {});
         rc = level_validation::faceTypes(std::span<const Face>(&face, 1));
         if (rc != ARX_OK) return rc;
         for (const ArxLevelCorner& corner : value.corners) {
@@ -1294,6 +1537,7 @@ LevelResult<void> Level::setFace(FaceIndex index, const ArxLevelFace& value) noe
         if ((value.flags & kFaceBitQuad) != 0)
           log(ARX_LOG_WARN, "Level face edit: stripped QUAD flag from triangular face input");
         level_validation::invalidate(data_->validation, LevelValidation::kFaces);
+        if (value.room == kNoRoom) level_validation::invalidate(data_->validation, LevelValidation::kFaceRooms);
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), LevelElement::kFace, index));
@@ -1306,7 +1550,8 @@ LevelResult<FaceIndex> Level::addFace(const ArxLevelFace& value) noexcept {
   FaceIndex out_index = kInvalidFaceIndex;
   const ArxReturnCode result = api_detail::silentStatusBoundary([&]() -> ArxReturnCode {
     out_index = kInvalidFaceIndex;
-    if (!validIndex(value.room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
+    if (value.room != kNoRoom && !validIndex(value.room, data_->rooms.definitions.size()))
+      return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
     if (data_->geometry.faces.size() >= static_cast<std::size_t>(kInvalidFaceIndex)) return ARX_LEVEL_TOO_MANY_FACES;
     if (data_->rooms.face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
     if (!data_->lighting.corner_colors.empty() &&
@@ -1319,7 +1564,6 @@ LevelResult<FaceIndex> Level::addFace(const ArxLevelFace& value) noexcept {
         std::span<const Face>(&face, 1), data_->geometry.vertices, data_->textures.textures.size(), &face_bounds);
     ArxReturnCode rc = level_validation::geometryError(error);
     if (rc != ARX_OK) return rc;
-    face.normal = geometry::faceNormalOr(data_->geometry, face, {});
     rc = level_validation::faceTypes(std::span<const Face>(&face, 1));
     if (rc != ARX_OK) return rc;
     for (const ArxLevelCorner& corner : value.corners) {
@@ -1357,8 +1601,10 @@ LevelResult<FaceIndex> Level::addFace(const ArxLevelFace& value) noexcept {
       math::expand(bounds, face_bounds.max);
       data_->validation.derived.referenced_bounds = bounds;
     }
-    if (faces_stay_valid && face_rooms_stay_valid)
+    if (faces_stay_valid && face_rooms_stay_valid && value.room != kNoRoom)
       level_validation::markValid(data_->validation, LevelValidation::kFaceRooms);
+    else if (value.room == kNoRoom)
+      level_validation::invalidate(data_->validation, LevelValidation::kFaceRooms);
     if (faces_stay_valid && colors_stay_valid)
       level_validation::markValid(data_->validation, LevelValidation::kCornerColors);
     out_index = index;
@@ -1386,7 +1632,10 @@ LevelResult<void> Level::removeFace(FaceIndex index) noexcept {
         lights::removeFaceCornerColors(data_->lighting, index, data_->geometry.faces.size());
         rooms::removeFaceRoom(data_->rooms, index);
         geometry::removeFace(data_->geometry, index);
-        level_validation::invalidate(data_->validation, LevelValidation::kFaces);
+        navigation::clearSurface(data_->navigation);
+        navigation::clearAnchors(data_->navigation);
+        level_validation::invalidate(
+            data_->validation, LevelValidation::kFaces | LevelValidation::kNavSurface | LevelValidation::kAnchors);
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), LevelElement::kFace, index));
@@ -1438,7 +1687,7 @@ LevelResult<void> Level::weldVertices(const VertexWeldOptions& options) noexcept
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
   return api_detail::levelBoundary(resourcePath(), [&]() -> LevelResult<void> {
-    LevelResult<void> mesh = validateMesh();
+    LevelResult<void> mesh = validateGeometry();
     if (!mesh) return api_detail::levelFailure<void>(api_detail::withResourceIdentity(std::move(mesh), resourcePath()));
 
     geometry::VertexWeldOptions module_options;
@@ -1453,8 +1702,8 @@ LevelResult<void> Level::weldVertices(const VertexWeldOptions& options) noexcept
       return api_detail::levelFailure<void>(rc, api_detail::resourceLocation(resourcePath(), LevelElement::kRoom));
 
     std::vector<geometry::VertexWeldSegment> segments;
-    segments.reserve(data_->rooms.definitions.size());
-    for (std::size_t room = 0; room < data_->rooms.definitions.size(); ++room) {
+    segments.reserve(collected.offsets.size() - 1U);
+    for (std::size_t room = 0; room + 1U < collected.offsets.size(); ++room) {
       segments.push_back(
           {std::span<const VertexIndex>(collected.vertices)
                .subspan(collected.offsets[room], collected.offsets[room + 1U] - collected.offsets[room])});
@@ -1484,7 +1733,7 @@ LevelResult<void> Level::snapGeometryToPortals(const PortalSnapOptions& options)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
   return api_detail::levelBoundary(resourcePath(), [&]() -> LevelResult<void> {
-    LevelResult<void> mesh = validateMesh();
+    LevelResult<void> mesh = validateGeometry();
     if (!mesh) return api_detail::levelFailure<void>(api_detail::withResourceIdentity(std::move(mesh), resourcePath()));
     LevelResult<void> portals = validatePortals();
     if (!portals)
@@ -1692,8 +1941,9 @@ LevelResult<void> Level::setFaceRoom(FaceIndex face, RoomIndex room) noexcept {
       resourcePath(),
       [&]() -> ArxReturnCode {
         if (!validIndex(face, data_->rooms.face_rooms.size())) return ARX_INDEX_OUT_OF_RANGE;
-        if (!validIndex(room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
+        if (room != kNoRoom && !validIndex(room, data_->rooms.definitions.size())) return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
         rooms::setFaceRoom(data_->rooms, face, room);
+        level_validation::invalidate(data_->validation, LevelValidation::kFaceRooms);
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), LevelElement::kFace, face));
@@ -1722,107 +1972,179 @@ void Level::resetCornerColors() noexcept {
   if (data_) lights::resetCornerColors(data_->lighting);
 }
 
-LevelResult<void> Level::replaceMesh(const ArxLevelMeshInput& mesh) noexcept {
+LevelResult<void> Level::replaceVertices(std::span<const float> positions) noexcept {
   if (!data_)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
   return api_detail::levelStatusBoundary<void>(
       resourcePath(),
       [&]() -> ArxReturnCode {
-        if (mesh.vertex_count > static_cast<std::size_t>(kInvalidVertexIndex)) return ARX_LEVEL_TOO_MANY_VERTICES;
-        if (mesh.face_count > static_cast<std::size_t>(kInvalidFaceIndex)) return ARX_LEVEL_TOO_MANY_FACES;
-        if (mesh.texture_count > static_cast<std::size_t>(kNoTexture)) return ARX_LEVEL_TOO_MANY_TEXTURES;
-        if ((mesh.vertex_count != 0 && mesh.vertices == nullptr) || (mesh.face_count != 0 && mesh.faces == nullptr) ||
-            (mesh.texture_count != 0 && mesh.textures == nullptr))
-          return ARX_INVALID_DATA_POINTER;
-
-        GeometryData geometry;
-        TexturesData texture_data;
-        geometry.vertices.reserve(mesh.vertex_count);
-        for (std::size_t i = 0; i < mesh.vertex_count; ++i)
-          geometry.vertices.push_back(internalVertex(mesh.vertices[i]));
-        geometry.faces.reserve(mesh.face_count);
-        std::size_t stripped_quad_flags = 0;
-        for (std::size_t i = 0; i < mesh.face_count; ++i) {
-          stripped_quad_flags += static_cast<std::size_t>((mesh.faces[i].flags & kFaceBitQuad) != 0);
-          geometry.faces.push_back(internalFace(mesh.faces[i]));
-        }
-        texture_data.textures.resize(mesh.texture_count);
-        for (std::size_t i = 0; i < mesh.texture_count; ++i) {
-          if (!internalTexture(mesh.textures[i], texture_data.textures[i])) return ARX_INVALID_DATA_POINTER;
-        }
-        textures::PathRepairInfo texture_repairs;
-        ArxReturnCode rc =
-            level_validation::textureError(textures::repairPaths(texture_data.textures, &texture_repairs));
+        std::vector<Vertex> next;
+        ArxReturnCode rc = level_validation::geometryError(geometry::buildVertices(positions, next));
         if (rc != ARX_OK) return rc;
-
-        std::vector<RoomIndex> face_rooms;
-        face_rooms.reserve(mesh.face_count);
-        bool has_non_default_corner_colors = false;
-        for (std::size_t i = 0; i < mesh.face_count; ++i) {
-          face_rooms.push_back(mesh.faces[i].room);
-          has_non_default_corner_colors =
-              has_non_default_corner_colors || hasNonDefaultCornerColor(faceCornerColors(mesh.faces[i]));
-        }
-        std::vector<ArxColor3> corner_colors;
-        if (has_non_default_corner_colors) {
-          corner_colors.assign(mesh.face_count * 3U, lights::kDefaultCornerColor);
-          for (std::size_t face = 0; face < mesh.face_count; ++face) {
-            for (std::size_t corner = 0; corner < 3; ++corner)
-              corner_colors[lights::cornerColorIndex(static_cast<FaceIndex>(face), corner)] =
-                  mesh.faces[face].corners[corner].color;
-          }
+        ArxAabb bounds;
+        if (!next.empty()) {
+          rc = level_validation::geometryError(geometry::validateVertices(next, &bounds));
+          if (rc != ARX_OK) return rc;
+          if (bounds.min.x < kLevelMinXZ || bounds.max.x > kLevelMaxXZ || bounds.min.z < kLevelMinXZ ||
+              bounds.max.z > kLevelMaxXZ)
+            return ARX_LEVEL_VERTEX_OUT_OF_BOUNDS;
         }
 
-        LevelValidationState next_validation;
-        rc = validateMeshCoherence(
-            geometry, texture_data, face_rooms, corner_colors, data_->rooms.definitions.size(), next_validation);
-        if (rc != ARX_OK) return rc;
-        for (Face& face : geometry.faces) face.normal = geometry::faceNormalOr(geometry, face, {});
-
-        LevelValidationState final_validation = data_->validation;
-        level_validation::invalidate(final_validation,
-                                     LevelValidation::kVertices | LevelValidation::kTextures | LevelValidation::kFaces |
-                                         LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
-                                         LevelValidation::kNavSurface | LevelValidation::kAnchors);
-        final_validation.derived = next_validation.derived;
-        level_validation::markValid(final_validation,
-                                    next_validation.valid | LevelValidation::kNavSurface | LevelValidation::kAnchors |
-                                        LevelValidation::kAnchorConnections);
-
-        geometry::replace(data_->geometry, std::move(geometry));
-        textures::replaceTextures(data_->textures, std::move(texture_data.textures));
-        rooms::replaceFaceRooms(data_->rooms, std::move(face_rooms));
-        lights::replaceCornerColors(data_->lighting, std::move(corner_colors));
+        geometry::replaceVertices(data_->geometry, std::move(next));
+        rooms::clearFaceRooms(data_->rooms);
+        lights::resetCornerColors(data_->lighting);
         navigation::clearSurface(data_->navigation);
         navigation::clearAnchors(data_->navigation);
-        data_->validation = final_validation;
-        for (const textures::PathRepairInfo::Repair& repair : texture_repairs.repairs)
-          log(ARX_LOG_WARN,
-              "Level mesh replacement: texture path '{}' normalized to '{}'",
-              repair.original,
-              repair.repaired);
-        if (stripped_quad_flags != 0)
-          log(ARX_LOG_WARN,
-              "Level mesh replacement: stripped QUAD flag from {} triangular face(s)",
-              stripped_quad_flags);
+        level_validation::invalidate(data_->validation,
+                                     LevelValidation::kVertices | LevelValidation::kFaces |
+                                         LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
+                                         LevelValidation::kNavSurface | LevelValidation::kAnchors);
+        if (!data_->geometry.vertices.empty()) {
+          level_validation::markValid(data_->validation, LevelValidation::kVertices);
+          data_->validation.derived.bounds = bounds;
+        }
         return ARX_OK;
       },
-      api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+      api_detail::resourceLocation(resourcePath(), LevelElement::kVertex));
 }
 
-void Level::clearMesh() noexcept {
+void Level::clearVertices() noexcept {
   if (!data_) return;
-  level_validation::invalidate(data_->validation,
-                               LevelValidation::kVertices | LevelValidation::kTextures | LevelValidation::kFaces |
-                                   LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
-                                   LevelValidation::kNavSurface | LevelValidation::kAnchors);
-  geometry::clear(data_->geometry);
-  textures::clear(data_->textures);
+  geometry::replaceVertices(data_->geometry, {});
   rooms::clearFaceRooms(data_->rooms);
   lights::resetCornerColors(data_->lighting);
   navigation::clearSurface(data_->navigation);
   navigation::clearAnchors(data_->navigation);
+  level_validation::invalidate(data_->validation,
+                               LevelValidation::kVertices | LevelValidation::kFaces | LevelValidation::kFaceRooms |
+                                   LevelValidation::kCornerColors | LevelValidation::kNavSurface |
+                                   LevelValidation::kAnchors);
+}
+
+LevelResult<void> Level::replaceFaces(std::span<const std::uint32_t> vertex_indices, std::span<const float> uvs,
+                                      std::span<const float> corner_normals,
+                                      std::span<const TextureIndex> face_textures, std::span<const float> transvals,
+                                      std::span<const float> corner_colors, std::span<const float> face_normals,
+                                      std::span<const FaceType> flags) noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  return api_detail::levelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        ArxReturnCode rc = ARX_OK;
+        std::vector<Face> next_faces;
+        rc = level_validation::geometryError(geometry::buildFaces(data_->geometry.vertices,
+                                                                  data_->textures.textures.size(),
+                                                                  vertex_indices,
+                                                                  uvs,
+                                                                  corner_normals,
+                                                                  face_textures,
+                                                                  transvals,
+                                                                  face_normals,
+                                                                  flags,
+                                                                  next_faces));
+        if (rc != ARX_OK) return rc;
+        rc = level_validation::faceTypes(next_faces);
+        if (rc != ARX_OK) return rc;
+        const std::size_t face_count = next_faces.size();
+        if ((face_count == 0 && !corner_colors.empty()) ||
+            (face_count != 0 && corner_colors.size() != 3U && corner_colors.size() != face_count * 9U))
+          return ARX_LEVEL_BAD_CORNER_COLOR_COUNT;
+
+        std::vector<ArxColor3> next_colors;
+        if (face_count != 0) {
+          const std::size_t color_count = corner_colors.size() == 3U ? 1U : face_count * 3U;
+          bool all_default = true;
+          for (std::size_t corner = 0; corner < color_count; ++corner) {
+            const std::size_t color = corner_colors.size() == 3U ? 0U : corner * 3U;
+            const ArxColor3 value{corner_colors[color], corner_colors[color + 1U], corner_colors[color + 2U]};
+            rc = level_validation::lightingError(lights::validateCornerColor(value));
+            if (rc != ARX_OK) return rc;
+            all_default = all_default && value.r == lights::kDefaultCornerColor.r &&
+                          value.g == lights::kDefaultCornerColor.g && value.b == lights::kDefaultCornerColor.b;
+          }
+          if (!all_default) {
+            next_colors.resize(face_count * 3U);
+            for (std::size_t corner = 0; corner < next_colors.size(); ++corner) {
+              const std::size_t color = corner_colors.size() == 3U ? 0U : corner * 3U;
+              next_colors[corner] = {corner_colors[color], corner_colors[color + 1U], corner_colors[color + 2U]};
+            }
+          }
+        }
+        std::vector<RoomIndex> next_rooms(face_count, kNoRoom);
+
+        geometry::replaceFaces(data_->geometry, std::move(next_faces));
+        rooms::replaceFaceRooms(data_->rooms, std::move(next_rooms));
+        lights::replaceCornerColors(data_->lighting, std::move(next_colors));
+        navigation::clearSurface(data_->navigation);
+        navigation::clearAnchors(data_->navigation);
+        level_validation::invalidate(data_->validation,
+                                     LevelValidation::kFaces | LevelValidation::kFaceRooms |
+                                         LevelValidation::kCornerColors | LevelValidation::kNavSurface |
+                                         LevelValidation::kAnchors);
+        level_validation::markValid(data_->validation, LevelValidation::kCornerColors);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+}
+
+void Level::clearFaces() noexcept {
+  if (!data_) return;
+  geometry::clearFaces(data_->geometry);
+  rooms::clearFaceRooms(data_->rooms);
+  lights::resetCornerColors(data_->lighting);
+  navigation::clearSurface(data_->navigation);
+  navigation::clearAnchors(data_->navigation);
+  level_validation::invalidate(data_->validation,
+                               LevelValidation::kFaces | LevelValidation::kFaceRooms | LevelValidation::kCornerColors |
+                                   LevelValidation::kNavSurface | LevelValidation::kAnchors);
+}
+
+void Level::clearTextures() noexcept {
+  if (!data_) return;
+  textures::clear(data_->textures);
+  geometry::resetFaceTextures(data_->geometry);
+  level_validation::invalidate(data_->validation, LevelValidation::kTextures | LevelValidation::kFaces);
+}
+
+LevelResult<void> Level::replaceFaceTextures(std::span<const TextureIndex> face_textures) noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  return api_detail::levelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (face_textures.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_COUNT;
+        for (TextureIndex texture : face_textures)
+          if (texture != kNoTexture && !validIndex(texture, data_->textures.textures.size()))
+            return ARX_LEVEL_BAD_FACE_TEXTURE;
+        geometry::replaceFaceTextures(data_->geometry, face_textures);
+        level_validation::invalidate(data_->validation, LevelValidation::kFaces);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
+}
+
+LevelResult<void> Level::replaceFaceRooms(std::span<const RoomIndex> face_rooms) noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  return api_detail::levelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (face_rooms.size() != data_->geometry.faces.size()) return ARX_LEVEL_BAD_FACE_ROOM_COUNT;
+        for (RoomIndex room : face_rooms) {
+          if (room != kNoRoom && !validIndex(room, data_->rooms.definitions.size())) {
+            return ARX_LEVEL_BAD_FACE_ROOM_INDEX;
+          }
+        }
+        rooms::assignFaceRooms(data_->rooms, face_rooms);
+        level_validation::invalidate(data_->validation, LevelValidation::kFaceRooms);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), LevelElement::kFace));
 }
 
 LevelResult<void> Level::setRoom(RoomIndex index, const ArxLevelRoom& value) noexcept {
@@ -1877,14 +2199,28 @@ LevelResult<void> Level::removeRoom(RoomIndex index) noexcept {
         if (!validIndex(index, data_->rooms.definitions.size())) return ARX_INDEX_OUT_OF_RANGE;
         const bool rooms_stay_valid =
             level_validation::has(data_->validation, LevelValidation::kRooms) && data_->rooms.definitions.size() > 1;
+        const bool portals_stay_valid = level_validation::has(data_->validation, LevelValidation::kPortals);
         ArxReturnCode rc = level_validation::roomsError(rooms::validateRoomRemoval(data_->rooms, index));
         if (rc != ARX_OK) return rc;
         rooms::removeRoom(data_->rooms, index);
-        level_validation::invalidate(data_->validation, LevelValidation::kRooms);
+        level_validation::invalidate(data_->validation,
+                                     LevelValidation::kRooms | LevelValidation::kFaceRooms | LevelValidation::kPortals |
+                                         LevelValidation::kRoomDistances);
         if (rooms_stay_valid) level_validation::markValid(data_->validation, LevelValidation::kRooms);
+        if (portals_stay_valid && rooms_stay_valid)
+          level_validation::markValid(data_->validation, LevelValidation::kPortals);
+        level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
         return ARX_OK;
       },
       api_detail::resourceLocation(resourcePath(), LevelElement::kRoom, index));
+}
+
+void Level::clearRooms() noexcept {
+  if (!data_) return;
+  rooms::clearRooms(data_->rooms);
+  level_validation::invalidate(data_->validation,
+                               LevelValidation::kRooms | LevelValidation::kFaceRooms | LevelValidation::kPortals |
+                                   LevelValidation::kRoomDistances);
 }
 
 LevelResult<void> Level::setPortal(PortalIndex index, const ArxLevelPortal& value) noexcept {
@@ -2004,7 +2340,8 @@ LevelResult<void> Level::setRoomDistance(const ArxLevelRoomDistance& value) noex
       api_detail::resourceLocation(resourcePath(), LevelElement::kRoomDistance));
 }
 
-LevelResult<void> Level::replaceRoomDistances(std::span<const ArxLevelRoomDistance> distances) noexcept {
+LevelResult<void> Level::replaceRoomDistances(std::span<const float> distances,
+                                              std::span<const PortalIndex> endpoint_portals) noexcept {
   if (!data_)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
@@ -2012,21 +2349,22 @@ LevelResult<void> Level::replaceRoomDistances(std::span<const ArxLevelRoomDistan
       resourcePath(),
       [&]() -> ArxReturnCode {
         const std::size_t expected = rooms::roomDistancePairCount(data_->rooms.definitions.size());
-        if (!distances.empty() && distances.size() != expected) return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
-        std::vector<RoomDistance> next;
-        if (!distances.empty()) {
-          next.resize(expected);
-          std::vector<std::uint8_t> seen(expected, 0);
-          for (const ArxLevelRoomDistance& value : distances) {
+        if (distances.size() != expected || endpoint_portals.size() != expected * 2U)
+          return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
+        std::vector<RoomDistance> next(expected);
+        std::size_t index = 0;
+        for (std::size_t high = 1; high < data_->rooms.definitions.size(); ++high) {
+          for (std::size_t low = 0; low < high; ++low, ++index) {
+            ArxLevelRoomDistance value{};
+            value.room_a = static_cast<RoomIndex>(low);
+            value.room_b = static_cast<RoomIndex>(high);
+            value.distance = distances[index];
+            value.portal_a = endpoint_portals[index * 2U];
+            value.portal_b = endpoint_portals[index * 2U + 1U];
             RoomIndex low_room = 0;
             RoomIndex high_room = 0;
-            RoomDistance distance;
-            ArxReturnCode rc = internalRoomDistance(value, data_->rooms, low_room, high_room, distance);
+            ArxReturnCode rc = internalRoomDistance(value, data_->rooms, low_room, high_room, next[index]);
             if (rc != ARX_OK) return rc;
-            const std::size_t index = rooms::roomDistancePairIndex(low_room, high_room);
-            if (seen[index] != 0) return ARX_LEVEL_BAD_ROOM_DISTANCE_COUNT;
-            seen[index] = 1;
-            next[index] = distance;
           }
         }
         ArxReturnCode rc = level_validation::roomsError(rooms::validateRoomDistances(next, data_->rooms));
@@ -2039,7 +2377,16 @@ LevelResult<void> Level::replaceRoomDistances(std::span<const ArxLevelRoomDistan
 }
 
 void Level::clearRoomDistances() noexcept {
-  if (data_) rooms::clearRoomDistances(data_->rooms);
+  if (!data_) return;
+  rooms::clearRoomDistances(data_->rooms);
+  level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
+}
+
+void Level::clearPortals() noexcept {
+  if (!data_) return;
+  rooms::clearPortals(data_->rooms);
+  level_validation::invalidate(data_->validation, LevelValidation::kPortals);
+  level_validation::markValid(data_->validation, LevelValidation::kRoomDistances);
 }
 
 LevelResult<void> Level::setAnchor(AnchorIndex index, const ArxLevelAnchor& value) noexcept {
@@ -2159,31 +2506,32 @@ LevelResult<void> Level::removeAnchorConnection(AnchorConnectionIndex index) noe
       api_detail::resourceLocation(resourcePath(), LevelElement::kAnchorConnection, index));
 }
 
-LevelResult<void> Level::replaceAnchors(const ArxLevelAnchorsInput& input) noexcept {
+LevelResult<void> Level::replaceAnchors(std::span<const float> positions, std::span<const float> radii,
+                                        std::span<const float> heights, std::span<const std::uint32_t> flags) noexcept {
   if (!data_)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
   return api_detail::levelStatusBoundary<void>(
       resourcePath(),
       [&]() -> ArxReturnCode {
-        if ((input.anchor_count != 0 && input.anchors == nullptr) ||
-            (input.connection_count != 0 && input.connections == nullptr))
-          return ARX_INVALID_DATA_POINTER;
-        if (input.anchor_count > static_cast<std::size_t>(kInvalidAnchorIndex)) return ARX_LEVEL_TOO_MANY_ANCHORS;
-        std::vector<Anchor> anchors(input.anchor_count);
-        for (std::size_t i = 0; i < input.anchor_count; ++i) {
-          if (!internalAnchor(input.anchors[i], anchors[i])) return ARX_INVALID_DATA_POINTER;
+        if (positions.size() % 3U != 0) return ARX_LEVEL_BAD_ANCHOR_POSITION;
+        const std::size_t count = positions.size() / 3U;
+        if (count > static_cast<std::size_t>(kInvalidAnchorIndex)) return ARX_LEVEL_TOO_MANY_ANCHORS;
+        if (radii.size() != count || heights.size() != count || flags.size() != count)
+          return ARX_LEVEL_BAD_ANCHOR_COUNT;
+        std::vector<Anchor> anchors(count);
+        for (std::size_t i = 0; i < count; ++i) {
+          if (flags[i] > static_cast<std::uint32_t>(std::numeric_limits<std::int16_t>::max()))
+            return ARX_LEVEL_BAD_ANCHOR_FLAGS;
+          anchors[i].position = {positions[i * 3U], positions[i * 3U + 1U], positions[i * 3U + 2U]};
+          anchors[i].radius = radii[i];
+          anchors[i].height = heights[i];
+          anchors[i].flags = static_cast<std::int16_t>(flags[i]);
+          anchors[i].name = std::format("anchor_{}", i);
         }
-        std::vector<AnchorConnection> connections;
-        connections.reserve(input.connection_count);
-        for (std::size_t i = 0; i < input.connection_count; ++i)
-          connections.push_back(internalConnection(input.connections[i]));
-        navigation::repairAnchorNames(anchors);
         ArxReturnCode rc = level_validation::navigationError(navigation::validateAnchorDefinitions(anchors));
         if (rc != ARX_OK) return rc;
-        rc = level_validation::navigationError(navigation::validateConnections(anchors, connections));
-        if (rc != ARX_OK) return rc;
-        navigation::replaceAnchors(data_->navigation, std::move(anchors), std::move(connections));
+        navigation::replaceAnchors(data_->navigation, std::move(anchors), {});
         level_validation::invalidate(data_->validation, LevelValidation::kAnchors);
         level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
         return ARX_OK;
@@ -2191,29 +2539,70 @@ LevelResult<void> Level::replaceAnchors(const ArxLevelAnchorsInput& input) noexc
       api_detail::resourceLocation(resourcePath(), LevelElement::kAnchor));
 }
 
-void Level::clearAnchors() noexcept {
-  if (data_) navigation::clearAnchors(data_->navigation);
-}
-
-LevelResult<void> Level::setNavSurface(const ArxLevelNavSurfaceInput& input) noexcept {
+LevelResult<void> Level::replaceAnchorConnections(std::span<const AnchorIndex> endpoints) noexcept {
   if (!data_)
     return api_detail::levelFailure<void>(ARX_INVALID_STATE,
                                           api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
   return api_detail::levelStatusBoundary<void>(
       resourcePath(),
       [&]() -> ArxReturnCode {
-        if ((input.vertex_count != 0 && input.vertices == nullptr) ||
-            (input.triangle_count != 0 && input.triangles == nullptr))
-          return ARX_INVALID_DATA_POINTER;
+        if (endpoints.size() % 2U != 0) return ARX_LEVEL_BAD_ANCHOR_CONNECTION_COUNT;
+        if (endpoints.size() / 2U > static_cast<std::size_t>(kInvalidAnchorConnectionIndex))
+          return ARX_LEVEL_TOO_MANY_ANCHOR_CONNECTIONS;
+        std::vector<AnchorConnection> next;
+        next.reserve(endpoints.size() / 2U);
+        for (std::size_t i = 0; i < endpoints.size(); i += 2U) {
+          AnchorIndex first = endpoints[i];
+          AnchorIndex second = endpoints[i + 1U];
+          if (first == second) return ARX_LEVEL_BAD_ANCHOR_CONNECTION_ORDER;
+          if (first > second) std::swap(first, second);
+          next.push_back({first, second});
+        }
+        std::sort(next.begin(), next.end(), [](const AnchorConnection& lhs, const AnchorConnection& rhs) {
+          return lhs.first < rhs.first || (lhs.first == rhs.first && lhs.second < rhs.second);
+        });
+        ArxReturnCode rc =
+            level_validation::navigationError(navigation::validateConnections(data_->navigation.anchors, next));
+        if (rc != ARX_OK) return rc;
+        navigation::replaceConnections(data_->navigation, std::move(next));
+        level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
+        return ARX_OK;
+      },
+      api_detail::resourceLocation(resourcePath(), LevelElement::kAnchorConnection));
+}
+
+void Level::clearAnchorConnections() noexcept {
+  if (!data_) return;
+  navigation::replaceConnections(data_->navigation, {});
+  level_validation::markValid(data_->validation, LevelValidation::kAnchorConnections);
+}
+
+void Level::clearAnchors() noexcept {
+  if (data_) navigation::clearAnchors(data_->navigation);
+}
+
+LevelResult<void> Level::setNavSurface(std::span<const float> positions,
+                                       std::span<const NavSurfaceVertexIndex> triangle_indices) noexcept {
+  if (!data_)
+    return api_detail::levelFailure<void>(ARX_INVALID_STATE,
+                                          api_detail::resourceLocation(resourcePath(), LevelElement::kResource));
+  return api_detail::levelStatusBoundary<void>(
+      resourcePath(),
+      [&]() -> ArxReturnCode {
+        if (triangle_indices.size() % 3U != 0) return ARX_LEVEL_BAD_NAV_SURFACE_TRIANGLE;
+        if (positions.empty() && triangle_indices.empty()) {
+          navigation::clearSurface(data_->navigation);
+          level_validation::markValid(data_->validation, LevelValidation::kNavSurface);
+          return ARX_OK;
+        }
         NavSurface surface;
-        surface.vertices.reserve(input.vertex_count);
-        for (std::size_t i = 0; i < input.vertex_count; ++i)
-          surface.vertices.push_back(internalVertex(input.vertices[i]));
-        surface.triangles.resize(input.triangle_count);
-        for (std::size_t i = 0; i < input.triangle_count; ++i) {
-          std::copy(std::begin(input.triangles[i].vertices),
-                    std::end(input.triangles[i].vertices),
-                    surface.triangles[i].vertices.begin());
+        const geometry::Error vertex_error = geometry::buildVertices(positions, surface.vertices);
+        if (vertex_error == geometry::Error::kTooManyVertices) return ARX_LEVEL_TOO_MANY_NAV_SURFACE_VERTICES;
+        if (vertex_error == geometry::Error::kOutOfMemory) return ARX_BAD_ALLOC;
+        if (vertex_error != geometry::Error::kNone) return ARX_LEVEL_BAD_NAV_SURFACE_VERTEX;
+        surface.triangles.resize(triangle_indices.size() / 3U);
+        for (std::size_t i = 0; i < triangle_indices.size(); ++i) {
+          surface.triangles[i / 3U].vertices[i % 3U] = triangle_indices[i];
         }
         ArxReturnCode rc = level_validation::navigationError(navigation::validateSurface(surface));
         if (rc != ARX_OK) return rc;

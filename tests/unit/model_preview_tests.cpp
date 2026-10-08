@@ -13,6 +13,7 @@
 #include "arx_pistoris/model/location.hpp"
 
 #include "external/glb/container.h"
+#include "level_add_helpers.h"
 #include "model_helpers.h"
 
 #include <array>
@@ -64,8 +65,7 @@ pistoris::Level makePreviewLevel() {
     face.corners[index].vertex = static_cast<pistoris::VertexIndex>(index);
     face.corners[index].normal = {0.0f, -1.0f, 0.0f};
   }
-  const ArxLevelMeshInput mesh{vertices.data(), vertices.size(), &face, 1, nullptr, 0};
-  REQUIRE(level.replaceMesh(mesh));
+  REQUIRE(test::replaceGeometry(level, vertices, std::span<const ArxLevelFace>(&face, 1)) == ARX_OK);
 
   for (std::string_view name : {"human", "human_1"}) {
     const ArxLevelEntity entity{

@@ -125,15 +125,111 @@ TEST_SUITE("C++ Model API") {
     CHECK(result.error()->location()->subindex == 1);
   }
 
-  TEST_CASE("Clears mesh textures with geometry") {
+  TEST_CASE("Clearing vertices cascades to faces and textures clear independently") {
     pistoris::Model model = take(pistoris::Model::importNative(makeSemanticModelFtl()));
     REQUIRE(model.textureCount() != 0);
 
-    model.clearMesh();
+    model.clearVertices();
 
     CHECK(model.vertexCount() == 0);
     CHECK(model.faceCount() == 0);
+    CHECK(model.textureCount() != 0);
+    model.clearTextures();
     CHECK(model.textureCount() == 0);
+  }
+
+  TEST_CASE("Copies grouped Model geometry and affiliation arrays") {
+    pistoris::Model model = take(pistoris::Model::importNative(makeSemanticModelFtl()));
+    const std::size_t face_count = model.faceCount();
+    const std::size_t vertex_count = model.vertexCount();
+    std::vector<std::uint32_t> vertex_indices(face_count * 3U);
+    std::vector<float> uvs(face_count * 6U);
+    std::vector<float> corner_normals(face_count * 9U);
+    std::vector<pistoris::TextureIndex> textures(face_count);
+    std::vector<float> transvals(face_count);
+    std::vector<float> face_normals(face_count * 3U);
+    std::vector<pistoris::FaceType> flags(face_count);
+
+    REQUIRE(model.copyFaces({.vertex_indices = std::span<std::uint32_t>(vertex_indices),
+                             .uvs = std::span<float>(uvs),
+                             .corner_normals = std::span<float>(corner_normals),
+                             .textures = std::span<pistoris::TextureIndex>(textures),
+                             .transvals = std::span<float>(transvals),
+                             .face_normals = std::span<float>(face_normals),
+                             .flags = std::span<pistoris::FaceType>(flags)}));
+    for (std::size_t face_index = 0; face_index < face_count; ++face_index) {
+      const ArxModelFace face = model.faces()[face_index];
+      CHECK(textures[face_index] == face.texture);
+      CHECK(transvals[face_index] == face.transval);
+      CHECK(flags[face_index] == face.flags);
+      CHECK(face_normals[face_index * 3U] == face.normal.x);
+      CHECK(face_normals[face_index * 3U + 1U] == face.normal.y);
+      CHECK(face_normals[face_index * 3U + 2U] == face.normal.z);
+      for (std::size_t corner = 0; corner < 3U; ++corner) {
+        const std::size_t item = face_index * 3U + corner;
+        CHECK(vertex_indices[item] == face.corners[corner].vertex);
+        CHECK(uvs[item * 2U] == face.corners[corner].u);
+        CHECK(uvs[item * 2U + 1U] == face.corners[corner].v);
+        CHECK(corner_normals[item * 3U] == face.corners[corner].normal.x);
+        CHECK(corner_normals[item * 3U + 1U] == face.corners[corner].normal.y);
+        CHECK(corner_normals[item * 3U + 2U] == face.corners[corner].normal.z);
+      }
+    }
+
+    std::vector<float> positions(vertex_count * 3U);
+    REQUIRE(model.copyVertexPositions(positions));
+    for (std::size_t vertex = 0; vertex < vertex_count; ++vertex) {
+      const ArxModelVertex value = model.vertices()[vertex];
+      CHECK(positions[vertex * 3U] == value.position.x);
+      CHECK(positions[vertex * 3U + 1U] == value.position.y);
+      CHECK(positions[vertex * 3U + 2U] == value.position.z);
+    }
+
+    std::vector<pistoris::TextureIndex> face_textures(face_count);
+    REQUIRE(model.copyFaceTextures(face_textures));
+    CHECK(face_textures == textures);
+    std::vector<pistoris::BoneIndex> vertex_bones(vertex_count);
+    REQUIRE(model.copyVertexBones(vertex_bones));
+    for (std::size_t index = 0; index < vertex_count; ++index)
+      CHECK(vertex_bones[index] == model.vertices()[index].bone);
+    std::vector<pistoris::BoneIndex> action_point_bones(model.actionPointCount());
+    REQUIRE(model.copyActionPointBones(action_point_bones));
+    for (std::size_t index = 0; index < action_point_bones.size(); ++index)
+      CHECK(action_point_bones[index] == model.actionPoints()[index].bone);
+
+    std::vector<std::uint64_t> vertex_masks(vertex_count);
+    std::vector<std::uint64_t> bone_masks(model.boneCount());
+    std::vector<std::uint64_t> action_point_masks(model.actionPointCount());
+    REQUIRE(model.copyVertexSelectionMasks(vertex_masks));
+    REQUIRE(model.copyBoneSelectionMasks(bone_masks));
+    REQUIRE(model.copyActionPointSelectionMasks(action_point_masks));
+    for (std::size_t index = 0; index < vertex_masks.size(); ++index) {
+      std::uint64_t expected = 0;
+      for (pistoris::SelectionId id : model.selectionIds()) {
+        const auto members = model.selectionVertices(id);
+        REQUIRE(members);
+        if (std::find(members->begin(), members->end(), static_cast<pistoris::VertexIndex>(index)) != members->end())
+          expected |= std::uint64_t{1} << id;
+      }
+      CHECK(vertex_masks[index] == expected);
+    }
+
+    CHECK(model.copyFaces({}).code() == ARX_INVALID_OPTIONS);
+    std::uint32_t empty_destination = 0;
+    CHECK(model.copyFaces({.vertex_indices = std::span<std::uint32_t>(&empty_destination, 0)}).code() ==
+          ARX_BUFFER_TOO_SMALL);
+    std::array<float, 15> overlapping{};
+    CHECK(model
+              .copyFaces({.uvs = std::span<float>(overlapping.data(), 6),
+                          .corner_normals = std::span<float>(overlapping.data() + 3, 9)})
+              .code() == ARX_INVALID_OPTIONS);
+    CHECK(std::all_of(overlapping.begin(), overlapping.end(), [](float value) { return value == 0.0f; }));
+    std::array<std::uint32_t, 2> too_small{77U, 77U};
+    CHECK(model.copyFaces({.vertex_indices = std::span<std::uint32_t>(too_small)}).code() == ARX_BUFFER_TOO_SMALL);
+    CHECK(too_small == std::array<std::uint32_t, 2>{77U, 77U});
+    std::vector<std::uint32_t> too_large(face_count * 3U + 1U, 88U);
+    CHECK(model.copyFaces({.vertex_indices = std::span<std::uint32_t>(too_large)}).code() == ARX_INVALID_OPTIONS);
+    CHECK(std::all_of(too_large.begin(), too_large.end(), [](std::uint32_t value) { return value == 88U; }));
   }
 
   TEST_CASE("Returns the first format path for each normalized Model texture") {
@@ -1318,7 +1414,12 @@ f 1 2 3
 
     const ArxModelBone copied = model.bones()[0];
     CHECK((stringView(copied.name) == "root"));
-    CHECK(model.removeBone(root_index).code() == ARX_MODEL_BONE_IN_USE);
+    REQUIRE(model.removeBone(root_index));
+    CHECK(model.vertexCount() == 3);
+    CHECK(model.vertices()[0].bone == pistoris::kInvalidBoneIndex);
+    CHECK(model.origin().bone == pistoris::kInvalidBoneIndex);
+    CHECK(take(model.selection(cut_head_id)).leading_bone == pistoris::kInvalidBoneIndex);
+    CHECK(model.validate());
 
     REQUIRE(model.removeSelection(cut_head_id));
     CHECK(model.validateSelections());
@@ -1354,7 +1455,72 @@ f 1 2 3
     CHECK(selectionIncludesOrigin(model, selection));
   }
 
-  TEST_CASE("Replacing rig categories preserves unrelated selection membership") {
+  TEST_CASE("Bulk selection masks expose stable bits including holes and bit 63") {
+    pistoris::Model model;
+    std::array<pistoris::SelectionId, 64> ids{};
+    for (std::size_t i = 0; i < ids.size(); ++i) {
+      const std::string name = "selection_" + std::to_string(i);
+      ArxModelSelection selection{};
+      selection.name = {name.data(), name.size()};
+      ids[i] = take(model.addSelection(selection));
+    }
+    CHECK(model.activeSelectionMask() == std::numeric_limits<std::uint64_t>::max());
+    CHECK(take(model.selectionMask(ids[63])) == (std::uint64_t{1} << 63U));
+
+    REQUIRE(model.removeSelection(ids[1]));
+    CHECK(model.activeSelectionMask() == (std::numeric_limits<std::uint64_t>::max() & ~(std::uint64_t{1} << 1U)));
+    REQUIRE(model.addVertex({}));
+    const std::array<std::uint64_t, 1> high_bit = {std::uint64_t{1} << 63U};
+    REQUIRE(model.replaceVertexSelectionMasks(high_bit));
+    CHECK(selectionVertices(model, ids[63]) == std::vector<pistoris::VertexIndex>{0});
+
+    const std::array<std::uint64_t, 1> stale_bit = {std::uint64_t{1} << 1U};
+    CHECK_FALSE(model.replaceVertexSelectionMasks(stale_bit));
+    CHECK(selectionVertices(model, ids[63]) == std::vector<pistoris::VertexIndex>{0});
+
+    const std::array<float, 3> replacement_position = {0.0f, 0.0f, 0.0f};
+    REQUIRE(model.replaceVertices(replacement_position));
+    CHECK(selectionVertices(model, ids[63]).empty());
+  }
+
+  TEST_CASE("Raw Model geometry replacement validates spans and resets dependent data") {
+    pistoris::Model model;
+    const std::array<float, 9> positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    REQUIRE(model.replaceVertices(positions));
+
+    ArxModelSelection selection{};
+    selection.name = {"selected", 8};
+    const pistoris::SelectionId selection_id = take(model.addSelection(selection));
+    const std::array<std::uint64_t, 3> masks = {1, 0, 1};
+    REQUIRE(model.replaceVertexSelectionMasks(masks));
+    CHECK(selectionVertices(model, selection_id) == std::vector<pistoris::VertexIndex>{0, 2});
+
+    const std::array<std::uint32_t, 3> indices = {0, 1, 2};
+    const std::array<float, 6> uvs = {0, 0, 1, 0, 0, 1};
+    const std::array<float, 9> corner_normals = {0, 0, 2, 0, 0, 2, 0, 0, 2};
+    const std::array<pistoris::TextureIndex, 1> textures = {pistoris::kNoTexture};
+    const std::array<float, 1> transvals = {0};
+    const std::array<float, 3> face_normals = {0, 0, 3};
+    REQUIRE(model.replaceFaces(indices, uvs, corner_normals, textures, transvals, face_normals));
+    CHECK(model.faces()[0].normal.z == doctest::Approx(1.0f));
+    CHECK(model.faces()[0].corners[0].normal.z == doctest::Approx(1.0f));
+
+    const std::array<float, 5> malformed_uvs{};
+    CHECK(model.replaceFaces(indices, malformed_uvs, corner_normals, textures, transvals, face_normals).code() ==
+          ARX_MODEL_BAD_FACE_COUNT);
+    CHECK(model.faceCount() == 1);
+    CHECK(model.faces()[0].corners[2].vertex == 2);
+
+    const std::array<std::uint32_t, 3> invalid_indices = {0, 1, 3};
+    CHECK_FALSE(model.replaceFaces(invalid_indices, uvs, corner_normals, textures, transvals, face_normals));
+    CHECK(model.faces()[0].corners[2].vertex == 2);
+
+    REQUIRE(model.replaceVertices(positions));
+    CHECK(model.faceCount() == 0);
+    CHECK(selectionVertices(model, selection_id).empty());
+  }
+
+  TEST_CASE("Clearing rig categories clears only their selection memberships") {
     pistoris::Model model = take(pistoris::Model::importNative(makeSemanticModelFtl()));
 
     const pistoris::SelectionId selection = 0;
@@ -1364,9 +1530,7 @@ f 1 2 3
     REQUIRE_FALSE(selectionActionPoints(model, selection).empty());
     REQUIRE(selectionIncludesOrigin(model, selection));
 
-    const auto bone_view = model.bones();
-    std::vector<ArxModelBone> bones(bone_view.begin(), bone_view.end());
-    REQUIRE(model.replaceSkeleton({bones.data(), bones.size()}));
+    model.clearBones();
     CHECK(selectionVertices(model, selection) == vertices);
     CHECK(selectionBones(model, selection).empty());
     CHECK_FALSE(selectionActionPoints(model, selection).empty());
@@ -1376,9 +1540,9 @@ f 1 2 3
     CHECK(model.actionPoints()[0].bone == pistoris::kInvalidBoneIndex);
     CHECK(take(model.selection(3)).leading_bone == pistoris::kInvalidBoneIndex);
 
-    const auto action_view = model.actionPoints();
-    std::vector<ArxModelActionPoint> action_points(action_view.begin(), action_view.end());
-    REQUIRE(model.replaceActionPoints({action_points.data(), action_points.size()}));
+    model.clearActionPoints();
+    const ArxModelActionPoint replacement_action_point{{"replacement", 11}, {}, pistoris::kInvalidBoneIndex};
+    REQUIRE(model.addActionPoint(replacement_action_point));
     CHECK(selectionVertices(model, selection) == vertices);
     CHECK(selectionBones(model, selection).empty());
     CHECK(selectionActionPoints(model, selection).empty());
@@ -1517,7 +1681,8 @@ f 1 2 3
       point.name = {"hit_30", 6};
       point.bone = 0;
     }
-    REQUIRE(model.replaceActionPoints({action_points.data(), action_points.size()}));
+    model.clearActionPoints();
+    for (const ArxModelActionPoint& point : action_points) REQUIRE(model.addActionPoint(point));
     CHECK(model.validate());
 
     const std::vector<std::uint8_t> glb = take(model.exportGlb());
@@ -1541,17 +1706,7 @@ f 1 2 3
     pistoris::Model model;
     CHECK(model.setResourcePath("not/a/model").code() == ARX_MODEL_BAD_RESOURCE_PATH);
 
-    ArxModelMeshInput oversized{};
-    oversized.vertex_count = std::numeric_limits<std::size_t>::max();
-    CHECK(model.replaceMesh(oversized).code() == ARX_MODEL_TOO_MANY_VERTICES);
-
-    ArxModelSkeletonInput oversized_skeleton{};
-    oversized_skeleton.bone_count = 1025;
-    CHECK(model.replaceSkeleton(oversized_skeleton).code() == ARX_MODEL_TOO_MANY_BONES);
-
-    ArxModelActionPointsInput oversized_action_points{};
-    oversized_action_points.action_point_count = std::numeric_limits<std::size_t>::max();
-    CHECK(model.replaceActionPoints(oversized_action_points).code() == ARX_MODEL_TOO_MANY_ACTION_POINTS);
+    CHECK(model.replaceVertices(std::array<float, 2>{}).code() == ARX_MODEL_BAD_VERTEX_COUNT);
 
     ArxModelVertex vertex{};
     vertex.bone = 0;

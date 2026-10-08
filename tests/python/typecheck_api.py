@@ -15,6 +15,74 @@ def exercise_error_types(error: pistoris.PistorisError) -> None:
         assert native_path is None or native_path.is_absolute()
 
 
+def exercise_bulk_buffer_keywords(
+    model: pistoris.Model,
+    level: pistoris.Level,
+    floats: object,
+    indices: object,
+    masks: object,
+) -> None:
+    model.vertices.replace(positions=floats)
+    model.vertices.replace_bones(bones=indices)
+    model.vertices.replace_selection_masks(masks=masks)
+    model.faces.replace(
+        vertex_indices=indices,
+        uvs=floats,
+        corner_normals=floats,
+        textures=indices,
+        transvals=floats,
+        face_normals=floats,
+        flags=indices,
+    )
+    model.faces.replace_textures(textures=indices)
+    model.skeleton.bones.replace_selection_masks(masks=masks)
+    model.action_points.replace_bones(bones=indices)
+    model.action_points.replace_selection_masks(masks=masks)
+    model.replace_vertices(positions=floats)
+
+    level.vertices.replace(positions=floats)
+    level.faces.replace(
+        vertex_indices=indices,
+        uvs=floats,
+        corner_normals=floats,
+        textures=indices,
+        transvals=floats,
+        corner_colors=floats,
+        face_normals=floats,
+        flags=indices,
+    )
+    level.faces.replace_textures(textures=indices)
+    level.faces.replace_rooms(rooms=indices)
+    level.anchors.replace(positions=floats, radii=floats, heights=floats, flags=indices)
+    level.anchor_connections.replace(endpoints=indices)
+    level.room_distances.replace(distances=floats, endpoint_portals=indices)
+    level.nav_surface.replace(positions=floats, triangle_indices=indices)
+
+    model.vertices.copy(positions=floats)
+    model.vertices.copy_bones(bones=indices)
+    model.vertices.copy_selection_masks(masks=masks)
+    model.faces.copy(
+        vertex_indices=indices, uvs=floats, corner_normals=floats, textures=indices,
+        transvals=floats, face_normals=floats, flags=indices,
+    )
+    model.faces.copy_textures(textures=indices)
+    model.skeleton.bones.copy_selection_masks(masks=masks)
+    model.action_points.copy_bones(bones=indices)
+    model.action_points.copy_selection_masks(masks=masks)
+
+    level.vertices.copy(positions=floats)
+    level.faces.copy(
+        vertex_indices=indices, uvs=floats, corner_normals=floats, textures=indices,
+        transvals=floats, corner_colors=floats, face_normals=floats, flags=indices,
+    )
+    level.faces.copy_textures(textures=indices)
+    level.faces.copy_rooms(rooms=indices)
+    level.anchors.copy(positions=floats, radii=floats, heights=floats, flags=indices)
+    level.anchor_connections.copy(endpoints=indices)
+    level.room_distances.copy(distances=floats, endpoint_portals=indices)
+    level.nav_surface.copy(positions=floats, triangle_indices=indices)
+
+
 def exercise_public_types(
     model: pistoris.Model,
     animation: pistoris.Animation,
@@ -135,9 +203,9 @@ def exercise_public_types(
     loading_screen_image: bytes | None = loading_screen.encoded_image
     loading_screen.encoded_image = loading_screen_image
 
-    texture_media: bytes | None = model.mesh.textures[0].encoded_image
-    model.mesh.textures[0].encoded_image = texture_media
-    model.mesh.textures[0].encoded_image = None
+    texture_media: bytes | None = model.textures[0].encoded_image
+    model.textures[0].encoded_image = texture_media
+    model.textures[0].encoded_image = None
     animation_media: bytes | None = animation.sounds[0].encoded_audio
     animation.sounds[0].encoded_audio = animation_media
     animation.sounds[0].encoded_audio = None

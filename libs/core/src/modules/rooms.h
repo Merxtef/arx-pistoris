@@ -59,6 +59,9 @@ struct RoomsData {
 
 namespace rooms {
 
+std::optional<ArxAabb> effectiveGeometryBounds(const GeometryData& geometry,
+                                               std::span<const RoomIndex> face_rooms) noexcept;
+
 struct RoomDistanceDebugPoint {
   ArxVector3 position = {};
   RoomIndex room = 0;
@@ -204,18 +207,21 @@ RoomDistance roomDistance(const RoomsData& rooms, RoomIndex low_room, RoomIndex 
 RoomIndex addRoom(RoomsData& rooms, Room room);
 void setRoom(RoomsData& rooms, RoomIndex index, Room room) noexcept;
 void removeRoom(RoomsData& rooms, RoomIndex index) noexcept;
+void clearRooms(RoomsData& rooms) noexcept;
 void appendFaceRooms(RoomsData& rooms, std::span<const RoomIndex> face_rooms);
 void reserveFaceRoomCapacity(RoomsData& rooms, std::size_t capacity);
 void truncateFaceRooms(RoomsData& rooms, std::size_t size) noexcept;
 void setFaceRoom(RoomsData& rooms, FaceIndex face, RoomIndex room) noexcept;
 void removeFaceRoom(RoomsData& rooms, FaceIndex face) noexcept;
 void replaceFaceRooms(RoomsData& rooms, std::vector<RoomIndex>&& face_rooms) noexcept;
+void assignFaceRooms(RoomsData& rooms, std::span<const RoomIndex> face_rooms) noexcept;
 void clearFaceRooms(RoomsData& rooms) noexcept;
 // Empty means identity; otherwise the map must describe an order-preserving compaction
 void remapFaceRooms(RoomsData& rooms, std::span<const FaceIndex> face_remap) noexcept;
 PortalIndex addPortal(RoomsData& rooms, Portal portal);
 void setPortal(RoomsData& rooms, PortalIndex index, Portal portal) noexcept;
 void removePortal(RoomsData& rooms, PortalIndex index) noexcept;
+void clearPortals(RoomsData& rooms) noexcept;
 void setRoomDistance(RoomsData& rooms, RoomIndex low_room, RoomIndex high_room, RoomDistance distance);
 void replaceRoomDistances(RoomsData& rooms, RoomDistances&& distances) noexcept;
 void clearRoomDistances(RoomsData& rooms) noexcept;

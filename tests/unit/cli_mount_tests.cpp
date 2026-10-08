@@ -158,7 +158,7 @@ pistoris::Level textureLevel(std::string path) {
   pistoris::Level level;
   REQUIRE(test::addRoom(level, {"room"}) == 0);
 
-  test::MeshSnapshot mesh;
+  test::GeometrySnapshot mesh;
   mesh.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
   pistoris::Face face;
   face.corners[0] = test::corner(0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f);
@@ -169,7 +169,7 @@ pistoris::Level textureLevel(std::string path) {
   mesh.textures.emplace_back(std::move(path));
   mesh.textures.emplace_back("graph/obj3d/textures/unused.bmp");
   mesh.face_rooms.push_back(0);
-  REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+  REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
   return pistoris::Level(level);
 }
 

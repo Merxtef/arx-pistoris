@@ -24,9 +24,15 @@ namespace {
 using pistoris::ArxColor3;
 using pistoris::ArxVector3;
 
-pistoris::Face makeFace(pistoris::GeometryData&, std::uint32_t a, std::uint32_t b, std::uint32_t c,
+pistoris::Face makeFace(pistoris::GeometryData& geometry, std::uint32_t a, std::uint32_t b, std::uint32_t c,
                         const ArxVector3& normal = {0.0f, -1.0f, 0.0f}) {
-  return {{{{a, normal, 0.0f, 0.0f}, {b, normal, 0.0f, 0.0f}, {c, normal, 0.0f, 0.0f}}}, pistoris::kNoTexture, 0, 0.0f};
+  pistoris::Face face = {
+      {{{a, normal, 0.0f, 0.0f}, {b, normal, 0.0f, 0.0f}, {c, normal, 0.0f, 0.0f}}}, pistoris::kNoTexture, 0, 0.0f};
+  const ArxVector3& first = geometry.vertices[a].position;
+  const ArxVector3& second = geometry.vertices[b].position;
+  const ArxVector3& third = geometry.vertices[c].position;
+  face.normal = pistoris::math::normalizeFiniteOr(pistoris::math::cross(second - first, third - first), normal);
+  return face;
 }
 
 pistoris::Light makeLight(ArxVector3 position, ArxColor3 color = {1.0f, 1.0f, 1.0f}) {

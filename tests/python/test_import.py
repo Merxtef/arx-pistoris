@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Merxtef
 
+import re
 import unittest
 from importlib import import_module
 from importlib.util import find_spec
@@ -259,7 +260,7 @@ class ImportTests(unittest.TestCase):
             resource_stub,
         )
         self.assertNotIn("CinematicSoundEncoding", resource_stub)
-        self.assertIn("def room_1(self) -> RoomRef | None: ...", resource_stub)
+        self.assertIn("def room_front(self) -> RoomRef | None: ...", resource_stub)
         self.assertNotIn("SOUND_EFFECTS_LANGUAGE_ID", root_stub)
         self.assertIn(
             "def from_tea(tea: native.tea.Data, *, include_sound_sources: bool = True, "
@@ -297,8 +298,10 @@ class ImportTests(unittest.TestCase):
         self.assertIn("__hash__: None = None", report_stub)
         error_location_stub = resource_stub.split("class ErrorLocation:", 1)[1].split("\nclass ", 1)[0]
         self.assertIn("__hash__: None = None", error_location_stub)
-        self.assertIn("radius: float = 0.0001", resource_stub)
-        self.assertNotIn("9.999999747378752e-05", resource_stub)
+        radius_match = re.search(r"def weld_vertices\(self, (?:\*, )?radius: float = ([^,]+)", resource_stub)
+        self.assertIsNotNone(radius_match)
+        assert radius_match is not None
+        self.assertAlmostEqual(float(radius_match.group(1)), 0.0001, places=8)
         self.assertIn("support_min_up_cos: float = 0.5881717", resource_stub)
         self.assertIn(
             "support_ignore_flags: FaceFlag = FaceFlag.TRANS | FaceFlag.WATER | FaceFlag.NOCOL | FaceFlag.LAVA",

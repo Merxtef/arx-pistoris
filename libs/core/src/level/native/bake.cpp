@@ -88,6 +88,8 @@ ArxReturnCode bakeValidatedNativeLevelBundle(const LevelModules& level, const Le
     log(ARX_LOG_WARN,
         "Level native bake: {} source face(s) produced no output polygons after clipping",
         warnings.fully_discarded_faces);
+  if (warnings.omitted_unassigned_faces != 0)
+    log(ARX_LOG_WARN, "Level native bake: omitted {} face(s) without a room", warnings.omitted_unassigned_faces);
   if (warnings.rescaled_texture_images != 0)
     log(ARX_LOG_WARN,
         "Level native bake: rescaled {} non-power-of-two texture image(s) to power-of-two dimensions for "

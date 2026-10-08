@@ -24,12 +24,15 @@ Error collectVertexWeldSegments(const GeometryData& geometry, const RoomsData& r
   if (error != Error::kNone) return error;
 
   VertexWeldSegments collected;
-  collected.offsets.assign(rooms.definitions.size() + 1U, 0);
+  const bool has_unassigned_faces = std::ranges::find(rooms.face_rooms, kNoRoom) != rooms.face_rooms.end();
+  const std::size_t segment_count = rooms.definitions.size() + static_cast<std::size_t>(has_unassigned_faces);
+  collected.offsets.assign(segment_count + 1U, 0);
   for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
     const RoomIndex room = rooms.face_rooms[face_index];
+    const std::size_t segment = room == kNoRoom ? rooms.definitions.size() : room;
     for (const Corner& corner : geometry.faces[face_index].corners) {
       if (corner.vertex >= geometry.vertices.size()) return Error::kBadFaceVertex;
-      ++collected.offsets[static_cast<std::size_t>(room) + 1U];
+      ++collected.offsets[segment + 1U];
     }
   }
   for (std::size_t room = 1; room < collected.offsets.size(); ++room)
@@ -38,27 +41,28 @@ Error collectVertexWeldSegments(const GeometryData& geometry, const RoomsData& r
   std::vector<std::size_t> room_write = collected.offsets;
   for (std::size_t face_index = 0; face_index < geometry.faces.size(); ++face_index) {
     const RoomIndex room = rooms.face_rooms[face_index];
+    const std::size_t segment = room == kNoRoom ? rooms.definitions.size() : room;
     for (const Corner& corner : geometry.faces[face_index].corners)
-      collected.vertices[room_write[room]++] = corner.vertex;
+      collected.vertices[room_write[segment]++] = corner.vertex;
   }
 
   std::vector<std::uint8_t> protected_mask(geometry.vertices.size(), 0);
-  std::vector<RoomIndex> first_room(geometry.vertices.size(), kInvalidRoomIndex);
+  std::vector<std::size_t> first_segment(geometry.vertices.size(), segment_count);
   std::size_t source_begin = 0;
   std::size_t compact_write = 0;
-  for (std::size_t room = 0; room < rooms.definitions.size(); ++room) {
-    const std::size_t source_end = collected.offsets[room + 1U];
+  for (std::size_t segment = 0; segment < segment_count; ++segment) {
+    const std::size_t source_end = collected.offsets[segment + 1U];
     auto begin = collected.vertices.begin() + static_cast<std::ptrdiff_t>(source_begin);
     auto end = collected.vertices.begin() + static_cast<std::ptrdiff_t>(source_end);
     std::sort(begin, end);
     const auto unique_end = std::unique(begin, end);
-    collected.offsets[room] = compact_write;
+    collected.offsets[segment] = compact_write;
     for (auto current = begin; current != unique_end; ++current) {
       const VertexIndex vertex = *current;
       collected.vertices[compact_write++] = vertex;
-      if (first_room[vertex] == kInvalidRoomIndex) {
-        first_room[vertex] = static_cast<RoomIndex>(room);
-      } else if (first_room[vertex] != room) {
+      if (first_segment[vertex] == segment_count) {
+        first_segment[vertex] = segment;
+      } else if (first_segment[vertex] != segment) {
         protected_mask[vertex] = 1;
       }
     }

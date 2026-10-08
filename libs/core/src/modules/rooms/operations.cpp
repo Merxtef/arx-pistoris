@@ -2,18 +2,40 @@
 // SPDX-FileCopyrightText: 2026 Merxtef
 
 #include "arx_pistoris/base/indices.h"
+#include "arx_pistoris/base/math.h"
 
+#include "modules/geometry.h"
 #include "modules/rooms.h"
 #include "utils/identifier.h"
+#include "utils/math/bounds.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
 
 namespace pistoris::rooms {
+
+std::optional<ArxAabb> effectiveGeometryBounds(const GeometryData& geometry,
+                                               std::span<const RoomIndex> face_rooms) noexcept {
+  assert(face_rooms.size() == geometry.faces.size());
+  std::optional<ArxAabb> bounds;
+  for (std::size_t face = 0; face < geometry.faces.size(); ++face) {
+    if (face_rooms[face] == kNoRoom) continue;
+    for (const Corner& corner : geometry.faces[face].corners) {
+      const ArxVector3& position = geometry.vertices[corner.vertex].position;
+      if (bounds)
+        math::expand(*bounds, position);
+      else
+        bounds = ArxAabb{position, position};
+    }
+  }
+  return bounds;
+}
+
 namespace {
 
 bool samePortalTopology(const Portal& lhs, const Portal& rhs) noexcept {
@@ -43,7 +65,6 @@ RoomIndex addRoom(RoomsData& rooms, Room room) {
 
 void removeRoom(RoomsData& rooms, RoomIndex index) noexcept {
   assert(static_cast<std::size_t>(index) < rooms.definitions.size());
-  assert(std::ranges::find(rooms.face_rooms, index) == rooms.face_rooms.end());
   rooms.definitions.erase(rooms.definitions.begin() + static_cast<std::ptrdiff_t>(index));
   std::erase_if(rooms.portals,
                 [index](const Portal& portal) { return portal.room_1 == index || portal.room_2 == index; });
@@ -51,9 +72,20 @@ void removeRoom(RoomsData& rooms, RoomIndex index) noexcept {
     if (portal.room_1 > index) --portal.room_1;
     if (portal.room_2 > index) --portal.room_2;
   }
-  for (RoomIndex& room : rooms.face_rooms)
-    if (room > index) --room;
+  for (RoomIndex& room : rooms.face_rooms) {
+    if (room == index)
+      room = kNoRoom;
+    else if (room != kNoRoom && room > index)
+      --room;
+  }
   rooms.distances.clear();
+}
+
+void clearRooms(RoomsData& rooms) noexcept {
+  rooms.definitions.clear();
+  rooms.portals.clear();
+  rooms.distances.clear();
+  std::fill(rooms.face_rooms.begin(), rooms.face_rooms.end(), kNoRoom);
 }
 
 void appendFaceRooms(RoomsData& rooms, std::span<const RoomIndex> face_rooms) {
@@ -68,7 +100,7 @@ void truncateFaceRooms(RoomsData& rooms, std::size_t size) noexcept {
 
 void setFaceRoom(RoomsData& rooms, FaceIndex face, RoomIndex room) noexcept {
   assert(static_cast<std::size_t>(face) < rooms.face_rooms.size());
-  assert(static_cast<std::size_t>(room) < rooms.definitions.size());
+  assert(room == kNoRoom || static_cast<std::size_t>(room) < rooms.definitions.size());
   rooms.face_rooms[face] = room;
 }
 
@@ -79,6 +111,11 @@ void removeFaceRoom(RoomsData& rooms, FaceIndex face) noexcept {
 
 void replaceFaceRooms(RoomsData& rooms, std::vector<RoomIndex>&& face_rooms) noexcept {
   rooms.face_rooms = std::move(face_rooms);
+}
+
+void assignFaceRooms(RoomsData& rooms, std::span<const RoomIndex> face_rooms) noexcept {
+  assert(face_rooms.size() == rooms.face_rooms.size());
+  std::copy(face_rooms.begin(), face_rooms.end(), rooms.face_rooms.begin());
 }
 
 void clearFaceRooms(RoomsData& rooms) noexcept { rooms.face_rooms.clear(); }
@@ -115,6 +152,11 @@ void setPortal(RoomsData& rooms, PortalIndex index, Portal portal) noexcept {
 void removePortal(RoomsData& rooms, PortalIndex index) noexcept {
   assert(static_cast<std::size_t>(index) < rooms.portals.size());
   rooms.portals.erase(rooms.portals.begin() + static_cast<std::ptrdiff_t>(index));
+  rooms.distances.clear();
+}
+
+void clearPortals(RoomsData& rooms) noexcept {
+  rooms.portals.clear();
   rooms.distances.clear();
 }
 

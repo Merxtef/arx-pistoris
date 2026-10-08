@@ -170,13 +170,11 @@ geometry::Error addTriangle(LevelModules& out, const fts::Poly& poly, int a, int
       ArxVector3{poly.v[b].ssx, poly.v[b].sy, poly.v[b].ssz},
       ArxVector3{poly.v[c].ssx, poly.v[c].sy, poly.v[c].ssz},
   };
-  ArxVector3 raw_normal = math::cross(positions[1] - positions[0], positions[2] - positions[0]);
-  float face_length = static_cast<float>(math::length(raw_normal));
-  if (!std::isfinite(face_length) || geometry::degenerateTriangle(positions[0], positions[1], positions[2])) {
+  const ArxVector3 face_normal = geometry::triangleNormalOr(positions[0], positions[1], positions[2], {});
+  if (face_normal == ArxVector3{} || geometry::degenerateTriangle(positions[0], positions[1], positions[2])) {
     ++warnings.discarded_faces;
     return geometry::Error::kNone;
   }
-  ArxVector3 face_normal = math::normalizeFiniteOr(raw_normal, {});
   std::array source_indices = {a, b, c};
   std::array<VertexIndex, 3> vertex_indices{};
   for (std::size_t i = 0; i < source_indices.size(); ++i) {
@@ -214,7 +212,9 @@ geometry::Error addTriangle(LevelModules& out, const fts::Poly& poly, int a, int
   face.texture = texture;
   face.flags = flags;
   face.transval = poly.transval;
-  face.normal = face_normal;
+  ArxVector3 source_face_normal = (a == 3 || b == 3 || c == 3) ? poly.norm2 : poly.norm;
+  face.normal = source_face_normal;
+  if (!geometry::normalizeNormal(face.normal)) face.normal = face_normal;
   out.geometry.faces.push_back(face);
   out.rooms.face_rooms.push_back(room);
   if (source_colors) {

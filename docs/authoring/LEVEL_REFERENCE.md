@@ -16,7 +16,8 @@ ordinary wrappers on import.
 ```text
 level_space                                      export-only scene root
 +-- rooms_parent                                export-only
-|   `-- arx_room__<room-name>                   required mesh root
+|   +-- arx_room__<room-name>                   required mesh root
+|   `-- arx_void_room__unassigned               optional mesh root
 +-- portals_parent                              export-only
 |   `-- arx_portal__<room-1>__<room-2>__<portal-name>
 +-- anchors_parent                              export-only
@@ -45,8 +46,9 @@ level_space                                      export-only scene root
 `-- arx_player_spawn__<label>                   optional empty root
 ```
 
-Reachable ordinary GLB point lights also import as Level lights. A room may
-contain ordinary geometry and other recognized non-room Level objects.
+Reachable ordinary GLB point lights also import as Level lights. A room or
+void-room root may contain ordinary geometry and other recognized non-room
+Level objects. Real and void-room roots cannot nest inside each other.
 Recognized non-room objects are terminal: ordinary descendant payload below
 them is ignored. Unrecognized reachable `arx_*` roots warn.
 
@@ -163,8 +165,9 @@ spelling before resolving portals. If two room names become equal after
 normalization, import fails because the references would be ambiguous.
 `__` is structural syntax and is invalid inside a room name.
 
-With no room or portal roots, all ordinary geometry imports into one generated
-room named `room`. Export omits rooms without faces.
+With no room, void-room, or portal roots, all ordinary geometry imports into
+one generated room named `room`. Otherwise ordinary geometry must belong to a
+real or void-room root. Export omits rooms without faces.
 
 Optional room mesh attribute:
 
@@ -178,6 +181,25 @@ use `(0.5,0.5,0.5)`. Canonical export writes float `VEC3` colors. Static-lightin
 generation replaces them only when explicitly requested.
 
 [Worked room example](LEVEL_GUIDE.md#rooms)
+
+## Void Room
+
+```text
+export-only parent: rooms_parent
+mesh root:          arx_void_room[__<label>]
+canonical export:   arx_void_room__unassigned
+```
+
+The optional label is ignored. Geometry on the root and its ordinary
+descendants imports with `NO_ROOM` affiliation. Multiple void roots may
+contribute unassigned faces. A void root creates no Level room, portal
+endpoint, or room-distance entry. Real and void-room roots cannot nest inside
+each other.
+
+Export groups all unassigned faces under one void root, using the same render
+attributes and object-centering rules as real rooms. Effective geometry bounds
+for organizational helper placement and minimap generation exclude these
+faces. Native baking omits them and reports their count.
 
 ## Portal
 

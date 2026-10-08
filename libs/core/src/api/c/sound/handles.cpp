@@ -15,6 +15,8 @@
 
 ArxReturnCode arx_pistoris_sound_handle(ArxSoundKind kind, ArxSoundIndex index, ArxSoundHandle* out_handle) noexcept {
   if (!out_handle) return ARX_INVALID_DATA_POINTER;
+  *out_handle = ARX_NO_SOUND_HANDLE;
+  if (kind != ARX_SOUND_EFFECT && kind != ARX_SOUND_SPEECH) return ARX_INVALID_OPTIONS;
   return pistoris::soundHandle(static_cast<pistoris::SoundKind>(kind), index, *out_handle);
 }
 

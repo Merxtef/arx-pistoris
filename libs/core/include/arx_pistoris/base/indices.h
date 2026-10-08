@@ -30,9 +30,11 @@ typedef uint32_t ArxCinematicIllustrationIndex;
 typedef uint32_t ArxBoneIndex;
 typedef uint32_t ArxActionPointIndex;
 typedef uint8_t ArxSelectionId;
+typedef uint64_t ArxSelectionMask;
 
 #define ARX_INVALID_INDEX UINT32_MAX
 #define ARX_NO_TEXTURE UINT32_MAX
+#define ARX_NO_ROOM UINT32_MAX
 #define ARX_NO_SOUND UINT32_MAX
 #define ARX_NO_SOUND_HANDLE UINT64_MAX
 #define ARX_SOUND_EFFECTS_LANGUAGE_ID 0U
@@ -75,6 +77,7 @@ inline constexpr SoundHandle kNoSoundHandle = ARX_NO_SOUND_HANDLE;
 inline constexpr LanguageId kSoundEffects = ARX_SOUND_EFFECTS_LANGUAGE_ID;
 inline constexpr LanguageId kInvalidLanguageId = ARX_INVALID_LANGUAGE_ID;
 inline constexpr RoomIndex kInvalidRoomIndex = ARX_INVALID_INDEX;
+inline constexpr RoomIndex kNoRoom = ARX_NO_ROOM;
 inline constexpr PortalIndex kInvalidPortalIndex = ARX_INVALID_INDEX;
 inline constexpr AnchorIndex kInvalidAnchorIndex = ARX_INVALID_INDEX;
 inline constexpr AnchorConnectionIndex kInvalidAnchorConnectionIndex = ARX_INVALID_INDEX;

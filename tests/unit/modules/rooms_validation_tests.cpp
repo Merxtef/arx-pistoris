@@ -56,7 +56,7 @@ TEST_SUITE("rooms::validation") {
     RoomsData data = makeValidRooms();
     CHECK(rooms::validateRoom(data.definitions[0]) == rooms::Error::kNone);
     data.definitions.clear();
-    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kNoRooms);
+    CHECK(rooms::validateRoomDefinitions(data) == rooms::Error::kNone);
 
     data = makeValidRooms();
     data.definitions[0].name.clear();

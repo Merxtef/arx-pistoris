@@ -8,7 +8,11 @@
 
 /* Controls text at native carrier boundaries; semantic and JSON text are always UTF-8.
  * AUTO decodes valid UTF-8 and falls back to Latin-1, but emits UTF-8. */
+#ifdef __cplusplus
+typedef enum ArxNativeTextMode : int {
+#else
 typedef enum ArxNativeTextMode {
+#endif
   ARX_NATIVE_TEXT_AUTO = 0,
   ARX_NATIVE_TEXT_UTF8 = 1,
   ARX_NATIVE_TEXT_LATIN1 = 2,

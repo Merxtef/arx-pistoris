@@ -41,44 +41,4 @@ inline bool valid(const ArxModelSelectionMembersInput& value) noexcept {
          valid(value.action_points, value.action_point_count);
 }
 
-inline bool validModelMeshCounts(const ArxModelMeshInput& value) noexcept {
-  return value.vertex_count <= static_cast<std::size_t>(kInvalidVertexIndex) &&
-         value.face_count <= static_cast<std::size_t>(kInvalidFaceIndex) &&
-         value.texture_count <= static_cast<std::size_t>(kNoTexture);
-}
-
-inline bool validModelSkeletonCount(const ArxModelSkeletonInput& value) noexcept {
-  return value.bone_count <= skeleton::kMaxBones;
-}
-
-inline bool validModelActionPointCount(const ArxModelActionPointsInput& value) noexcept {
-  return value.action_point_count <= static_cast<std::size_t>(kInvalidActionPointIndex);
-}
-
-inline bool valid(const ArxModelMeshInput& value) noexcept {
-  if (!valid(value.vertices, value.vertex_count) || !valid(value.faces, value.face_count) ||
-      !valid(value.textures, value.texture_count))
-    return false;
-  for (std::size_t index = 0; index < value.texture_count; ++index) {
-    if (!valid(value.textures[index])) return false;
-  }
-  return true;
-}
-
-inline bool valid(const ArxModelSkeletonInput& value) noexcept {
-  if (!valid(value.bones, value.bone_count)) return false;
-  for (std::size_t index = 0; index < value.bone_count; ++index) {
-    if (!valid(value.bones[index])) return false;
-  }
-  return true;
-}
-
-inline bool valid(const ArxModelActionPointsInput& value) noexcept {
-  if (!valid(value.action_points, value.action_point_count)) return false;
-  for (std::size_t index = 0; index < value.action_point_count; ++index) {
-    if (!valid(value.action_points[index])) return false;
-  }
-  return true;
-}
-
 }  // namespace pistoris::c_api

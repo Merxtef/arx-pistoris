@@ -59,6 +59,7 @@ void setActionPoint(ActionPointsData& actions, ActionPointIndex index, ActionPoi
 void removeActionPoint(ActionPointsData& actions, ActionPointIndex index) noexcept;
 void replace(ActionPointsData& actions, ActionPointsData&& replacement) noexcept;
 void clear(ActionPointsData& actions) noexcept;
+void replaceBoneReferences(ActionPointsData& actions, std::span<const BoneIndex> bones) noexcept;
 void clearBoneReferences(ActionPointsData& actions) noexcept;
 void reserveActionPointCapacity(ActionPointsData& actions, std::size_t capacity);
 

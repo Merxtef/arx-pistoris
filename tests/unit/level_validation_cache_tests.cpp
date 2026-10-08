@@ -25,6 +25,7 @@ pistoris::LevelModules validLevelModules() {
   modules.geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 0.0f, 1.0f}}};
   constexpr ArxVector3 kNormal = {0.0f, -1.0f, 0.0f};
   Face face;
+  face.normal = kNormal;
   face.corners[0] = {0, kNormal, 0.0f, 0.0f};
   face.corners[1] = {1, kNormal, 1.0f, 0.0f};
   face.corners[2] = {2, kNormal, 0.0f, 1.0f};

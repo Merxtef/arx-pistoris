@@ -667,33 +667,24 @@ TEST_SUITE("cpp_api") {
     const char room_name[] = "room";
     const pistoris::RoomIndex room_index = take(level.addRoom({{room_name, sizeof(room_name) - 1}}));
 
-    const ArxLevelVertex vertices[] = {
-        {{0.0f, 0.0f, 0.0f}},
-        {{1.0f, 0.0f, 0.0f}},
-        {{0.0f, 0.0f, 1.0f}},
-    };
-    ArxLevelFace face{};
-    face.corners[0] = {0, {0.0f, -1.0f, 0.0f}, 0.0f, 0.0f, {1.0f, 1.0f, 1.0f}};
-    face.corners[1] = {1, {0.0f, -1.0f, 0.0f}, 1.0f, 0.0f, {1.0f, 1.0f, 1.0f}};
-    face.corners[2] = {2, {0.0f, -1.0f, 0.0f}, 0.0f, 1.0f, {1.0f, 1.0f, 1.0f}};
-    face.texture = 0;
-    face.room = room_index;
-
     const std::vector<std::uint8_t> image = makeTestBmp();
     const char texture_path[] = "graph/obj3d/textures/test.bmp";
     const ArxTextureView texture = {
         {texture_path, sizeof(texture_path) - 1},
         {image.data(), image.size()},
     };
-    const ArxLevelMeshInput mesh = {
-        vertices,
-        std::size(vertices),
-        &face,
-        1,
-        &texture,
-        1,
-    };
-    REQUIRE(level.replaceMesh(mesh));
+    const std::array<float, 9> positions = {0, 0, 0, 1, 0, 0, 0, 0, 1};
+    const std::array<std::uint32_t, 3> indices = {0, 1, 2};
+    const std::array<float, 6> uvs = {0, 0, 1, 0, 0, 1};
+    const std::array<float, 9> normals = {0, -1, 0, 0, -1, 0, 0, -1, 0};
+    const std::array<std::uint32_t, 1> texture_indices = {0};
+    const std::array<float, 1> transvals = {0};
+    const std::array<float, 9> colors = {1, 1, 1, 1, 1, 1, 1, 1, 1};
+    const std::array<pistoris::RoomIndex, 1> rooms = {room_index};
+    REQUIRE(level.addTexture(texture));
+    REQUIRE(level.replaceVertices(positions));
+    REQUIRE(level.replaceFaces(indices, uvs, normals, texture_indices, transvals, colors));
+    REQUIRE(level.replaceFaceRooms(rooms));
 
     const ArxTextureView borrowed = level.textures()[0];
     REQUIRE(level.setTextureImage(0, borrowed.encoded_image));

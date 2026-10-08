@@ -748,100 +748,6 @@ nb::tuple modelElementReferences(const ElementRef<ModelSelectionAccess>& selecti
   return nb::tuple(result);
 }
 
-void replaceModelMesh(PythonModel& owner, const std::vector<ModelVertex>& vertices, const std::vector<ModelFace>& faces,
-                      const nb::sequence& textures) {
-  Model updated(owner);
-  std::vector<ModelVertex> all_vertices = vertices;
-  all_vertices.reserve(vertices.size() + faces.size() * 3);
-  std::vector<ArxModelVertex> vertex_values;
-  vertex_values.reserve(all_vertices.capacity());
-  for (const ModelVertex& vertex : vertices)
-    vertex_values.push_back({vertex.position, modelBoneIndex(updated, vertex.bone)});
-  const auto owned_textures = materializeSequence(textures);
-  std::vector<ArxTextureView> texture_views;
-  texture_views.reserve(nb::len(owned_textures));
-  for (std::size_t index = 0; index < nb::len(owned_textures); ++index) {
-    texture_views.push_back(nb::cast<const Texture&>(owned_textures[index]).asView());
-  }
-  const auto texture_index = [&owned_textures](const std::optional<std::string>& path) {
-    if (!path) return kNoTexture;
-    const std::string canonical = canonicalResourcePath(*path);
-    for (std::size_t index = 0; index < nb::len(owned_textures); ++index) {
-      if (nb::cast<const Texture&>(owned_textures[index]).path == canonical) return static_cast<TextureIndex>(index);
-    }
-    throwMissingKey(canonical);
-  };
-  std::vector<ArxModelFace> face_values;
-  face_values.reserve(faces.size());
-  for (const ModelFace& face : faces) {
-    ArxModelFace converted{};
-    converted.normal = face.normal;
-    converted.texture = texture_index(face.texture);
-    converted.flags = face.flags;
-    converted.transval = face.transval;
-    for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
-      const ModelCorner& source = face.corners[corner];
-      const VertexIndex vertex = static_cast<VertexIndex>(vertex_values.size());
-      all_vertices.push_back(source.vertex);
-      vertex_values.push_back({source.vertex.position, modelBoneIndex(updated, source.vertex.bone)});
-      converted.corners[corner] = {vertex, source.normal, source.u, source.v};
-    }
-    face_values.push_back(converted);
-  }
-  unwrap(updated.replaceMesh({vertex_values.data(),
-                              vertex_values.size(),
-                              face_values.data(),
-                              face_values.size(),
-                              texture_views.data(),
-                              texture_views.size()}));
-  for (std::size_t index = 0; index < all_vertices.size(); ++index) {
-    setModelSelectionMembership(updated, ModelSelectionMember::kVertex, index, all_vertices[index].selections);
-  }
-  commitModel(owner, std::move(updated));
-  owner.tracking.vertices.invalidate();
-  owner.tracking.faces.invalidate();
-  owner.tracking.textures.invalidate();
-}
-
-void replaceModelSkeleton(PythonModel& owner, const std::vector<ModelBone>& bones) {
-  std::vector<ArxModelBone> values;
-  values.reserve(bones.size());
-  std::vector<std::string> names;
-  names.reserve(bones.size());
-  for (const ModelBone& bone : bones) names.push_back(canonicalModelIdentifier(bone.name));
-  auto resolve = [&names](const std::optional<std::string>& name) {
-    if (!name) return kInvalidBoneIndex;
-    const std::string canonical = canonicalModelIdentifier(*name);
-    for (std::size_t index = 0; index < names.size(); ++index) {
-      if (names[index] == canonical) return static_cast<BoneIndex>(index);
-    }
-    throwMissingKey(canonical);
-  };
-  for (std::size_t index = 0; index < bones.size(); ++index) {
-    for (std::size_t previous = 0; previous < index; ++previous) {
-      if (names[previous] == names[index]) throw nb::value_error("bone names must be unique");
-    }
-    values.push_back(
-        {view(names[index]), bones[index].position, resolve(bones[index].parent), bones[index].blob_shadow_size});
-  }
-  Model updated(owner);
-  unwrap(updated.replaceSkeleton({values.data(), values.size()}));
-  for (std::size_t index = 0; index < bones.size(); ++index) {
-    setModelSelectionMembership(updated, ModelSelectionMember::kBone, index, bones[index].selections);
-  }
-  commitModel(owner, std::move(updated));
-  owner.tracking.bones.invalidate();
-}
-
-class ModelMeshView {
- public:
-  explicit ModelMeshView(std::shared_ptr<PythonModel> owner) : owner_(std::move(owner)) {}
-  [[nodiscard]] const std::shared_ptr<PythonModel>& owner() const noexcept { return owner_; }
-
- private:
-  std::shared_ptr<PythonModel> owner_;
-};
-
 class ModelSkeletonView {
  public:
   explicit ModelSkeletonView(std::shared_ptr<PythonModel> owner) : owner_(std::move(owner)) {}
@@ -1335,9 +1241,112 @@ void bindModelReferences(nb::module_& module) {
             return modelSelectionSet<ModelVertexAccess, ModelSelectionMember::kVertex>(self);
           },
           nb::sig("def selections(self) -> ModelSelectionSet"));
+  module.attr("ModelVertexCollection").attr("replace") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self, nb::handle source) {
+        ScalarBufferView positions(source, 'f', sizeof(float));
+        (void)positions.tupleCount(3);
+        unwrap(self.owner()->replaceVertices(positions.asSpan<float>()));
+        self.owner()->tracking.vertices.invalidate();
+        self.owner()->tracking.faces.invalidate();
+      },
+      nb::is_method(),
+      nb::arg("positions"),
+      nb::sig("def replace(self, positions: object) -> None"));
+  module.attr("ModelVertexCollection").attr("clear") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self) {
+        self.owner()->clearVertices();
+        self.owner()->tracking.vertices.invalidate();
+        self.owner()->tracking.faces.invalidate();
+      },
+      nb::is_method());
+  module.attr("ModelVertexCollection").attr("replace_selection_masks") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self, nb::handle source) {
+        ScalarBufferView masks(source, 'Q', sizeof(std::uint64_t));
+        masks.requireShape({static_cast<Py_ssize_t>(self.owner()->vertexCount())});
+        unwrap(self.owner()->replaceVertexSelectionMasks(masks.asSpan<std::uint64_t>()));
+      },
+      nb::is_method(),
+      nb::arg("masks"),
+      nb::sig("def replace_selection_masks(self, masks: object) -> None"));
+  module.attr("ModelVertexCollection").attr("replace_bones") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self, nb::handle source) {
+        ScalarBufferView bones(source, 'I', sizeof(BoneIndex));
+        bones.requireShape({static_cast<Py_ssize_t>(self.owner()->vertexCount())});
+        unwrap(self.owner()->replaceVertexBones(bones.asSpan<BoneIndex>()));
+      },
+      nb::is_method(),
+      nb::arg("bones"),
+      nb::sig("def replace_bones(self, bones: object) -> None"));
 
   auto face =
       bindElementCollection<ModelFaceAccess>(module, "ModelFaceRef", "ModelFaceCollection", "pistoris.model.FaceRef");
+  module.attr("ModelFaceCollection").attr("replace") = nb::cpp_function(
+      [](const ElementCollection<ModelFaceAccess>& self,
+         nb::handle indices_source,
+         nb::handle uvs_source,
+         nb::handle normals_source,
+         nb::handle textures_source,
+         nb::handle transvals_source,
+         const nb::object& face_normals_source,
+         const nb::object& flags_source) {
+        ScalarBufferView indices(indices_source, 'I', sizeof(std::uint32_t));
+        const std::size_t count = indices.tupleCount(3);
+        indices.requireFlatOrShape(checkedBufferProduct(count, 3), {static_cast<Py_ssize_t>(count), 3});
+        ScalarBufferView uvs(uvs_source, 'f', sizeof(float));
+        uvs.requireFlatOrShape(checkedBufferProduct(count, 6), {static_cast<Py_ssize_t>(count), 3, 2});
+        ScalarBufferView normals(normals_source, 'f', sizeof(float));
+        normals.requireFlatOrShape(checkedBufferProduct(count, 9), {static_cast<Py_ssize_t>(count), 3, 3});
+        ScalarBufferView textures(textures_source, 'I', sizeof(TextureIndex));
+        textures.requireShape({static_cast<Py_ssize_t>(count)});
+        ScalarBufferView transvals(transvals_source, 'f', sizeof(float));
+        transvals.requireShape({static_cast<Py_ssize_t>(count)});
+        std::optional<ScalarBufferView> face_normals, flags;
+        std::span<const float> face_normal_span;
+        std::span<const FaceType> flag_span;
+        if (!face_normals_source.is_none()) {
+          face_normals.emplace(face_normals_source, 'f', sizeof(float));
+          face_normals->requireFlatOrShape(checkedBufferProduct(count, 3), {static_cast<Py_ssize_t>(count), 3});
+          face_normal_span = face_normals->asSpan<float>();
+        }
+        if (!flags_source.is_none()) {
+          flags.emplace(flags_source, 'I', sizeof(FaceType));
+          flags->requireShape({static_cast<Py_ssize_t>(count)});
+          flag_span = flags->asSpan<FaceType>();
+        }
+        unwrap(self.owner()->replaceFaces(indices.asSpan<std::uint32_t>(),
+                                          uvs.asSpan<float>(),
+                                          normals.asSpan<float>(),
+                                          textures.asSpan<TextureIndex>(),
+                                          transvals.asSpan<float>(),
+                                          face_normal_span,
+                                          flag_span));
+        self.owner()->tracking.faces.invalidate();
+      },
+      nb::is_method(),
+      nb::arg("vertex_indices"),
+      nb::arg("uvs"),
+      nb::arg("corner_normals"),
+      nb::arg("textures"),
+      nb::arg("transvals"),
+      nb::arg("face_normals") = nb::none(),
+      nb::arg("flags") = nb::none(),
+      nb::sig("def replace(self, vertex_indices: object, uvs: object, corner_normals: object, textures: object, "
+              "transvals: object, face_normals: object | None = None, flags: object | None = None) -> None"));
+  module.attr("ModelFaceCollection").attr("clear") = nb::cpp_function(
+      [](const ElementCollection<ModelFaceAccess>& self) {
+        self.owner()->clearFaces();
+        self.owner()->tracking.faces.invalidate();
+      },
+      nb::is_method());
+  module.attr("ModelFaceCollection").attr("replace_textures") = nb::cpp_function(
+      [](const ElementCollection<ModelFaceAccess>& self, nb::handle source) {
+        ScalarBufferView textures(source, 'I', sizeof(TextureIndex));
+        textures.requireShape({static_cast<Py_ssize_t>(self.owner()->faceCount())});
+        unwrap(self.owner()->replaceFaceTextures(textures.asSpan<TextureIndex>()));
+      },
+      nb::is_method(),
+      nb::arg("textures"),
+      nb::sig("def replace_textures(self, textures: object) -> None"));
   auto detached_vertex = bindNestedElementMemberRef<ModelFaceCornerAccess, ModelVertex>(
       module, "ModelFaceCornerVertexRef", "pistoris.model.FaceCornerVertexRef");
   bindNestedElementMemberField(detached_vertex, "position", &ModelVertex::position);
@@ -1430,6 +1439,15 @@ void bindModelReferences(nb::module_& module) {
 
   auto texture = bindElementCollection<ModelTextureAccess>(
       module, "ModelTextureRef", "ModelTextureCollection", "pistoris.model.TextureRef");
+  texture.def(
+      "clear",
+      [](const ElementCollection<ModelTextureAccess>& self) {
+        self.owner()->clearTextures();
+        self.owner()->tracking.textures.invalidate();
+      },
+      nb::is_method());
+  module.attr("ModelTextureCollection").attr("clear") = texture.attr("clear");
+  if (PyObject_DelAttrString(texture.ptr(), "clear") < 0) throw nb::python_error();
   texture
       .def_prop_rw(
           "path",
@@ -1470,6 +1488,21 @@ void bindModelReferences(nb::module_& module) {
   bindElementField(bone, "name", &ModelBone::name);
   bindElementField(bone, "position", &ModelBone::position);
   bindElementField(bone, "blob_shadow_size", &ModelBone::blob_shadow_size);
+  module.attr("ModelBoneCollection").attr("clear") = nb::cpp_function(
+      [](const ElementCollection<ModelBoneAccess>& self) {
+        self.owner()->clearBones();
+        self.owner()->tracking.bones.invalidate();
+      },
+      nb::is_method());
+  module.attr("ModelBoneCollection").attr("replace_selection_masks") = nb::cpp_function(
+      [](const ElementCollection<ModelBoneAccess>& self, nb::handle source) {
+        ScalarBufferView masks(source, 'Q', sizeof(std::uint64_t));
+        masks.requireShape({static_cast<Py_ssize_t>(self.owner()->boneCount())});
+        unwrap(self.owner()->replaceBoneSelectionMasks(masks.asSpan<std::uint64_t>()));
+      },
+      nb::is_method(),
+      nb::arg("masks"),
+      nb::sig("def replace_selection_masks(self, masks: object) -> None"));
   bone.def_prop_rw(
           "parent",
           [](const ElementRef<ModelBoneAccess>& self) {
@@ -1494,6 +1527,30 @@ void bindModelReferences(nb::module_& module) {
       module, "ModelActionPointRef", "ModelActionPointCollection", "pistoris.model.ActionPointRef");
   bindElementField(point, "name", &ModelActionPoint::name);
   bindElementField(point, "position", &ModelActionPoint::position);
+  module.attr("ModelActionPointCollection").attr("clear") = nb::cpp_function(
+      [](const ElementCollection<ModelActionPointAccess>& self) {
+        self.owner()->clearActionPoints();
+        self.owner()->tracking.action_points.invalidate();
+      },
+      nb::is_method());
+  module.attr("ModelActionPointCollection").attr("replace_selection_masks") = nb::cpp_function(
+      [](const ElementCollection<ModelActionPointAccess>& self, nb::handle source) {
+        ScalarBufferView masks(source, 'Q', sizeof(std::uint64_t));
+        masks.requireShape({static_cast<Py_ssize_t>(self.owner()->actionPointCount())});
+        unwrap(self.owner()->replaceActionPointSelectionMasks(masks.asSpan<std::uint64_t>()));
+      },
+      nb::is_method(),
+      nb::arg("masks"),
+      nb::sig("def replace_selection_masks(self, masks: object) -> None"));
+  module.attr("ModelActionPointCollection").attr("replace_bones") = nb::cpp_function(
+      [](const ElementCollection<ModelActionPointAccess>& self, nb::handle source) {
+        ScalarBufferView bones(source, 'I', sizeof(BoneIndex));
+        bones.requireShape({static_cast<Py_ssize_t>(self.owner()->actionPointCount())});
+        unwrap(self.owner()->replaceActionPointBones(bones.asSpan<BoneIndex>()));
+      },
+      nb::is_method(),
+      nb::arg("bones"),
+      nb::sig("def replace_bones(self, bones: object) -> None"));
   point
       .def_prop_rw(
           "bone",
@@ -1514,28 +1571,22 @@ void bindModelReferences(nb::module_& module) {
             return modelSelectionSet<ModelActionPointAccess, ModelSelectionMember::kActionPoint>(self);
           },
           nb::sig("def selections(self) -> ModelSelectionSet"));
-  const auto action_point_collection = module.attr("ModelActionPointCollection");
-  action_point_collection.attr("replace") = nb::cpp_function(
-      [](const ElementCollection<ModelActionPointAccess>& self, const std::vector<ModelActionPoint>& points) {
-        Model updated(*self.owner());
-        updated.clearActionPoints();
-        for (const ModelActionPoint& point_value : points) {
-          const ActionPointIndex index = unwrap(updated.addActionPoint(
-              {view(point_value.name), point_value.position, modelBoneIndex(updated, point_value.bone)}));
-          setModelSelectionMembership(updated, ModelSelectionMember::kActionPoint, index, point_value.selections);
-        }
-        commitModel(*self.owner(), std::move(updated));
-        self.owner()->tracking.action_points.invalidate();
-      },
-      nb::is_method(),
-      nb::arg("action_points"));
-
   auto selection = bindElementCollection<ModelSelectionAccess>(module,
                                                                "ModelSelectionRef",
                                                                "ModelSelectionCollection",
                                                                "pistoris.model.SelectionRef",
                                                                {.reference_property = nullptr});
+  const auto active_mask_getter = nb::cpp_function(
+      [](const ElementCollection<ModelSelectionAccess>& self) { return self.owner()->activeSelectionMask(); },
+      nb::is_method(),
+      nb::is_getter(),
+      nb::sig("def active_mask(self) -> int"));
+  module.attr("ModelSelectionCollection").attr("active_mask") =
+      nb::module_::import_("builtins").attr("property")(active_mask_getter);
   bindElementField(selection, "name", &ModelSelection::name);
+  selection.def_prop_ro("mask", [](const ElementRef<ModelSelectionAccess>& self) {
+    return unwrap(self.owner().selectionMask(static_cast<SelectionId>(self.index())));
+  });
   auto leading_vertex = nb::class_<ModelSelectionLeadingVertexRef>(
       module, "ModelSelectionLeadingVertexRef", "A live reference to a selection's optional leading vertex.");
   leading_vertex.def_prop_ro("selection", &ModelSelectionLeadingVertexRef::selection)
@@ -1637,71 +1688,6 @@ void bindModelReferences(nb::module_& module) {
       });
   origin.attr("__hash__") = nb::none();
 
-  nb::class_<ModelMeshView>(module, "ModelMesh", "The model mesh and its editing operations.")
-      .def_prop_ro(
-          "vertices",
-          [](const ModelMeshView& self) { return ElementCollection<ModelVertexAccess>(self.owner()); },
-          nb::sig("def vertices(self) -> ModelVertexCollection"))
-      .def_prop_ro(
-          "faces",
-          [](const ModelMeshView& self) { return ElementCollection<ModelFaceAccess>(self.owner()); },
-          nb::sig("def faces(self) -> ModelFaceCollection"))
-      .def_prop_ro(
-          "textures",
-          [](const ModelMeshView& self) { return ElementCollection<ModelTextureAccess>(self.owner()); },
-          nb::sig("def textures(self) -> ModelTextureCollection"))
-      .def("validate",
-           [](const ModelMeshView& self) {
-             auto result = [&] {
-               nb::gil_scoped_release release;
-               return self.owner()->validateMesh();
-             }();
-             unwrap(std::move(result));
-           })
-      .def(
-          "weld_vertices",
-          [](const ModelMeshView& self,
-             float radius,
-             Level::PositionWeldMetric metric,
-             Level::DegenerateFacePolicy degenerate_faces) {
-            auto result = [&] {
-              nb::gil_scoped_release release;
-              return self.owner()->weldVertices({.radius = radius,
-                                                 .metric = modelWeldMetric(metric),
-                                                 .degenerate_faces = modelDegenerateFacePolicy(degenerate_faces)});
-            }();
-            unwrap(std::move(result));
-            self.owner()->tracking.vertices.invalidate();
-            self.owner()->tracking.faces.invalidate();
-          },
-          nb::kw_only(),
-          nb::arg("radius").sig("0.0001") = 1.0e-4f,
-          nb::arg("metric") = Level::PositionWeldMetric::kEuclidean,
-          nb::arg("degenerate_faces") = Level::DegenerateFacePolicy::kPreserve)
-      .def(
-          "replace",
-          [](const ModelMeshView& self,
-             const std::vector<ModelVertex>& vertices,
-             const std::vector<ModelFace>& faces,
-             const nb::sequence& textures) { replaceModelMesh(*self.owner(), vertices, faces, textures); },
-          nb::arg("vertices"),
-          nb::arg("faces"),
-          nb::arg("textures") = nb::tuple(),
-          nb::sig("def replace(self, vertices: Sequence[ModelVertex], faces: Sequence[ModelFace], "
-                  "textures: Sequence[Texture] = ()) -> None"))
-      .def("clear",
-           [](const ModelMeshView& self) {
-             self.owner()->clearMesh();
-             self.owner()->tracking.vertices.invalidate();
-             self.owner()->tracking.faces.invalidate();
-             self.owner()->tracking.textures.invalidate();
-           })
-      .def("__repr__", [](const ModelMeshView& self) {
-        return std::string("<pistoris.model.Mesh vertices=") + std::to_string(self.owner()->vertexCount()) +
-               " faces=" + std::to_string(self.owner()->faceCount()) +
-               " textures=" + std::to_string(self.owner()->textureCount()) + ">";
-      });
-
   nb::class_<ModelSkeletonView>(module, "ModelSkeleton", "The model skeleton and its editing operations.")
       .def_prop_ro(
           "bones",
@@ -1717,20 +1703,143 @@ void bindModelReferences(nb::module_& module) {
            })
       .def("infer_selection_memberships",
            [](const ModelSkeletonView& self) { unwrap(self.owner()->inferBoneSelectionMemberships()); })
-      .def(
-          "replace",
-          [](const ModelSkeletonView& self, const std::vector<ModelBone>& bones) {
-            replaceModelSkeleton(*self.owner(), bones);
-          },
-          nb::arg("bones"))
       .def("clear",
            [](const ModelSkeletonView& self) {
-             self.owner()->clearSkeleton();
+             self.owner()->clearBones();
              self.owner()->tracking.bones.invalidate();
            })
       .def("__repr__", [](const ModelSkeletonView& self) {
         return std::string("<pistoris.model.Skeleton bones=") + std::to_string(self.owner()->boneCount()) + ">";
       });
+}
+
+void bindModelBulkCopies(nb::module_& module) {
+  module.attr("ModelVertexCollection").attr("copy") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self, const nb::object& positions_source) {
+        requireCopyDestinations({positions_source});
+        const std::size_t count = self.owner()->vertexCount();
+        ScalarBufferOutput<float> positions(
+            positions_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        unwrap(self.owner()->copyVertexPositions(positions.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("positions") = nb::none(),
+      nb::sig("def copy(self, *, positions: object | None = None) -> None"));
+  module.attr("ModelFaceCollection").attr("copy") = nb::cpp_function(
+      [](const ElementCollection<ModelFaceAccess>& self,
+         const nb::object& vertex_indices_source,
+         const nb::object& uvs_source,
+         const nb::object& corner_normals_source,
+         const nb::object& textures_source,
+         const nb::object& transvals_source,
+         const nb::object& face_normals_source,
+         const nb::object& flags_source) {
+        requireCopyDestinations({vertex_indices_source,
+                                 uvs_source,
+                                 corner_normals_source,
+                                 textures_source,
+                                 transvals_source,
+                                 face_normals_source,
+                                 flags_source});
+        const std::size_t count = self.owner()->faceCount();
+        ScalarBufferOutput<std::uint32_t> vertex_indices(
+            vertex_indices_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        ScalarBufferOutput<float> uvs(
+            uvs_source, checkedBufferProduct(count, 6U), {static_cast<Py_ssize_t>(count), 3, 2});
+        ScalarBufferOutput<float> corner_normals(
+            corner_normals_source, checkedBufferProduct(count, 9U), {static_cast<Py_ssize_t>(count), 3, 3});
+        ScalarBufferOutput<TextureIndex> textures(textures_source, count, {static_cast<Py_ssize_t>(count)});
+        ScalarBufferOutput<float> transvals(transvals_source, count, {static_cast<Py_ssize_t>(count)});
+        ScalarBufferOutput<float> face_normals(
+            face_normals_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        ScalarBufferOutput<FaceType> flags(flags_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyFaces({.vertex_indices = vertex_indices.span(),
+                                        .uvs = uvs.span(),
+                                        .corner_normals = corner_normals.span(),
+                                        .textures = textures.span(),
+                                        .transvals = transvals.span(),
+                                        .face_normals = face_normals.span(),
+                                        .flags = flags.span()}));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("vertex_indices") = nb::none(),
+      nb::arg("uvs") = nb::none(),
+      nb::arg("corner_normals") = nb::none(),
+      nb::arg("textures") = nb::none(),
+      nb::arg("transvals") = nb::none(),
+      nb::arg("face_normals") = nb::none(),
+      nb::arg("flags") = nb::none(),
+      nb::sig("def copy(self, *, vertex_indices: object | None = None, uvs: object | None = None, corner_normals: "
+              "object | None = None, textures: object | None = None, transvals: object | None = None, face_normals: "
+              "object | None = None, flags: object | None = None) -> None"));
+  module.attr("ModelVertexCollection").attr("copy_selection_masks") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self, const nb::object& masks_source) {
+        requireCopyDestinations({masks_source});
+        const std::size_t count = self.owner()->vertexCount();
+        ScalarBufferOutput<std::uint64_t> masks(masks_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyVertexSelectionMasks(masks.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("masks") = nb::none(),
+      nb::sig("def copy_selection_masks(self, *, masks: object | None = None) -> None"));
+  module.attr("ModelVertexCollection").attr("copy_bones") = nb::cpp_function(
+      [](const ElementCollection<ModelVertexAccess>& self, const nb::object& bones_source) {
+        requireCopyDestinations({bones_source});
+        const std::size_t count = self.owner()->vertexCount();
+        ScalarBufferOutput<BoneIndex> bones(bones_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyVertexBones(bones.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("bones") = nb::none(),
+      nb::sig("def copy_bones(self, *, bones: object | None = None) -> None"));
+  module.attr("ModelBoneCollection").attr("copy_selection_masks") = nb::cpp_function(
+      [](const ElementCollection<ModelBoneAccess>& self, const nb::object& masks_source) {
+        requireCopyDestinations({masks_source});
+        const std::size_t count = self.owner()->boneCount();
+        ScalarBufferOutput<std::uint64_t> masks(masks_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyBoneSelectionMasks(masks.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("masks") = nb::none(),
+      nb::sig("def copy_selection_masks(self, *, masks: object | None = None) -> None"));
+  module.attr("ModelActionPointCollection").attr("copy_selection_masks") = nb::cpp_function(
+      [](const ElementCollection<ModelActionPointAccess>& self, const nb::object& masks_source) {
+        requireCopyDestinations({masks_source});
+        const std::size_t count = self.owner()->actionPointCount();
+        ScalarBufferOutput<std::uint64_t> masks(masks_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyActionPointSelectionMasks(masks.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("masks") = nb::none(),
+      nb::sig("def copy_selection_masks(self, *, masks: object | None = None) -> None"));
+  module.attr("ModelActionPointCollection").attr("copy_bones") = nb::cpp_function(
+      [](const ElementCollection<ModelActionPointAccess>& self, const nb::object& bones_source) {
+        requireCopyDestinations({bones_source});
+        const std::size_t count = self.owner()->actionPointCount();
+        ScalarBufferOutput<BoneIndex> bones(bones_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyActionPointBones(bones.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("bones") = nb::none(),
+      nb::sig("def copy_bones(self, *, bones: object | None = None) -> None"));
+  module.attr("ModelFaceCollection").attr("copy_textures") = nb::cpp_function(
+      [](const ElementCollection<ModelFaceAccess>& self, const nb::object& textures_source) {
+        requireCopyDestinations({textures_source});
+        const std::size_t count = self.owner()->faceCount();
+        ScalarBufferOutput<TextureIndex> textures(textures_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyFaceTextures(textures.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("textures") = nb::none(),
+      nb::sig("def copy_textures(self, *, textures: object | None = None) -> None"));
 }
 
 void bindAnimationReferences(nb::module_& module) {
@@ -2202,7 +2311,127 @@ void bindModel(nb::module_& module) {
              return resourceRepr(
                  "Model", self.resourcePath(), {{"vertices", self.vertexCount()}, {"faces", self.faceCount()}});
            })
-      .def_prop_ro("mesh", [](std::shared_ptr<PythonModel> self) { return ModelMeshView(std::move(self)); })
+      .def_prop_ro(
+          "vertices",
+          [](std::shared_ptr<PythonModel> self) { return ElementCollection<ModelVertexAccess>(std::move(self)); })
+      .def_prop_ro(
+          "faces",
+          [](std::shared_ptr<PythonModel> self) { return ElementCollection<ModelFaceAccess>(std::move(self)); })
+      .def_prop_ro(
+          "textures",
+          [](std::shared_ptr<PythonModel> self) { return ElementCollection<ModelTextureAccess>(std::move(self)); })
+      .def("validate_geometry",
+           [](PythonModel& self) {
+             auto result = [&] {
+               nb::gil_scoped_release release;
+               return self.validateGeometry();
+             }();
+             unwrap(std::move(result));
+           })
+      .def(
+          "weld_vertices",
+          [](PythonModel& self, float radius, Level::PositionWeldMetric metric, Level::DegenerateFacePolicy policy) {
+            auto result = [&] {
+              nb::gil_scoped_release release;
+              return self.weldVertices({.radius = radius,
+                                        .metric = modelWeldMetric(metric),
+                                        .degenerate_faces = modelDegenerateFacePolicy(policy)});
+            }();
+            unwrap(std::move(result));
+            self.tracking.vertices.invalidate();
+            self.tracking.faces.invalidate();
+          },
+          nb::kw_only(),
+          nb::arg("radius").sig("0.0001") = 1.0e-4f,
+          nb::arg("metric") = Level::PositionWeldMetric::kEuclidean,
+          nb::arg("degenerate_faces") = Level::DegenerateFacePolicy::kPreserve)
+      .def(
+          "replace_vertices",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView positions(source, 'f', sizeof(float));
+            const auto count = positions.tupleCount(3);
+            if (positions.ndim() == 1)
+              positions.requireFlatOrShape(checkedBufferProduct(count, 3), {static_cast<Py_ssize_t>(count), 3});
+            unwrap(self.replaceVertices(positions.asSpan<float>()));
+            self.tracking.vertices.invalidate();
+            self.tracking.faces.invalidate();
+          },
+          nb::arg("positions"),
+          nb::sig("def replace_vertices(self, positions: object) -> None"))
+      .def("clear_vertices",
+           [](PythonModel& self) {
+             self.clearVertices();
+             self.tracking.vertices.invalidate();
+             self.tracking.faces.invalidate();
+           })
+      .def(
+          "replace_face_textures",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView textures(source, 'I', sizeof(TextureIndex));
+            textures.requireShape({static_cast<Py_ssize_t>(self.faceCount())});
+            unwrap(self.replaceFaceTextures(textures.asSpan<TextureIndex>()));
+          },
+          nb::arg("textures"))
+      .def("clear_textures",
+           [](PythonModel& self) {
+             self.clearTextures();
+             self.tracking.textures.invalidate();
+           })
+      .def(
+          "replace_vertex_bones",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView bones(source, 'I', sizeof(BoneIndex));
+            bones.requireShape({static_cast<Py_ssize_t>(self.vertexCount())});
+            unwrap(self.replaceVertexBones(bones.asSpan<BoneIndex>()));
+          },
+          nb::arg("bones"))
+      .def(
+          "replace_action_point_bones",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView bones(source, 'I', sizeof(BoneIndex));
+            bones.requireShape({static_cast<Py_ssize_t>(self.actionPointCount())});
+            unwrap(self.replaceActionPointBones(bones.asSpan<BoneIndex>()));
+          },
+          nb::arg("bones"))
+      .def(
+          "replace_vertex_selection_masks",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView masks(source, 'Q', sizeof(std::uint64_t));
+            masks.requireShape({static_cast<Py_ssize_t>(self.vertexCount())});
+            unwrap(self.replaceVertexSelectionMasks(masks.asSpan<std::uint64_t>()));
+          },
+          nb::arg("masks"))
+      .def(
+          "replace_bone_selection_masks",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView masks(source, 'Q', sizeof(std::uint64_t));
+            masks.requireShape({static_cast<Py_ssize_t>(self.boneCount())});
+            unwrap(self.replaceBoneSelectionMasks(masks.asSpan<std::uint64_t>()));
+          },
+          nb::arg("masks"))
+      .def(
+          "replace_action_point_selection_masks",
+          [](PythonModel& self, nb::handle source) {
+            ScalarBufferView masks(source, 'Q', sizeof(std::uint64_t));
+            masks.requireShape({static_cast<Py_ssize_t>(self.actionPointCount())});
+            unwrap(self.replaceActionPointSelectionMasks(masks.asSpan<std::uint64_t>()));
+          },
+          nb::arg("masks"))
+      .def("clear_faces",
+           [](PythonModel& self) {
+             self.clearFaces();
+             self.tracking.faces.invalidate();
+           })
+      .def("clear_bones",
+           [](PythonModel& self) {
+             self.clearBones();
+             self.tracking.bones.invalidate();
+           })
+      .def("clear_action_points",
+           [](PythonModel& self) {
+             self.clearActionPoints();
+             self.tracking.action_points.invalidate();
+           })
       .def_prop_ro("skeleton", [](std::shared_ptr<PythonModel> self) { return ModelSkeletonView(std::move(self)); })
       .def_prop_ro("origin", [](std::shared_ptr<PythonModel> self) { return ModelOriginRef(std::move(self)); })
       .def_prop_ro(
@@ -2398,6 +2627,7 @@ void ModelFaceAccess::remove(Owner& owner, std::size_t, std::size_t index) {
 void bindModelAnimation(nb::module_& module) {
   bindOutputs(module);
   bindModel(module);
+  bindModelBulkCopies(module);
   bindAnimation(module);
 }
 

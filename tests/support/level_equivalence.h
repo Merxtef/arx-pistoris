@@ -132,8 +132,8 @@ void checkNamedItems(std::string_view collection, std::span<const Item> lhs, std
 inline bool portalEquivalent(const ArxLevelPortal& lhs, const ArxLevelPortal& rhs,
                              std::span<const ArxLevelRoom> lhs_rooms, std::span<const ArxLevelRoom> rhs_rooms,
                              float epsilon) {
-  if (lhs.shape != rhs.shape || roomName(lhs.room_1, lhs_rooms) != roomName(rhs.room_1, rhs_rooms) ||
-      roomName(lhs.room_2, lhs_rooms) != roomName(rhs.room_2, rhs_rooms))
+  if (lhs.shape != rhs.shape || roomName(lhs.room_front, lhs_rooms) != roomName(rhs.room_front, rhs_rooms) ||
+      roomName(lhs.room_back, lhs_rooms) != roomName(rhs.room_back, rhs_rooms))
     return false;
   for (std::size_t vertex = 0; vertex < lhs.shape; ++vertex) {
     if (!equivalence::vectorEquivalent(lhs.vertices[vertex], rhs.vertices[vertex], epsilon)) return false;
@@ -317,12 +317,12 @@ inline void checkLevelsEquivalent(const pistoris::Level& lhs, const pistoris::Le
   std::vector<ArxLevelPortal> rhs_portals = detail::materialize(rhs.portals());
   if (options.domain == LevelEquivalenceDomain::kGlb) {
     std::erase_if(lhs_portals, [&](const ArxLevelPortal& portal) {
-      return !active_rooms.contains(detail::roomName(portal.room_1, lhs_rooms)) ||
-             !active_rooms.contains(detail::roomName(portal.room_2, lhs_rooms));
+      return !active_rooms.contains(detail::roomName(portal.room_front, lhs_rooms)) ||
+             !active_rooms.contains(detail::roomName(portal.room_back, lhs_rooms));
     });
     std::erase_if(rhs_portals, [&](const ArxLevelPortal& portal) {
-      return !active_rooms.contains(detail::roomName(portal.room_1, rhs_rooms)) ||
-             !active_rooms.contains(detail::roomName(portal.room_2, rhs_rooms));
+      return !active_rooms.contains(detail::roomName(portal.room_front, rhs_rooms)) ||
+             !active_rooms.contains(detail::roomName(portal.room_back, rhs_rooms));
     });
   }
   detail::checkNamedItems<ArxLevelPortal>(

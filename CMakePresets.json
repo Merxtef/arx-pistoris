@@ -162,7 +162,10 @@
     {
       "name": "sanitize",
       "configurePreset": "sanitize",
-      "output": { "outputOnFailure": true }
+      "output": { "outputOnFailure": true },
+      "environment": {
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      }
     },
     {
       "name": "coverage",

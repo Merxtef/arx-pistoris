@@ -20,7 +20,11 @@ typedef struct arx_pistoris_sound_source_references ArxSoundSourceReferences;
 typedef struct arx_pistoris_animation_sound_files ArxAnimationSoundFiles;
 typedef struct arx_pistoris_animation_sound_source_references ArxAnimationSoundSourceReferences;
 
+#ifdef __cplusplus
+typedef enum ArxSoundKind : int {
+#else
 typedef enum ArxSoundKind {
+#endif
   ARX_SOUND_EFFECT = 0,
   ARX_SOUND_SPEECH = 1,
 } ArxSoundKind;

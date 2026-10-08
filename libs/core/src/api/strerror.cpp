@@ -10,6 +10,18 @@
 ARX_STRERROR_API const char* arx_pistoris_strerror(ArxReturnCode rc) noexcept {
   switch (rc) {
     // general
+    case ARX_MODEL_BAD_VERTEX_COUNT:
+    case ARX_LEVEL_BAD_VERTEX_COUNT:
+      return "vertex positions must contain three scalars per vertex";
+    case ARX_MODEL_BAD_FACE_COUNT:
+    case ARX_LEVEL_BAD_FACE_COUNT:
+      return "face array lengths do not match";
+    case ARX_LEVEL_BAD_ANCHOR_COUNT:
+      return "anchor array lengths do not match";
+    case ARX_LEVEL_BAD_ANCHOR_CONNECTION_COUNT:
+      return "anchor connections must contain two endpoints per connection";
+    case ARX_LEVEL_BAD_FACE_NORMAL:
+      return "invalid face normal";
     case ARX_OK:
       return "ok";
     case ARX_INVALID_IDENTIFIER:

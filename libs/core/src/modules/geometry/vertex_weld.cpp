@@ -466,7 +466,6 @@ Error finishWeld(GeometryData& geometry, const VertexWeldOptions& options, std::
 
   applyVertexRemap(geometry, representatives, vertex_remap);
   applyFaceRemap(geometry, face_remap);
-  refreshFaceNormals(geometry);
   const std::size_t discarded_faces = old_face_count - geometry.faces.size();
   log(ARX_LOG_DEBUG,
       "Geometry weld: {} -> {} vertices, {} -> {} faces, radius {}, metric {}, face policy {}, {} segments, {} "

@@ -163,6 +163,7 @@ bool sameLevelVertex(ArxLevelVertex left, ArxLevelVertex right) {
 ArxLevelFace levelFaceValue(Level& level, const LevelFace& value,
                             const std::optional<ArxLevelFace>& current = std::nullopt) {
   ArxLevelFace result{};
+  result.normal = value.normal.value_or(levelFaceNormal(value));
   result.texture = levelTextureIndex(level, value.texture);
   result.room = levelRoomIndex(level, value.room);
   result.flags = value.flags;
@@ -288,7 +289,7 @@ struct LevelRoomAccess {
     std::vector<std::size_t> removed_portals;
     const auto portals = owner.portals();
     for (std::size_t portal = 0; portal < portals.size(); ++portal) {
-      if (portals[portal].room_1 == room || portals[portal].room_2 == room) removed_portals.push_back(portal);
+      if (portals[portal].room_front == room || portals[portal].room_back == room) removed_portals.push_back(portal);
     }
     unwrap(owner.removeRoom(room));
     owner.tracking.portals.removeMany(std::move(removed_portals));
@@ -306,8 +307,8 @@ struct LevelPortalAccess {
     const ArxLevelPortal source = owner.portals()[index];
     Value result;
     result.name = copyString(source.name);
-    result.room_1 = levelRoomName(owner, source.room_1);
-    result.room_2 = levelRoomName(owner, source.room_2);
+    result.room_front = levelRoomName(owner, source.room_front);
+    result.room_back = levelRoomName(owner, source.room_back);
     result.shape = source.shape;
     std::copy(std::begin(source.vertices), std::end(source.vertices), result.vertices.begin());
     return result;
@@ -315,8 +316,8 @@ struct LevelPortalAccess {
   static ArxLevelPortal native(const Owner& owner, const Value& value) {
     ArxLevelPortal result{};
     result.name = view(value.name);
-    result.room_1 = levelRoomIndex(owner, value.room_1);
-    result.room_2 = levelRoomIndex(owner, value.room_2);
+    result.room_front = levelRoomIndex(owner, value.room_front);
+    result.room_back = levelRoomIndex(owner, value.room_back);
     result.shape = value.shape;
     std::copy(value.vertices.begin(), value.vertices.end(), std::begin(result.vertices));
     return result;
@@ -415,19 +416,21 @@ class LevelRoomDistanceCollection {
     }();
     unwrap(std::move(result));
   }
-  void replace(const std::vector<LevelRoomDistanceValue>& values) const {
-    if (values.size() != size()) throw nb::value_error("room distance sequence has the wrong length");
-    std::vector<ArxLevelRoomDistance> distances;
-    distances.reserve(values.size());
-    for (std::size_t index = 0; index < values.size(); ++index) {
-      const auto reference = at(static_cast<std::int64_t>(index));
-      distances.push_back({reference.roomAIndex(),
-                           reference.roomBIndex(),
-                           values[index].distance,
-                           levelPortalIndex(*owner_, values[index].portal_a),
-                           levelPortalIndex(*owner_, values[index].portal_b)});
-    }
-    unwrap(owner_->replaceRoomDistances(distances));
+  void replace(nb::handle distances_source, nb::handle endpoints_source) const {
+    ScalarBufferView distances(distances_source, 'f', sizeof(float));
+    ScalarBufferView endpoints(endpoints_source, 'I', sizeof(std::uint32_t));
+    const std::size_t count = size();
+    distances.requireShape({static_cast<Py_ssize_t>(count)});
+    endpoints.requireFlatOrShape(checkedBufferProduct(count, 2U), {static_cast<Py_ssize_t>(count), 2});
+    unwrap(owner_->replaceRoomDistances(distances.asSpan<float>(), endpoints.asSpan<PortalIndex>()));
+  }
+  void copy(nb::handle distances_source, nb::handle endpoints_source) const {
+    requireCopyDestinations({distances_source, endpoints_source});
+    const std::size_t count = size();
+    ScalarBufferOutput<float> distances(distances_source, count, {static_cast<Py_ssize_t>(count)});
+    ScalarBufferOutput<PortalIndex> endpoints(
+        endpoints_source, checkedBufferProduct(count, 2U), {static_cast<Py_ssize_t>(count), 2});
+    unwrap(owner_->copyRoomDistances({.distances = distances.span(), .endpoint_portals = endpoints.span()}));
   }
   void generate(float portal_offset, float spacing, float height_offset, float max_link_distance) const {
     auto result = [&] {
@@ -515,6 +518,22 @@ struct LevelAnchorConnectionAccess {
   static void validate(const Owner& owner, std::size_t) { unwrap(owner.validateAnchorConnections()); }
 };
 
+void applyNavSurface(PythonLevel& owner, const std::vector<ArxLevelVertex>& vertices,
+                     const std::vector<ArxLevelNavSurfaceTriangle>& triangles) {
+  std::vector<float> positions;
+  positions.reserve(checkedBufferProduct(vertices.size(), 3U));
+  for (const ArxLevelVertex& vertex : vertices) {
+    positions.push_back(vertex.position.x);
+    positions.push_back(vertex.position.y);
+    positions.push_back(vertex.position.z);
+  }
+  std::vector<NavSurfaceVertexIndex> indices;
+  indices.reserve(checkedBufferProduct(triangles.size(), 3U));
+  for (const ArxLevelNavSurfaceTriangle& triangle : triangles)
+    indices.insert(indices.end(), std::begin(triangle.vertices), std::end(triangle.vertices));
+  unwrap(owner.setNavSurface(positions, indices));
+}
+
 struct LevelNavVertexAccess {
   using Owner = PythonLevel;
   using Value = ArxLevelVertex;
@@ -533,8 +552,7 @@ struct LevelNavVertexAccess {
       copied_triangles.push_back(triangles[current]);
     }
     copied_vertices[index] = value;
-    unwrap(owner.setNavSurface(
-        {copied_vertices.data(), copied_vertices.size(), copied_triangles.data(), copied_triangles.size()}));
+    applyNavSurface(owner, copied_vertices, copied_triangles);
   }
 };
 
@@ -574,8 +592,7 @@ struct LevelNavTriangleAccess {
       }
     }
     copied_triangles[index] = converted;
-    unwrap(owner.setNavSurface(
-        {copied_vertices.data(), copied_vertices.size(), copied_triangles.data(), copied_triangles.size()}));
+    applyNavSurface(owner, copied_vertices, copied_triangles);
   }
 };
 
@@ -759,15 +776,6 @@ std::string levelAnchorReferenceName(const PythonLevel& owner, nb::handle value)
   return copyString(owner.anchors()[anchor.index()].name);
 }
 
-class LevelMeshView {
- public:
-  explicit LevelMeshView(std::shared_ptr<PythonLevel> owner) : owner_(std::move(owner)) {}
-  [[nodiscard]] const std::shared_ptr<PythonLevel>& owner() const noexcept { return owner_; }
-
- private:
-  std::shared_ptr<PythonLevel> owner_;
-};
-
 class LevelNavSurfaceView {
  public:
   explicit LevelNavSurfaceView(std::shared_ptr<PythonLevel> owner) : owner_(std::move(owner)) {}
@@ -829,57 +837,11 @@ class LevelLoadingScreenRef {
   std::shared_ptr<PythonLevel> owner_;
 };
 
-void invalidateLevelMesh(PythonLevel& owner) {
-  owner.tracking.vertices.invalidate();
-  owner.tracking.faces.invalidate();
-  owner.tracking.textures.invalidate();
+void invalidateLevelNavigation(PythonLevel& owner) {
   owner.tracking.nav_vertices.invalidate();
   owner.tracking.nav_triangles.invalidate();
   owner.tracking.anchors.invalidate();
   owner.tracking.anchor_connections.invalidate();
-}
-
-void replaceLevelMesh(PythonLevel& owner, const std::vector<ArxLevelVertex>& vertices,
-                      const std::vector<LevelFace>& faces, const nb::sequence& textures) {
-  std::vector<ArxLevelVertex> all_vertices = vertices;
-  all_vertices.reserve(vertices.size() + faces.size() * 3);
-  const auto owned_textures = materializeSequence(textures);
-  std::vector<ArxTextureView> texture_views;
-  texture_views.reserve(nb::len(owned_textures));
-  for (std::size_t index = 0; index < nb::len(owned_textures); ++index) {
-    texture_views.push_back(nb::cast<const Texture&>(owned_textures[index]).asView());
-  }
-  const auto texture_index = [&owned_textures](const std::optional<std::string>& path) {
-    if (!path) return kNoTexture;
-    const std::string canonical = canonicalResourcePath(*path);
-    for (std::size_t index = 0; index < nb::len(owned_textures); ++index) {
-      if (nb::cast<const Texture&>(owned_textures[index]).path == canonical) return static_cast<TextureIndex>(index);
-    }
-    throwMissingKey(canonical);
-  };
-  std::vector<ArxLevelFace> face_values;
-  face_values.reserve(faces.size());
-  for (const LevelFace& face : faces) {
-    ArxLevelFace converted{};
-    converted.texture = texture_index(face.texture);
-    converted.room = levelRoomIndex(owner, face.room);
-    converted.flags = face.flags;
-    converted.transval = face.transval;
-    for (std::size_t corner = 0; corner < face.corners.size(); ++corner) {
-      const LevelCorner& source = face.corners[corner];
-      const VertexIndex vertex = static_cast<VertexIndex>(all_vertices.size());
-      all_vertices.push_back(source.vertex);
-      converted.corners[corner] = {vertex, source.normal, source.u, source.v, source.color};
-    }
-    face_values.push_back(converted);
-  }
-  unwrap(owner.replaceMesh({all_vertices.data(),
-                            all_vertices.size(),
-                            face_values.data(),
-                            face_values.size(),
-                            texture_views.data(),
-                            texture_views.size()}));
-  invalidateLevelMesh(owner);
 }
 
 void bindOutputs(nb::module_& module) {
@@ -936,6 +898,51 @@ void bindLevelReferences(nb::module_& module) {
   auto vertex = bindElementCollection<LevelVertexAccess>(
       module, "LevelVertexRef", "LevelVertexCollection", "pistoris.level.VertexRef");
   bindElementField(vertex, "position", &ArxLevelVertex::position);
+  vertex
+      .def(
+          "replace",
+          [](const ElementCollection<LevelVertexAccess>& self, nb::handle positions_source) {
+            ScalarBufferView positions(positions_source, 'f', sizeof(float));
+            (void)positions.tupleCount(3U);
+            unwrap(self.owner()->replaceVertices(positions.asSpan<float>()));
+            self.owner()->tracking.vertices.invalidate();
+            self.owner()->tracking.faces.invalidate();
+            invalidateLevelNavigation(*self.owner());
+          },
+          nb::is_method(),
+          nb::arg("positions"),
+          nb::sig("def replace(self, positions: object) -> None"))
+      .def(
+          "clear",
+          [](const ElementCollection<LevelVertexAccess>& self) {
+            self.owner()->clearVertices();
+            self.owner()->tracking.vertices.invalidate();
+            self.owner()->tracking.faces.invalidate();
+            invalidateLevelNavigation(*self.owner());
+          },
+          nb::is_method());
+  module.attr("LevelVertexCollection").attr("replace") = nb::cpp_function(
+      [](const ElementCollection<LevelVertexAccess>& self, nb::handle source) {
+        ScalarBufferView positions(source, 'f', sizeof(float));
+        (void)positions.tupleCount(3U);
+        unwrap(self.owner()->replaceVertices(positions.asSpan<float>()));
+        self.owner()->tracking.vertices.invalidate();
+        self.owner()->tracking.faces.invalidate();
+        invalidateLevelNavigation(*self.owner());
+      },
+      nb::is_method(),
+      nb::arg("positions"),
+      nb::sig("def replace(self, positions: object) -> None"));
+  module.attr("LevelVertexCollection").attr("clear") = nb::cpp_function(
+      [](const ElementCollection<LevelVertexAccess>& self) {
+        self.owner()->clearVertices();
+        self.owner()->tracking.vertices.invalidate();
+        self.owner()->tracking.faces.invalidate();
+        invalidateLevelNavigation(*self.owner());
+      },
+      nb::is_method());
+  if (PyObject_DelAttrString(vertex.ptr(), "replace") < 0) throw nb::python_error();
+  if (PyObject_DelAttrString(vertex.ptr(), "clear") < 0) throw nb::python_error();
 
   auto face =
       bindElementCollection<LevelFaceAccess>(module, "LevelFaceRef", "LevelFaceCollection", "pistoris.level.FaceRef");
@@ -1003,13 +1010,14 @@ void bindLevelReferences(nb::module_& module) {
       [](const ElementRef<LevelFaceAccess>& self) {
         return levelRoomReference(self.owner().shared_from_this(), self.copy().room);
       },
-      [](ElementRef<LevelFaceAccess>& self, const ElementRef<LevelRoomAccess>& room) {
+      [](ElementRef<LevelFaceAccess>& self, nb::handle room) {
         auto value = self.copy();
-        value.room = *levelRoomReferenceName(self.owner(), nb::cast(room));
+        value.room = levelRoomReferenceName(self.owner(), room);
         self.set(value);
       },
-      nb::for_getter(nb::sig("def room(self) -> RoomRef")),
-      nb::for_setter(nb::sig("def room(self, value: RoomRef, /) -> None")));
+      nb::for_getter(nb::sig("def room(self) -> RoomRef | None")),
+      nb::for_setter(nb::arg("value").none()),
+      nb::for_setter(nb::sig("def room(self, value: RoomRef | None, /) -> None")));
   face.def_prop_rw(
       "flags",
       [](const ElementRef<LevelFaceAccess>& self) { return static_cast<FaceTypeBitmask>(self.copy().flags); },
@@ -1018,11 +1026,130 @@ void bindLevelReferences(nb::module_& module) {
         value.flags = flags;
         self.set(value);
       });
+  face.def_prop_rw(
+      "normal",
+      [](const ElementRef<LevelFaceAccess>& self) {
+        const LevelFace value = self.copy();
+        return value.normal.value_or(levelFaceNormal(value));
+      },
+      [](ElementRef<LevelFaceAccess>& self, ArxVector3 normal) {
+        auto value = self.copy();
+        value.normal = normal;
+        self.set(value);
+      });
   bindElementField(face, "transval", &LevelFace::transval);
+  face.def(
+          "replace",
+          [](const ElementCollection<LevelFaceAccess>& self,
+             nb::handle vertex_indices_source,
+             nb::handle uvs_source,
+             nb::handle corner_normals_source,
+             nb::handle textures_source,
+             nb::handle transvals_source,
+             nb::handle corner_colors_source,
+             nb::handle face_normals_source,
+             nb::handle flags_source) {
+            ScalarBufferView vertex_indices(vertex_indices_source, 'I', sizeof(std::uint32_t));
+            const std::size_t count = vertex_indices.tupleCount(3U);
+            const std::size_t corner_count = checkedBufferProduct(count, 3U);
+            ScalarBufferView uvs(uvs_source, 'f', sizeof(float));
+            uvs.requireFlatOrShape(checkedBufferProduct(corner_count, 2U), {static_cast<Py_ssize_t>(count), 3, 2});
+            ScalarBufferView corner_normals(corner_normals_source, 'f', sizeof(float));
+            corner_normals.requireFlatOrShape(checkedBufferProduct(corner_count, 3U),
+                                              {static_cast<Py_ssize_t>(count), 3, 3});
+            ScalarBufferView textures(textures_source, 'I', sizeof(TextureIndex));
+            textures.requireShape({static_cast<Py_ssize_t>(count)});
+            ScalarBufferView transvals(transvals_source, 'f', sizeof(float));
+            transvals.requireShape({static_cast<Py_ssize_t>(count)});
+            ScalarBufferView corner_colors(corner_colors_source, 'f', sizeof(float));
+            if (!(corner_colors.ndim() == 1 && corner_colors.size() == 3U)) {
+              corner_colors.requireFlatOrShape(checkedBufferProduct(corner_count, 3U),
+                                               {static_cast<Py_ssize_t>(count), 3, 3});
+            }
+            std::optional<ScalarBufferView> face_normals;
+            std::optional<ScalarBufferView> flags;
+            std::span<const float> face_normal_values;
+            std::span<const FaceType> face_flags;
+            if (!face_normals_source.is_none()) {
+              face_normals.emplace(face_normals_source, 'f', sizeof(float));
+              face_normals->requireFlatOrShape(checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+              face_normal_values = face_normals->asSpan<float>();
+            }
+            if (!flags_source.is_none()) {
+              flags.emplace(flags_source, 'I', sizeof(FaceType));
+              flags->requireShape({static_cast<Py_ssize_t>(count)});
+              face_flags = flags->asSpan<FaceType>();
+            }
+            unwrap(self.owner()->replaceFaces(vertex_indices.asSpan<std::uint32_t>(),
+                                              uvs.asSpan<float>(),
+                                              corner_normals.asSpan<float>(),
+                                              textures.asSpan<TextureIndex>(),
+                                              transvals.asSpan<float>(),
+                                              corner_colors.asSpan<float>(),
+                                              face_normal_values,
+                                              face_flags));
+            self.owner()->tracking.faces.invalidate();
+            invalidateLevelNavigation(*self.owner());
+          },
+          nb::is_method(),
+          nb::arg("vertex_indices"),
+          nb::arg("uvs"),
+          nb::arg("corner_normals"),
+          nb::arg("textures"),
+          nb::arg("transvals"),
+          nb::arg("corner_colors"),
+          nb::arg("face_normals") = nb::none(),
+          nb::arg("flags") = nb::none(),
+          nb::sig("def replace(self, vertex_indices: object, uvs: object, corner_normals: object, textures: object, "
+                  "transvals: object, corner_colors: object, face_normals: object | None = None, "
+                  "flags: object | None = None) -> None"))
+      .def(
+          "replace_textures",
+          [](const ElementCollection<LevelFaceAccess>& self, nb::handle textures_source) {
+            ScalarBufferView textures(textures_source, 'I', sizeof(TextureIndex));
+            textures.requireShape({static_cast<Py_ssize_t>(self.owner()->faceCount())});
+            unwrap(self.owner()->replaceFaceTextures(textures.asSpan<TextureIndex>()));
+          },
+          nb::is_method(),
+          nb::arg("textures"),
+          nb::sig("def replace_textures(self, textures: object) -> None"))
+      .def(
+          "replace_rooms",
+          [](const ElementCollection<LevelFaceAccess>& self, nb::handle rooms_source) {
+            ScalarBufferView rooms(rooms_source, 'I', sizeof(RoomIndex));
+            rooms.requireShape({static_cast<Py_ssize_t>(self.owner()->faceCount())});
+            unwrap(self.owner()->replaceFaceRooms(rooms.asSpan<RoomIndex>()));
+          },
+          nb::is_method(),
+          nb::arg("rooms"),
+          nb::sig("def replace_rooms(self, rooms: object) -> None"))
+      .def(
+          "clear",
+          [](const ElementCollection<LevelFaceAccess>& self) {
+            self.owner()->clearFaces();
+            self.owner()->tracking.faces.invalidate();
+            invalidateLevelNavigation(*self.owner());
+          },
+          nb::is_method());
+
+  module.attr("LevelFaceCollection").attr("replace") = face.attr("replace");
+  module.attr("LevelFaceCollection").attr("replace_textures") = face.attr("replace_textures");
+  module.attr("LevelFaceCollection").attr("replace_rooms") = face.attr("replace_rooms");
+  module.attr("LevelFaceCollection").attr("clear") = face.attr("clear");
+  for (const char* name : {"replace", "replace_textures", "replace_rooms", "clear"}) {
+    if (PyObject_DelAttrString(face.ptr(), name) < 0) throw nb::python_error();
+  }
 
   auto texture = bindElementCollection<LevelTextureAccess>(
       module, "LevelTextureRef", "LevelTextureCollection", "pistoris.level.TextureRef");
   texture
+      .def(
+          "clear",
+          [](const ElementCollection<LevelTextureAccess>& self) {
+            self.owner()->clearTextures();
+            self.owner()->tracking.textures.invalidate();
+          },
+          nb::is_method())
       .def_prop_rw(
           "path",
           [](const ElementRef<LevelTextureAccess>& self) {
@@ -1056,41 +1183,60 @@ void bindLevelReferences(nb::module_& module) {
           [](ElementRef<LevelTextureAccess>& self, std::string_view extension) {
             unwrap(self.owner().setTextureExternalImageExtension(static_cast<TextureIndex>(self.index()), extension));
           });
+  module.attr("LevelTextureCollection").attr("clear") = texture.attr("clear");
+  if (PyObject_DelAttrString(texture.ptr(), "clear") < 0) throw nb::python_error();
 
   auto room =
       bindElementCollection<LevelRoomAccess>(module, "LevelRoomRef", "LevelRoomCollection", "pistoris.level.RoomRef");
   bindElementField(room, "name", &LevelRoom::name);
+  room.def(
+      "clear",
+      [](const ElementCollection<LevelRoomAccess>& self) {
+        self.owner()->clearRooms();
+        self.owner()->tracking.rooms.invalidate();
+        self.owner()->tracking.portals.invalidate();
+      },
+      nb::is_method());
+  module.attr("LevelRoomCollection").attr("clear") = room.attr("clear");
+  if (PyObject_DelAttrString(room.ptr(), "clear") < 0) throw nb::python_error();
 
   auto portal = bindElementCollection<LevelPortalAccess>(
       module, "LevelPortalRef", "LevelPortalCollection", "pistoris.level.PortalRef");
   bindElementField(portal, "name", &LevelPortal::name);
   portal
+      .def(
+          "clear",
+          [](const ElementCollection<LevelPortalAccess>& self) {
+            self.owner()->clearPortals();
+            self.owner()->tracking.portals.invalidate();
+          },
+          nb::is_method())
       .def_prop_rw(
-          "room_1",
+          "room_front",
           [](const ElementRef<LevelPortalAccess>& self) {
-            return levelRoomReference(self.owner().shared_from_this(), self.copy().room_1);
+            return levelRoomReference(self.owner().shared_from_this(), self.copy().room_front);
           },
           [](ElementRef<LevelPortalAccess>& self, nb::handle room_value) {
             auto value = self.copy();
-            value.room_1 = levelRoomReferenceName(self.owner(), room_value);
+            value.room_front = levelRoomReferenceName(self.owner(), room_value);
             self.set(value);
           },
-          nb::for_getter(nb::sig("def room_1(self) -> RoomRef | None")),
+          nb::for_getter(nb::sig("def room_front(self) -> RoomRef | None")),
           nb::for_setter(nb::arg("value").none()),
-          nb::for_setter(nb::sig("def room_1(self, value: RoomRef | None, /) -> None")))
+          nb::for_setter(nb::sig("def room_front(self, value: RoomRef | None, /) -> None")))
       .def_prop_rw(
-          "room_2",
+          "room_back",
           [](const ElementRef<LevelPortalAccess>& self) {
-            return levelRoomReference(self.owner().shared_from_this(), self.copy().room_2);
+            return levelRoomReference(self.owner().shared_from_this(), self.copy().room_back);
           },
           [](ElementRef<LevelPortalAccess>& self, nb::handle room_value) {
             auto value = self.copy();
-            value.room_2 = levelRoomReferenceName(self.owner(), room_value);
+            value.room_back = levelRoomReferenceName(self.owner(), room_value);
             self.set(value);
           },
-          nb::for_getter(nb::sig("def room_2(self) -> RoomRef | None")),
+          nb::for_getter(nb::sig("def room_back(self) -> RoomRef | None")),
           nb::for_setter(nb::arg("value").none()),
-          nb::for_setter(nb::sig("def room_2(self, value: RoomRef | None, /) -> None")))
+          nb::for_setter(nb::sig("def room_back(self, value: RoomRef | None, /) -> None")))
       .def_prop_rw(
           "shape",
           [](const ElementRef<LevelPortalAccess>& self) { return static_cast<PortalShape>(self.copy().shape); },
@@ -1115,6 +1261,8 @@ void bindLevelReferences(nb::module_& module) {
           },
           nb::for_getter(nb::sig("def vertices(self) -> tuple[Vector3, Vector3, Vector3, Vector3]")),
           nb::for_setter(nb::sig("def vertices(self, value: Sequence[Vector3], /) -> None")));
+  module.attr("LevelPortalCollection").attr("clear") = portal.attr("clear");
+  if (PyObject_DelAttrString(portal.ptr(), "clear") < 0) throw nb::python_error();
   const auto portal_collection = module.attr("LevelPortalCollection");
   portal_collection.attr("flatten") =
       nb::cpp_function([](const ElementCollection<LevelPortalAccess>& self) { unwrap(self.owner()->flattenPortals()); },
@@ -1164,8 +1312,19 @@ void bindLevelReferences(nb::module_& module) {
           nb::sig("def __setitem__(self, pair: tuple[LevelRoomRef, LevelRoomRef], "
                   "value: LevelRoomDistance, /) -> None"))
       .def("reset", &LevelRoomDistanceCollection::reset)
+      .def(
+          "copy",
+          &LevelRoomDistanceCollection::copy,
+          nb::kw_only(),
+          nb::arg("distances") = nb::none(),
+          nb::arg("endpoint_portals") = nb::none(),
+          nb::sig("def copy(self, *, distances: object | None = None, endpoint_portals: object | None = None) -> None"))
       .def("validate", &LevelRoomDistanceCollection::validate)
-      .def("replace", &LevelRoomDistanceCollection::replace, nb::arg("room_distances"))
+      .def("replace",
+           &LevelRoomDistanceCollection::replace,
+           nb::arg("distances"),
+           nb::arg("endpoint_portals"),
+           nb::sig("def replace(self, distances: object, endpoint_portals: object) -> None"))
       .def("generate",
            &LevelRoomDistanceCollection::generate,
            nb::kw_only(),
@@ -1264,31 +1423,29 @@ void bindLevelReferences(nb::module_& module) {
   const auto anchor_collection = module.attr("LevelAnchorCollection");
   anchor_collection.attr("replace") = nb::cpp_function(
       [](const ElementCollection<LevelAnchorAccess>& self,
-         const std::vector<LevelAnchor>& anchors,
-         const std::vector<LevelAnchorConnection>& links) {
-        std::vector<ArxLevelAnchor> values;
-        values.reserve(anchors.size());
-        for (const auto& anchor_value : anchors) values.push_back(anchor_value.asValue());
-        const auto anchor_index = [&anchors](std::string_view name) {
-          for (std::size_t index = 0; index < anchors.size(); ++index) {
-            if (anchors[index].name == name) return static_cast<AnchorIndex>(index);
-          }
-          throwMissingKey(std::string(name));
-        };
-        std::vector<ArxLevelAnchorConnection> connections;
-        connections.reserve(links.size());
-        for (const LevelAnchorConnection& link : links) {
-          connections.push_back({anchor_index(link.first), anchor_index(link.second)});
-        }
-        unwrap(self.owner()->replaceAnchors({values.data(), values.size(), connections.data(), connections.size()}));
+         nb::handle positions_source,
+         nb::handle radii_source,
+         nb::handle heights_source,
+         nb::handle flags_source) {
+        ScalarBufferView positions(positions_source, 'f', sizeof(float));
+        const std::size_t count = positions.tupleCount(3U);
+        ScalarBufferView radii(radii_source, 'f', sizeof(float));
+        ScalarBufferView heights(heights_source, 'f', sizeof(float));
+        ScalarBufferView flags(flags_source, 'I', sizeof(std::uint32_t));
+        radii.requireShape({static_cast<Py_ssize_t>(count)});
+        heights.requireShape({static_cast<Py_ssize_t>(count)});
+        flags.requireShape({static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->replaceAnchors(
+            positions.asSpan<float>(), radii.asSpan<float>(), heights.asSpan<float>(), flags.asSpan<std::uint32_t>()));
         self.owner()->tracking.anchors.invalidate();
         self.owner()->tracking.anchor_connections.invalidate();
       },
       nb::is_method(),
-      nb::arg("anchors"),
-      nb::arg("connections") = nb::tuple(),
-      nb::sig("def replace(self, anchors: Sequence[LevelAnchor], "
-              "connections: Sequence[LevelAnchorConnection] = ()) -> None"));
+      nb::arg("positions"),
+      nb::arg("radii"),
+      nb::arg("heights"),
+      nb::arg("flags"),
+      nb::sig("def replace(self, positions: object, radii: object, heights: object, flags: object) -> None"));
   anchor_collection.attr("generate") = nb::cpp_function(
       [](const ElementCollection<LevelAnchorAccess>& self, float spacing, float radius, float height) {
         auto result = [&] {
@@ -1322,6 +1479,29 @@ void bindLevelReferences(nb::module_& module) {
 
   auto connection = bindElementCollection<LevelAnchorConnectionAccess>(
       module, "LevelAnchorConnectionRef", "LevelAnchorConnectionCollection", "pistoris.level.AnchorConnectionRef");
+  connection
+      .def(
+          "replace",
+          [](const ElementCollection<LevelAnchorConnectionAccess>& self, nb::handle endpoints_source) {
+            ScalarBufferView endpoints(endpoints_source, 'I', sizeof(AnchorIndex));
+            (void)endpoints.tupleCount(2U);
+            unwrap(self.owner()->replaceAnchorConnections(endpoints.asSpan<AnchorIndex>()));
+            self.owner()->tracking.anchor_connections.invalidate();
+          },
+          nb::is_method(),
+          nb::arg("endpoints"),
+          nb::sig("def replace(self, endpoints: object) -> None"))
+      .def(
+          "clear",
+          [](const ElementCollection<LevelAnchorConnectionAccess>& self) {
+            self.owner()->clearAnchorConnections();
+            self.owner()->tracking.anchor_connections.invalidate();
+          },
+          nb::is_method());
+  module.attr("LevelAnchorConnectionCollection").attr("replace") = connection.attr("replace");
+  module.attr("LevelAnchorConnectionCollection").attr("clear") = connection.attr("clear");
+  if (PyObject_DelAttrString(connection.ptr(), "replace") < 0) throw nb::python_error();
+  if (PyObject_DelAttrString(connection.ptr(), "clear") < 0) throw nb::python_error();
   connection
       .def_prop_rw(
           "first",
@@ -1399,8 +1579,7 @@ void bindLevelReferences(nb::module_& module) {
           if (&vertex.owner() != &self.owner()) throw nb::value_error("vertex belongs to a different level");
           copied_triangles[self.index()].vertices[index] = static_cast<NavSurfaceVertexIndex>(vertex.index());
         }
-        unwrap(self.owner().setNavSurface(
-            {copied_vertices.data(), copied_vertices.size(), copied_triangles.data(), copied_triangles.size()}));
+        applyNavSurface(self.owner(), copied_vertices, copied_triangles);
       },
       nb::for_getter(nb::sig("def vertices(self) -> tuple[NavVertexRef, NavVertexRef, NavVertexRef]")),
       nb::for_setter(nb::sig("def vertices(self, value: Sequence[NavVertexRef], /) -> None")));
@@ -1530,111 +1709,6 @@ void bindLevelReferences(nb::module_& module) {
         self.owner().shared_from_this(), self.index(), self.owner().tracking.paths);
   });
 
-  nb::class_<LevelMeshView>(module, "LevelMesh", "The level render mesh and its editing operations.")
-      .def_prop_ro(
-          "vertices",
-          [](const LevelMeshView& self) { return ElementCollection<LevelVertexAccess>(self.owner()); },
-          nb::sig("def vertices(self) -> LevelVertexCollection"))
-      .def_prop_ro(
-          "faces",
-          [](const LevelMeshView& self) { return ElementCollection<LevelFaceAccess>(self.owner()); },
-          nb::sig("def faces(self) -> LevelFaceCollection"))
-      .def_prop_ro(
-          "textures",
-          [](const LevelMeshView& self) { return ElementCollection<LevelTextureAccess>(self.owner()); },
-          nb::sig("def textures(self) -> LevelTextureCollection"))
-      .def("validate",
-           [](const LevelMeshView& self) {
-             auto result = [&] {
-               nb::gil_scoped_release release;
-               return self.owner()->validateMesh();
-             }();
-             unwrap(std::move(result));
-           })
-      .def("validate_face_rooms",
-           [](const LevelMeshView& self) {
-             auto result = [&] {
-               nb::gil_scoped_release release;
-               return self.owner()->validateFaceRooms();
-             }();
-             unwrap(std::move(result));
-           })
-      .def("validate_corner_colors",
-           [](const LevelMeshView& self) {
-             auto result = [&] {
-               nb::gil_scoped_release release;
-               return self.owner()->validateCornerColors();
-             }();
-             unwrap(std::move(result));
-           })
-      .def(
-          "generate_static_lighting",
-          [](const LevelMeshView& self, ArxColor3 ambient, float factor, bool normals, bool shadows) {
-            auto result = [&] {
-              nb::gil_scoped_release release;
-              return self.owner()->generateStaticLighting(
-                  {.ambient_color = ambient, .global_factor = factor, .use_normals = normals, .use_shadows = shadows});
-            }();
-            unwrap(std::move(result));
-          },
-          nb::kw_only(),
-          nb::arg("ambient_color") = kDefaultStaticLightingAmbientColor,
-          nb::arg("global_factor").sig("0.85") = kDefaultStaticLightingGlobalFactor,
-          nb::arg("use_normals") = true,
-          nb::arg("use_shadows") = true)
-      .def(
-          "weld_vertices",
-          [](const LevelMeshView& self,
-             float radius,
-             Level::PositionWeldMetric metric,
-             Level::DegenerateFacePolicy degenerate_faces) {
-            auto result = [&] {
-              nb::gil_scoped_release release;
-              return self.owner()->weldVertices(
-                  {.radius = radius, .metric = metric, .degenerate_faces = degenerate_faces});
-            }();
-            unwrap(std::move(result));
-            self.owner()->tracking.vertices.invalidate();
-            self.owner()->tracking.faces.invalidate();
-          },
-          nb::kw_only(),
-          nb::arg("radius").sig("0.0001") = 1.0e-4f,
-          nb::arg("metric") = Level::PositionWeldMetric::kEuclidean,
-          nb::arg("degenerate_faces") = Level::DegenerateFacePolicy::kPreserve)
-      .def(
-          "snap_to_portals",
-          [](const LevelMeshView& self, float radius) {
-            auto result = [&] {
-              nb::gil_scoped_release release;
-              return self.owner()->snapGeometryToPortals({.radius = radius});
-            }();
-            unwrap(std::move(result));
-          },
-          nb::kw_only(),
-          nb::arg("radius") = kDefaultPortalSnapRadius)
-      .def("reset_corner_colors", [](const LevelMeshView& self) { self.owner()->resetCornerColors(); })
-      .def(
-          "replace",
-          [](const LevelMeshView& self,
-             const std::vector<ArxLevelVertex>& vertices,
-             const std::vector<LevelFace>& faces,
-             const nb::sequence& textures) { replaceLevelMesh(*self.owner(), vertices, faces, textures); },
-          nb::arg("vertices"),
-          nb::arg("faces"),
-          nb::arg("textures") = nb::tuple(),
-          nb::sig("def replace(self, vertices: Sequence[LevelVertex], faces: Sequence[LevelFace], "
-                  "textures: Sequence[Texture] = ()) -> None"))
-      .def("clear",
-           [](const LevelMeshView& self) {
-             self.owner()->clearMesh();
-             invalidateLevelMesh(*self.owner());
-           })
-      .def("__repr__", [](const LevelMeshView& self) {
-        return std::string("<pistoris.level.Mesh vertices=") + std::to_string(self.owner()->vertexCount()) +
-               " faces=" + std::to_string(self.owner()->faceCount()) +
-               " textures=" + std::to_string(self.owner()->textureCount()) + ">";
-      });
-
   nb::class_<LevelNavSurfaceView>(
       module, "LevelNavSurface", "The level navigation surface and its generation operations.")
       .def_prop_ro("info", [](const LevelNavSurfaceView& self) { return self.owner()->navSurfaceInfo(); })
@@ -1656,28 +1730,19 @@ void bindLevelReferences(nb::module_& module) {
            })
       .def(
           "replace",
-          [](const LevelNavSurfaceView& self,
-             const std::vector<ArxLevelVertex>& vertices,
-             const std::vector<LevelNavSurfaceTriangleValue>& triangles) {
-            std::vector<ArxLevelVertex> all_vertices = vertices;
-            all_vertices.reserve(vertices.size() + triangles.size() * 3);
-            std::vector<ArxLevelNavSurfaceTriangle> converted;
-            converted.reserve(triangles.size());
-            for (const LevelNavSurfaceTriangleValue& triangle : triangles) {
-              ArxLevelNavSurfaceTriangle value{};
-              for (std::size_t corner = 0; corner < triangle.vertices.size(); ++corner) {
-                value.vertices[corner] = static_cast<NavSurfaceVertexIndex>(all_vertices.size());
-                all_vertices.push_back(triangle.vertices[corner]);
-              }
-              converted.push_back(value);
-            }
-            unwrap(self.owner()->setNavSurface(
-                {all_vertices.data(), all_vertices.size(), converted.data(), converted.size()}));
+          [](const LevelNavSurfaceView& self, nb::handle positions_source, nb::handle triangle_indices_source) {
+            ScalarBufferView positions(positions_source, 'f', sizeof(float));
+            (void)positions.tupleCount(3U);
+            ScalarBufferView triangle_indices(triangle_indices_source, 'I', sizeof(NavSurfaceVertexIndex));
+            (void)triangle_indices.tupleCount(3U);
+            unwrap(self.owner()->setNavSurface(positions.asSpan<float>(),
+                                               triangle_indices.asSpan<NavSurfaceVertexIndex>()));
             self.owner()->tracking.nav_vertices.invalidate();
             self.owner()->tracking.nav_triangles.invalidate();
           },
-          nb::arg("vertices"),
-          nb::arg("triangles"))
+          nb::arg("positions"),
+          nb::arg("triangle_indices"),
+          nb::sig("def replace(self, positions: object, triangle_indices: object) -> None"))
       .def("clear",
            [](const LevelNavSurfaceView& self) {
              self.owner()->clearNavSurface();
@@ -2159,7 +2224,79 @@ void bindLevelInspection(nb::class_<PythonLevel>& binding) {
            })
       .def_prop_ro("bounds", &Level::bounds)
       .def_prop_ro("referenced_bounds", &Level::referencedBounds)
-      .def_prop_ro("mesh", [](PythonLevel& self) { return LevelMeshView(self.shared_from_this()); })
+      .def_prop_ro("vertices",
+                   [](PythonLevel& self) { return ElementCollection<LevelVertexAccess>(self.shared_from_this()); })
+      .def_prop_ro("faces",
+                   [](PythonLevel& self) { return ElementCollection<LevelFaceAccess>(self.shared_from_this()); })
+      .def_prop_ro("textures",
+                   [](PythonLevel& self) { return ElementCollection<LevelTextureAccess>(self.shared_from_this()); })
+      .def("validate_geometry",
+           [](PythonLevel& self) {
+             auto result = [&] {
+               nb::gil_scoped_release release;
+               return self.validateGeometry();
+             }();
+             unwrap(std::move(result));
+           })
+      .def("validate_face_rooms",
+           [](PythonLevel& self) {
+             auto result = [&] {
+               nb::gil_scoped_release release;
+               return self.validateFaceRooms();
+             }();
+             unwrap(std::move(result));
+           })
+      .def("validate_corner_colors",
+           [](PythonLevel& self) {
+             auto result = [&] {
+               nb::gil_scoped_release release;
+               return self.validateCornerColors();
+             }();
+             unwrap(std::move(result));
+           })
+      .def(
+          "generate_static_lighting",
+          [](PythonLevel& self, ArxColor3 ambient, float factor, bool normals, bool shadows) {
+            auto result = [&] {
+              nb::gil_scoped_release release;
+              return self.generateStaticLighting(
+                  {.ambient_color = ambient, .global_factor = factor, .use_normals = normals, .use_shadows = shadows});
+            }();
+            unwrap(std::move(result));
+          },
+          nb::kw_only(),
+          nb::arg("ambient_color") = kDefaultStaticLightingAmbientColor,
+          nb::arg("global_factor").sig("0.85") = kDefaultStaticLightingGlobalFactor,
+          nb::arg("use_normals") = true,
+          nb::arg("use_shadows") = true)
+      .def(
+          "weld_vertices",
+          [](PythonLevel& self, float radius, Level::PositionWeldMetric metric, Level::DegenerateFacePolicy policy) {
+            auto result = [&] {
+              nb::gil_scoped_release release;
+              return self.weldVertices({.radius = radius, .metric = metric, .degenerate_faces = policy});
+            }();
+            unwrap(std::move(result));
+            self.tracking.vertices.invalidate();
+            self.tracking.faces.invalidate();
+            invalidateLevelNavigation(self);
+          },
+          nb::kw_only(),
+          nb::arg("radius").sig("0.0001") = 1.0e-4f,
+          nb::arg("metric") = Level::PositionWeldMetric::kEuclidean,
+          nb::arg("degenerate_faces") = Level::DegenerateFacePolicy::kPreserve)
+      .def(
+          "snap_to_portals",
+          [](PythonLevel& self, float radius) {
+            auto result = [&] {
+              nb::gil_scoped_release release;
+              return self.snapGeometryToPortals({.radius = radius});
+            }();
+            unwrap(std::move(result));
+          },
+          nb::kw_only(),
+          nb::arg("radius") = kDefaultPortalSnapRadius)
+      .def("reset_corner_colors", [](PythonLevel& self) { self.resetCornerColors(); })
       .def_prop_ro("rooms",
                    [](PythonLevel& self) { return ElementCollection<LevelRoomAccess>(self.shared_from_this()); })
       .def_prop_ro("portals",
@@ -2214,6 +2351,7 @@ CollectionTracker& LevelFaceAccess::tracker(Owner& owner, std::size_t) { return 
 LevelFaceAccess::Value LevelFaceAccess::get(const Owner& owner, std::size_t, std::size_t index) {
   const ArxLevelFace source = owner.faces()[index];
   Value result;
+  result.normal = source.normal;
   result.texture = levelTexturePath(owner, source.texture);
   result.room = levelRoomName(owner, source.room);
   result.flags = source.flags;
@@ -2248,6 +2386,152 @@ void LevelFaceAccess::remove(Owner& owner, std::size_t, std::size_t index) {
 
 void LevelFaceAccess::validate(const Owner& owner, std::size_t) { unwrap(owner.validateFaces()); }
 
+void bindLevelBulkCopies(nb::module_& module) {
+  module.attr("LevelVertexCollection").attr("copy") = nb::cpp_function(
+      [](const ElementCollection<LevelVertexAccess>& self, const nb::object& positions_source) {
+        requireCopyDestinations({positions_source});
+        const std::size_t count = self.owner()->vertexCount();
+        ScalarBufferOutput<float> positions(
+            positions_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        unwrap(self.owner()->copyVertexPositions(positions.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("positions") = nb::none(),
+      nb::sig("def copy(self, *, positions: object | None = None) -> None"));
+  module.attr("LevelFaceCollection").attr("copy") = nb::cpp_function(
+      [](const ElementCollection<LevelFaceAccess>& self,
+         const nb::object& vertex_indices_source,
+         const nb::object& uvs_source,
+         const nb::object& corner_normals_source,
+         const nb::object& textures_source,
+         const nb::object& transvals_source,
+         const nb::object& corner_colors_source,
+         const nb::object& face_normals_source,
+         const nb::object& flags_source) {
+        requireCopyDestinations({vertex_indices_source,
+                                 uvs_source,
+                                 corner_normals_source,
+                                 textures_source,
+                                 transvals_source,
+                                 corner_colors_source,
+                                 face_normals_source,
+                                 flags_source});
+        const std::size_t count = self.owner()->faceCount();
+        ScalarBufferOutput<std::uint32_t> vertex_indices(
+            vertex_indices_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        ScalarBufferOutput<float> uvs(
+            uvs_source, checkedBufferProduct(count, 6U), {static_cast<Py_ssize_t>(count), 3, 2});
+        ScalarBufferOutput<float> corner_normals(
+            corner_normals_source, checkedBufferProduct(count, 9U), {static_cast<Py_ssize_t>(count), 3, 3});
+        ScalarBufferOutput<TextureIndex> textures(textures_source, count, {static_cast<Py_ssize_t>(count)});
+        ScalarBufferOutput<float> transvals(transvals_source, count, {static_cast<Py_ssize_t>(count)});
+        ScalarBufferOutput<float> corner_colors(
+            corner_colors_source, checkedBufferProduct(count, 9U), {static_cast<Py_ssize_t>(count), 3, 3});
+        ScalarBufferOutput<float> face_normals(
+            face_normals_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        ScalarBufferOutput<FaceType> flags(flags_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyFaces({.vertex_indices = vertex_indices.span(),
+                                        .uvs = uvs.span(),
+                                        .corner_normals = corner_normals.span(),
+                                        .textures = textures.span(),
+                                        .transvals = transvals.span(),
+                                        .corner_colors = corner_colors.span(),
+                                        .face_normals = face_normals.span(),
+                                        .flags = flags.span()}));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("vertex_indices") = nb::none(),
+      nb::arg("uvs") = nb::none(),
+      nb::arg("corner_normals") = nb::none(),
+      nb::arg("textures") = nb::none(),
+      nb::arg("transvals") = nb::none(),
+      nb::arg("corner_colors") = nb::none(),
+      nb::arg("face_normals") = nb::none(),
+      nb::arg("flags") = nb::none(),
+      nb::sig("def copy(self, *, vertex_indices: object | None = None, uvs: object | None = None, corner_normals: "
+              "object | None = None, textures: object | None = None, transvals: object | None = None, corner_colors: "
+              "object | None = None, face_normals: object | None = None, flags: object | None = None) -> None"));
+  module.attr("LevelFaceCollection").attr("copy_textures") = nb::cpp_function(
+      [](const ElementCollection<LevelFaceAccess>& self, const nb::object& textures_source) {
+        requireCopyDestinations({textures_source});
+        const std::size_t count = self.owner()->faceCount();
+        ScalarBufferOutput<TextureIndex> textures(textures_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyFaceTextures(textures.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("textures") = nb::none(),
+      nb::sig("def copy_textures(self, *, textures: object | None = None) -> None"));
+  module.attr("LevelFaceCollection").attr("copy_rooms") = nb::cpp_function(
+      [](const ElementCollection<LevelFaceAccess>& self, const nb::object& rooms_source) {
+        requireCopyDestinations({rooms_source});
+        const std::size_t count = self.owner()->faceCount();
+        ScalarBufferOutput<RoomIndex> rooms(rooms_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyFaceRooms(rooms.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("rooms") = nb::none(),
+      nb::sig("def copy_rooms(self, *, rooms: object | None = None) -> None"));
+  module.attr("LevelAnchorCollection").attr("copy") = nb::cpp_function(
+      [](const ElementCollection<LevelAnchorAccess>& self,
+         const nb::object& positions_source,
+         const nb::object& radii_source,
+         const nb::object& heights_source,
+         const nb::object& flags_source) {
+        requireCopyDestinations({positions_source, radii_source, heights_source, flags_source});
+        const std::size_t count = self.owner()->anchorCount();
+        ScalarBufferOutput<float> positions(
+            positions_source, checkedBufferProduct(count, 3U), {static_cast<Py_ssize_t>(count), 3});
+        ScalarBufferOutput<float> radii(radii_source, count, {static_cast<Py_ssize_t>(count)});
+        ScalarBufferOutput<float> heights(heights_source, count, {static_cast<Py_ssize_t>(count)});
+        ScalarBufferOutput<std::uint32_t> flags(flags_source, count, {static_cast<Py_ssize_t>(count)});
+        unwrap(self.owner()->copyAnchors(
+            {.positions = positions.span(), .radii = radii.span(), .heights = heights.span(), .flags = flags.span()}));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("positions") = nb::none(),
+      nb::arg("radii") = nb::none(),
+      nb::arg("heights") = nb::none(),
+      nb::arg("flags") = nb::none(),
+      nb::sig("def copy(self, *, positions: object | None = None, radii: object | None = None, heights: object | None "
+              "= None, flags: object | None = None) -> None"));
+  module.attr("LevelAnchorConnectionCollection").attr("copy") = nb::cpp_function(
+      [](const ElementCollection<LevelAnchorConnectionAccess>& self, const nb::object& endpoints_source) {
+        requireCopyDestinations({endpoints_source});
+        const std::size_t count = self.owner()->anchorConnectionCount();
+        ScalarBufferOutput<AnchorIndex> endpoints(
+            endpoints_source, checkedBufferProduct(count, 2U), {static_cast<Py_ssize_t>(count), 2});
+        unwrap(self.owner()->copyAnchorConnections(endpoints.requiredSpan()));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("endpoints") = nb::none(),
+      nb::sig("def copy(self, *, endpoints: object | None = None) -> None"));
+  module.attr("LevelNavSurface").attr("copy") = nb::cpp_function(
+      [](const LevelNavSurfaceView& self,
+         const nb::object& positions_source,
+         const nb::object& triangle_indices_source) {
+        requireCopyDestinations({positions_source, triangle_indices_source});
+        const std::size_t vertices = self.owner()->navSurfaceVertices().size();
+        const std::size_t triangles = self.owner()->navSurfaceTriangles().size();
+        ScalarBufferOutput<float> positions(
+            positions_source, checkedBufferProduct(vertices, 3U), {static_cast<Py_ssize_t>(vertices), 3});
+        ScalarBufferOutput<NavSurfaceVertexIndex> triangle_indices(
+            triangle_indices_source, checkedBufferProduct(triangles, 3U), {static_cast<Py_ssize_t>(triangles), 3});
+        unwrap(
+            self.owner()->copyNavSurface({.positions = positions.span(), .triangle_indices = triangle_indices.span()}));
+      },
+      nb::is_method(),
+      nb::kw_only(),
+      nb::arg("positions") = nb::none(),
+      nb::arg("triangle_indices") = nb::none(),
+      nb::sig("def copy(self, *, positions: object | None = None, triangle_indices: object | None = None) -> None"));
+}
+
 void bindLevel(nb::module_& module) {
   bindOutputs(module);
   nb::enum_<level_images::MinimapRenderMode>(module, "MinimapRenderMode")
@@ -2280,6 +2564,7 @@ void bindLevel(nb::module_& module) {
     return result;
   });
   bindLevelReferences(module);
+  bindLevelBulkCopies(module);
   auto binding =
       nb::class_<PythonLevel>(
           module,

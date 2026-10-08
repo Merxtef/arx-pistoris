@@ -15,6 +15,8 @@
 #include "arx_pistoris/model.hpp"
 #include "arx_pistoris/model/bake.hpp"
 #include "arx_pistoris/model/types.h"
+#include "arx_pistoris/native.hpp"
+#include "arx_pistoris/native/ftl.hpp"
 #include "arx_pistoris/native/tea.hpp"
 #include "arx_pistoris/runtime/types.h"
 #include "arx_pistoris/sound.h"
@@ -949,6 +951,34 @@ std::vector<std::uint8_t> makeTransformedSkinAnimationGlb(const TransformedSkinF
 }  // namespace
 
 TEST_SUITE("Model GLB") {
+  TEST_CASE("Native FTL repairs face normals at extreme scales") {
+    for (float edge : {1.0e-23f, 1.0f, 1.0e20f}) {
+      CAPTURE(edge);
+      pistoris::ftl::Data native;
+      native.header.origin = 0;
+      native.vertices = {
+          {{0.0f, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}},
+          {{edge, 0.0f, 0.0f}, {0.0f, -1.0f, 0.0f}},
+          {{0.0f, 0.0f, edge}, {0.0f, -1.0f, 0.0f}},
+      };
+      pistoris::ftl::Face face;
+      face.vertex_idx = {0, 1, 2};
+      face.texture_id = -1;
+      face.norm = {};
+      native.faces.push_back(face);
+      REQUIRE(pistoris::validate(native));
+
+      auto imported = pistoris::Model::importNative(native);
+      REQUIRE(imported);
+      REQUIRE(imported->validateGeometry());
+      REQUIRE(imported->faceCount() == 1);
+      const ArxVector3 normal = imported->faces()[0].normal;
+      CHECK(normal.x == doctest::Approx(0.0f));
+      CHECK(normal.y == doctest::Approx(-1.0f));
+      CHECK(normal.z == doctest::Approx(0.0f));
+    }
+  }
+
   TEST_CASE("Model equivalence matches approximate vertices one-to-one") {
     pistoris::Model lhs;
     pistoris::Model rhs;
@@ -1510,9 +1540,29 @@ TEST_SUITE("Model GLB") {
     };
 
     pistoris::Model source;
-    const ArxModelMeshInput mesh = {
-        vertices.data(), vertices.size(), faces.data(), faces.size(), textures.data(), textures.size()};
-    REQUIRE(source.replaceMesh(mesh).code() == ARX_OK);
+    std::vector<float> positions;
+    positions.reserve(vertices.size() * 3U);
+    for (const ArxModelVertex& vertex : vertices)
+      positions.insert(positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
+    REQUIRE(source.replaceVertices(positions));
+    for (const ArxTextureView& texture : textures) REQUIRE(source.addTexture(texture));
+    std::vector<std::uint32_t> vertex_indices;
+    std::vector<float> uvs;
+    std::vector<float> corner_normals;
+    std::vector<std::uint32_t> texture_indices;
+    std::vector<float> transvals;
+    std::vector<float> face_normals;
+    for (const ArxModelFace& face : faces) {
+      texture_indices.push_back(face.texture);
+      transvals.push_back(face.transval);
+      face_normals.insert(face_normals.end(), {face.normal.x, face.normal.y, face.normal.z});
+      for (const ArxModelCorner& corner : face.corners) {
+        vertex_indices.push_back(corner.vertex);
+        uvs.insert(uvs.end(), {corner.u, corner.v});
+        corner_normals.insert(corner_normals.end(), {corner.normal.x, corner.normal.y, corner.normal.z});
+      }
+    }
+    REQUIRE(source.replaceFaces(vertex_indices, uvs, corner_normals, texture_indices, transvals, face_normals));
     std::vector<std::uint8_t> encoded;
     REQUIRE(exportGlb(source, encoded) == ARX_OK);
 
@@ -2183,7 +2233,7 @@ TEST_SUITE("Model GLB") {
   TEST_CASE("Uses the semantic origin as an unrigged motion carrier") {
     pistoris::Model model;
     REQUIRE(importNative(model, makeSemanticModelFtl()) == ARX_OK);
-    model.clearSkeleton();
+    model.clearBones();
     pistoris::Animation animation;
     configureMotionAnimation(animation);
     const std::array<const pistoris::Animation*, 1> source_animations = {&animation};

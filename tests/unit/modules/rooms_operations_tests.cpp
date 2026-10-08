@@ -154,4 +154,45 @@ TEST_SUITE("rooms::operations") {
     CHECK(segments.offsets == std::vector<std::size_t>{0, 1});
     CHECK(segments.protected_vertices == std::vector<VertexIndex>{7});
   }
+
+  TEST_CASE("Unassigned faces form an isolated final vertex-weld segment") {
+    GeometryData geometry;
+    geometry.vertices = {
+        {{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 1.0f, 0.0f}}, {{-1.0f, 0.0f, 0.0f}}, {{0.0f, -1.0f, 0.0f}}};
+    geometry.faces.resize(2);
+    geometry.faces[0].corners[0].vertex = 0;
+    geometry.faces[0].corners[1].vertex = 1;
+    geometry.faces[0].corners[2].vertex = 2;
+    geometry.faces[1].corners[0].vertex = 0;
+    geometry.faces[1].corners[1].vertex = 3;
+    geometry.faces[1].corners[2].vertex = 4;
+
+    RoomsData rooms;
+    rooms.definitions = {{"room"}};
+    rooms.face_rooms = {0, kNoRoom};
+
+    rooms::VertexWeldSegments segments;
+    REQUIRE(rooms::collectVertexWeldSegments(geometry, rooms, 0.1f, segments) == rooms::Error::kNone);
+    REQUIRE(segments.offsets == std::vector<std::size_t>{0, 3, 6});
+    CHECK(segments.vertices == std::vector<VertexIndex>{0, 1, 2, 0, 3, 4});
+    CHECK(segments.protected_vertices == std::vector<VertexIndex>{0});
+  }
+
+  TEST_CASE("Unassigned faces can be collected when there are no rooms") {
+    GeometryData geometry;
+    geometry.vertices = {{{0.0f, 0.0f, 0.0f}}, {{1.0f, 0.0f, 0.0f}}, {{0.0f, 1.0f, 0.0f}}};
+    geometry.faces.resize(1);
+    geometry.faces[0].corners[0].vertex = 0;
+    geometry.faces[0].corners[1].vertex = 1;
+    geometry.faces[0].corners[2].vertex = 2;
+
+    RoomsData rooms;
+    rooms.face_rooms = {kNoRoom};
+
+    rooms::VertexWeldSegments segments;
+    REQUIRE(rooms::collectVertexWeldSegments(geometry, rooms, 0.1f, segments) == rooms::Error::kNone);
+    CHECK(segments.offsets == std::vector<std::size_t>{0, 3});
+    CHECK(segments.vertices == std::vector<VertexIndex>{0, 1, 2});
+    CHECK(segments.protected_vertices.empty());
+  }
 }

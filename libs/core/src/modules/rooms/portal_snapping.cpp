@@ -122,7 +122,9 @@ Error snapGeometryToPortals(GeometryData& geometry, const RoomsData& rooms, cons
 
     candidate_portals.clear();
     for (FaceIndex face : incident_faces) {
-      const std::span<const PortalIndex> portals = portal_index.roomPortals(rooms.face_rooms[face]);
+      const RoomIndex room = rooms.face_rooms[face];
+      if (room == kNoRoom) continue;
+      const std::span<const PortalIndex> portals = portal_index.roomPortals(room);
       candidate_portals.insert(candidate_portals.end(), portals.begin(), portals.end());
     }
     std::ranges::sort(candidate_portals);
@@ -190,7 +192,6 @@ Error snapGeometryToPortals(GeometryData& geometry, const RoomsData& rooms, cons
 
   for (std::size_t vertex = 0; vertex < geometry.vertices.size(); ++vertex)
     geometry.vertices[vertex].position = next_positions[vertex];
-  geometry::refreshFaceNormals(geometry);
   if (statistics) *statistics = result;
   return Error::kNone;
 }

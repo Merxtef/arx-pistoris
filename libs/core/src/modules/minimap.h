@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "arx_pistoris/base/indices.h"
 #include "arx_pistoris/base/math.h"
 
 #include "utils/encoded_image.h"
@@ -96,6 +97,10 @@ bool translate(MinimapData& minimap, const ArxVector3& offset) noexcept;
 
 Error generate(MinimapData& out, const GeometryData& geometry, const GenerationOptions& options,
                GenerationDiagnostics* diagnostics = nullptr);
+// Generates from faces assigned to rooms. face_rooms must contain one entry per face;
+// kNoRoom faces are excluded before selecting the visible surface at each pixel.
+Error generateAssigned(MinimapData& out, const GeometryData& geometry, std::span<const RoomIndex> face_rooms,
+                       const GenerationOptions& options, GenerationDiagnostics* diagnostics = nullptr);
 
 Error render(const MinimapData& minimap, const ArxAabb& referenced_bounds, const RenderOptions& options,
              std::vector<std::uint8_t>& out, RenderInfo* info = nullptr);

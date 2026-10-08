@@ -50,7 +50,10 @@ void repairNames(std::span<Bone> bones) {
 namespace {
 
 void shiftIndex(BoneIndex& value, BoneIndex removed) noexcept {
-  if (value != kInvalidBoneIndex && value > removed) --value;
+  if (value == removed)
+    value = kInvalidBoneIndex;
+  else if (value != kInvalidBoneIndex && value > removed)
+    --value;
 }
 
 }  // namespace
@@ -65,7 +68,6 @@ bool referencesBone(const SkeletonData& skeleton, BoneIndex index) noexcept {
 
 void removeBone(SkeletonData& skeleton, BoneIndex index) noexcept {
   assert(static_cast<std::size_t>(index) < skeleton.bones.size());
-  assert(!referencesBone(skeleton, index));
   skeleton.bones.erase(skeleton.bones.begin() + static_cast<std::ptrdiff_t>(index));
   for (Bone& bone : skeleton.bones) shiftIndex(bone.parent, index);
   for (BoneIndex& bone : skeleton.vertex_bones) shiftIndex(bone, index);

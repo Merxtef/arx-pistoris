@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -177,16 +178,31 @@ struct LevelCorner {
 
 struct LevelFace {
   std::array<LevelCorner, 3> corners{};
+  std::optional<ArxVector3> normal;
   std::optional<std::string> texture;
   std::optional<std::string> room;
   ArxFaceType flags = 0;
   float transval = 0.0f;
 };
 
+inline ArxVector3 levelFaceNormal(const LevelFace& value) noexcept {
+  const ArxVector3& p0 = value.corners[0].vertex.position;
+  const ArxVector3& p1 = value.corners[1].vertex.position;
+  const ArxVector3& p2 = value.corners[2].vertex.position;
+  const double ax = static_cast<double>(p1.x) - p0.x, ay = static_cast<double>(p1.y) - p0.y,
+               az = static_cast<double>(p1.z) - p0.z;
+  const double bx = static_cast<double>(p2.x) - p0.x, by = static_cast<double>(p2.y) - p0.y,
+               bz = static_cast<double>(p2.z) - p0.z;
+  const double nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+  const double length = std::hypot(nx, ny, nz);
+  if (length == 0.0 || !std::isfinite(length)) return {};
+  return {static_cast<float>(nx / length), static_cast<float>(ny / length), static_cast<float>(nz / length)};
+}
+
 struct LevelPortal {
   std::string name;
-  std::optional<std::string> room_1;
-  std::optional<std::string> room_2;
+  std::optional<std::string> room_front;
+  std::optional<std::string> room_back;
   ArxPortalShape shape = ARX_PORTAL_QUAD;
   std::array<ArxVector3, 4> vertices{};
 

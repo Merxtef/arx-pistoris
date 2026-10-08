@@ -40,6 +40,7 @@ LevelValidation invalidationClosure(LevelValidation invalid) noexcept {
     invalid |= LevelValidation::kFaceRooms | LevelValidation::kPortals | LevelValidation::kRoomDistances;
   }
   if (hasAny(invalid, LevelValidation::kPortals)) invalid |= LevelValidation::kRoomDistances;
+  if (hasAny(invalid, LevelValidation::kFaceRooms)) invalid |= LevelValidation::kEffectiveBounds;
   if (hasAny(invalid, LevelValidation::kAnchors)) invalid |= LevelValidation::kAnchorConnections;
   return invalid;
 }
@@ -95,7 +96,7 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
     case geometry::Error::kBadFaceTransval:
       return ARX_LEVEL_BAD_FACE_TRANSVAL;
     case geometry::Error::kBadFaceNormal:
-      return ARX_INTERNAL_ERROR;
+      return ARX_LEVEL_BAD_FACE_NORMAL;
     case geometry::Error::kBadFaceUv:
       return ARX_LEVEL_BAD_FACE_UV;
     case geometry::Error::kDegenerateFace:
@@ -104,6 +105,10 @@ ArxReturnCode geometryError(geometry::Error error) noexcept {
       return ARX_LEVEL_BAD_VERTEX_WELD_SEGMENT;
     case geometry::Error::kOverlappingVertexWeldSegments:
       return ARX_LEVEL_OVERLAPPING_VERTEX_WELD_SEGMENTS;
+    case geometry::Error::kBadVertexCount:
+      return ARX_LEVEL_BAD_VERTEX_COUNT;
+    case geometry::Error::kBadFaceCount:
+      return ARX_LEVEL_BAD_FACE_COUNT;
   }
   return ARX_INTERNAL_ERROR;
 }
@@ -380,6 +385,7 @@ void invalidate(LevelValidationState& state, LevelValidation validation) noexcep
   state.valid &= ~invalid;
   if (hasAny(invalid, LevelValidation::kVertices)) state.derived.bounds.reset();
   if (hasAny(invalid, LevelValidation::kFaces)) state.derived.referenced_bounds.reset();
+  if (hasAny(invalid, LevelValidation::kEffectiveBounds)) state.derived.effective_bounds.reset();
 }
 
 ArxReturnCode vertices(const LevelModules& modules, LevelValidationState& state) {
@@ -429,9 +435,14 @@ ArxReturnCode faceRooms(const LevelModules& modules, LevelValidationState& state
   if (rc != ARX_OK) return rc;
   rc = rooms(modules, state);
   if (rc != ARX_OK) return rc;
-  if (has(state, LevelValidation::kFaceRooms)) return ARX_OK;
+  if (has(state, LevelValidation::kFaceRooms | LevelValidation::kEffectiveBounds)) return ARX_OK;
   rc = roomsError(pistoris::rooms::validateFaceRooms(
       modules.rooms.face_rooms, modules.geometry.faces.size(), modules.rooms.definitions.size()));
+  if (rc == ARX_OK) {
+    state.derived.effective_bounds =
+        pistoris::rooms::effectiveGeometryBounds(modules.geometry, modules.rooms.face_rooms);
+    markValid(state, LevelValidation::kEffectiveBounds);
+  }
   return recordValidationResult(state, LevelValidation::kFaceRooms, rc);
 }
 

@@ -49,9 +49,10 @@ typedef struct ArxLevelCorner {
 typedef struct ArxLevelFace {
   ArxLevelCorner corners[3];
   ArxTextureIndex texture ARX_PISTORIS_DETAIL_CXX_DEFAULT(ARX_NO_TEXTURE);
-  ArxRoomIndex room;
+  ArxRoomIndex room ARX_PISTORIS_DETAIL_CXX_DEFAULT(ARX_NO_ROOM);
   ArxFaceType flags;
   float transval;
+  ArxVector3 normal;
 } ArxLevelFace;
 
 typedef struct ArxLevelRoomDistance {
@@ -96,8 +97,8 @@ typedef struct ArxLevelRoom {
 
 typedef struct ArxLevelPortal {
   ArxStringView name;
-  ArxRoomIndex room_1;
-  ArxRoomIndex room_2;
+  ArxRoomIndex room_front;
+  ArxRoomIndex room_back;
   ArxPortalShape shape ARX_PISTORIS_DETAIL_CXX_DEFAULT(ARX_PORTAL_QUAD);
   /* The fourth vertex is ignored when shape is ARX_PORTAL_TRIANGLE */
   ArxVector3 vertices[4];
@@ -118,10 +119,11 @@ typedef struct ArxLevelNavSurfaceInfo {
 } ArxLevelNavSurfaceInfo;
 
 typedef struct ArxLevelNavSurfaceInput {
-  const ArxLevelVertex* vertices;
-  size_t vertex_count;
-  const ArxLevelNavSurfaceTriangle* triangles;
-  size_t triangle_count;
+  /* Scalar counts: positions is xyz triples; triangle_indices is triples of vertex indices. */
+  const float* positions;
+  size_t position_count;
+  const uint32_t* triangle_indices;
+  size_t triangle_index_count;
 } ArxLevelNavSurfaceInput;
 
 typedef struct ArxLevelLight {
@@ -205,21 +207,87 @@ typedef struct ArxLevelPathInput {
   size_t node_count;
 } ArxLevelPathInput;
 
-typedef struct ArxLevelMeshInput {
-  const ArxLevelVertex* vertices;
-  size_t vertex_count;
-  const ArxLevelFace* faces;
-  size_t face_count;
-  const ArxTextureView* textures;
+typedef struct ArxLevelFacesInput {
+  /* Scalar layouts: indices 3F, UVs 6F, corner_normals 9F, textures F, transvals F,
+     corner_colors 9F or one RGB
+   * triple, face_normals 3F or omitted, flags F or omitted. */
+  const uint32_t* vertex_indices;
+  size_t vertex_index_count;
+  const float* uvs;
+  size_t uv_count;
+  const float* corner_normals;
+  size_t corner_normal_count;
+  const uint32_t* textures;
   size_t texture_count;
-} ArxLevelMeshInput;
+  const float* transvals;
+  size_t transval_count;
+  const float* corner_colors;
+  size_t corner_color_count;
+  const float* face_normals;
+  size_t face_normal_count;
+  const ArxFaceType* flags;
+  size_t flag_count;
+} ArxLevelFacesInput;
 
 typedef struct ArxLevelAnchorsInput {
-  const ArxLevelAnchor* anchors;
-  size_t anchor_count;
-  const ArxLevelAnchorConnection* connections;
-  size_t connection_count;
+  /* Scalar counts: positions is xyz triples; radii, heights, and flags each contain A values. */
+  const float* positions;
+  size_t position_count;
+  const float* radii;
+  size_t radius_count;
+  const float* heights;
+  size_t height_count;
+  const uint32_t* flags;
+  size_t flag_count;
 } ArxLevelAnchorsInput;
+
+typedef struct ArxLevelFacesOutput {
+  /* Null with zero count omits a field; nonnull with zero count requests an empty field. */
+  uint32_t* vertex_indices;
+  size_t vertex_index_count;
+  float* uvs;
+  size_t uv_count;
+  float* corner_normals;
+  size_t corner_normal_count;
+  ArxTextureIndex* textures;
+  size_t texture_count;
+  float* transvals;
+  size_t transval_count;
+  float* corner_colors;
+  size_t corner_color_count;
+  float* face_normals;
+  size_t face_normal_count;
+  ArxFaceType* flags;
+  size_t flag_count;
+} ArxLevelFacesOutput;
+
+typedef struct ArxLevelAnchorsOutput {
+  /* Null with zero count omits a field; nonnull with zero count requests an empty field. */
+  float* positions;
+  size_t position_count;
+  float* radii;
+  size_t radius_count;
+  float* heights;
+  size_t height_count;
+  uint32_t* flags;
+  size_t flag_count;
+} ArxLevelAnchorsOutput;
+
+typedef struct ArxLevelNavSurfaceOutput {
+  /* Null with zero count omits a field; nonnull with zero count requests an empty field. */
+  float* positions;
+  size_t position_count;
+  ArxNavSurfaceVertexIndex* triangle_indices;
+  size_t triangle_index_count;
+} ArxLevelNavSurfaceOutput;
+
+typedef struct ArxLevelRoomDistancesOutput {
+  /* Null with zero count omits a field; nonnull with zero count requests an empty field. */
+  float* distances;
+  size_t distance_count;
+  ArxPortalIndex* endpoint_portals;
+  size_t endpoint_portal_count;
+} ArxLevelRoomDistancesOutput;
 
 #undef ARX_PISTORIS_DETAIL_CXX_DEFAULT
 

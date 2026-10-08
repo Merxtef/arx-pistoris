@@ -86,12 +86,27 @@ void removeActionPointMask(SelectionsData& selections, ActionPointIndex index) n
   selections.action_point_masks.erase(selections.action_point_masks.begin() + static_cast<std::ptrdiff_t>(index));
 }
 
+void assignVertexMasks(SelectionsData& selections, std::span<const SelectionMask> masks) noexcept {
+  assert(masks.size() == selections.vertex_masks.size());
+  std::copy(masks.begin(), masks.end(), selections.vertex_masks.begin());
+}
+
 void replaceVertexMasks(SelectionsData& selections, std::vector<SelectionMask>&& masks) noexcept {
   selections.vertex_masks = std::move(masks);
 }
 
+void assignBoneMasks(SelectionsData& selections, std::span<const SelectionMask> masks) noexcept {
+  assert(masks.size() == selections.bone_masks.size());
+  std::copy(masks.begin(), masks.end(), selections.bone_masks.begin());
+}
+
 void replaceBoneMasks(SelectionsData& selections, std::vector<SelectionMask>&& masks) noexcept {
   selections.bone_masks = std::move(masks);
+}
+
+void assignActionPointMasks(SelectionsData& selections, std::span<const SelectionMask> masks) noexcept {
+  assert(masks.size() == selections.action_point_masks.size());
+  std::copy(masks.begin(), masks.end(), selections.action_point_masks.begin());
 }
 
 void replaceActionPointMasks(SelectionsData& selections, std::vector<SelectionMask>&& masks) noexcept {
@@ -117,7 +132,10 @@ void remapLeadingBoneIndicesAfterRemoval(SelectionsData& selections, BoneIndex r
   for (SelectionId id = 0; id < 64U; ++id) {
     if (!occupied(selections, id)) continue;
     std::optional<SelectionLeadingVertex>& leading = selections.slots[id].leading_vertex;
-    if (leading && leading->bone != kInvalidBoneIndex && leading->bone > removed) --leading->bone;
+    if (leading && leading->bone == removed)
+      leading->bone = kInvalidBoneIndex;
+    else if (leading && leading->bone != kInvalidBoneIndex && leading->bone > removed)
+      --leading->bone;
   }
 }
 

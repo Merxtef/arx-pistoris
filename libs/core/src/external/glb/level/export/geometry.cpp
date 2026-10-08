@@ -15,6 +15,7 @@
 #include "external/glb/level/coordinates.h"
 #include "external/glb/level/export/internal.h"
 #include "external/glb/level/material.h"
+#include "external/glb/level/names.h"
 #include "external/glb/level/objects.h"
 #include "external/glb/level/room_distance_metadata.h"
 #include "external/glb/utils/texture.h"
@@ -200,18 +201,19 @@ ArxReturnCode exportRoomGeometry(const LevelModules& level, const ArxAabb& refer
   builder.setNodeTranslation(room_parent, toVec3(room_root));
   builder.addRoot(room_parent);
 
-  std::vector<std::size_t> room_face_offsets(level.rooms.definitions.size() + 1U, 0);
-  for (std::uint32_t room : level.rooms.face_rooms) ++room_face_offsets[static_cast<std::size_t>(room) + 1U];
+  const std::size_t void_room = level.rooms.definitions.size();
+  std::vector<std::size_t> room_face_offsets(void_room + 2U, 0);
+  for (RoomIndex room : level.rooms.face_rooms) ++room_face_offsets[(room == kNoRoom ? void_room : room) + 1U];
   std::partial_sum(room_face_offsets.begin(), room_face_offsets.end(), room_face_offsets.begin());
   std::vector<std::size_t> room_faces(room_face_offsets.back());
   std::vector<std::size_t> room_face_cursors(room_face_offsets.begin(), room_face_offsets.end() - 1);
   for (std::size_t face = 0; face < level.rooms.face_rooms.size(); ++face) {
-    const std::size_t room = level.rooms.face_rooms[face];
+    const std::size_t room = level.rooms.face_rooms[face] == kNoRoom ? void_room : level.rooms.face_rooms[face];
     room_faces[room_face_cursors[room]++] = face;
   }
 
-  for (std::size_t room_index = 0; room_index < level.rooms.definitions.size(); ++room_index) {
-    if (!room_projection.has_faces[room_index]) continue;
+  for (std::size_t room_index = 0; room_index <= void_room; ++room_index) {
+    if (room_face_offsets[room_index] == room_face_offsets[room_index + 1U]) continue;
     std::vector<GlbVec3> positions;
     std::vector<GlbVec3> normals;
     std::vector<GlbVec3> colors;
@@ -278,10 +280,11 @@ ArxReturnCode exportRoomGeometry(const LevelModules& level, const ArxAabb& refer
       };
       primitives.push_back(std::move(primitive));
     }
-    std::string name = roomNodeName(level.rooms.definitions[room_index]);
+    std::string name = room_index == void_room ? glb_level::kExportVoidRoomRootName
+                                               : roomNodeName(level.rooms.definitions[room_index]);
     int mesh = builder.addMesh(name, std::move(primitives));
     int node = builder.addNode(std::move(name), mesh);
-    if (room_projection.preserve_distances)
+    if (room_index != void_room && room_projection.preserve_distances)
       builder.setNodeExtrasJson(node, glb_level::roomDistanceRoomMetadataJson(room_index));
     builder.setNodeTranslation(node,
                                {room_center.x - room_root.x, room_center.y - room_root.y, room_center.z - room_root.z});

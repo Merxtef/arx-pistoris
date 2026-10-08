@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -232,11 +233,11 @@ Face triangle(TextureIndex texture = kNoTexture) {
 Level makeLevelWithRoomAndTriangle() {
   Level level;
   REQUIRE(test::addRoom(level, {"room"}) == 0);
-  test::MeshSnapshot mesh;
+  test::GeometrySnapshot mesh;
   mesh.vertices = {vertex(0.0f, 0.0f, 0.0f), vertex(1.0f, 0.0f, 0.0f), vertex(0.0f, 0.0f, 1.0f)};
   mesh.faces = {triangle()};
   mesh.face_rooms = {0};
-  REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+  REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
   return Level(level);
 }
 
@@ -322,11 +323,11 @@ TEST_SUITE("Level edit API") {
 
   TEST_CASE("Sets and clears validated texture image data") {
     Level level = makeLevelWithRoomAndTriangle();
-    test::MeshSnapshot mesh;
-    REQUIRE(test::copyMesh(level, mesh) == ARX_OK);
+    test::GeometrySnapshot mesh;
+    REQUIRE(test::copyGeometry(level, mesh) == ARX_OK);
     mesh.textures.push_back({"graph/tex.bmp"});
     mesh.faces[0].texture = 0;
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
     std::vector<std::uint8_t> encoded = makeTestBmp();
     REQUIRE(level.setTextureImage(0, {encoded.data(), encoded.size()}));
@@ -380,7 +381,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::texture(level, 0).path == "custom/textures/stone.bmp");
     CHECK(test::navSurface(level).has_value());
     CHECK(level.anchorCount() == 1);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
 
     const std::string bad_path = "graph/obj3d/textures/bad__name.bmp";
     index_result = level.addTexture({{bad_path.data(), bad_path.size()}, {}});
@@ -512,29 +513,29 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Copies and replaces coherent mesh snapshot") {
     Level level = makeLevelWithRoomAndTriangle();
 
-    test::MeshSnapshot snapshot;
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
+    test::GeometrySnapshot snapshot;
+    REQUIRE(test::copyGeometry(level, snapshot) == ARX_OK);
     snapshot.textures.push_back({"graph/tex.bmp"});
     snapshot.faces[0].texture = 0;
     snapshot.corner_colors.resize(3, {0.5f, 0.5f, 0.5f});
-    REQUIRE(test::replaceMesh(level, snapshot) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, snapshot) == ARX_OK);
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->max.x == doctest::Approx(1.0f));
 
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
+    REQUIRE(test::copyGeometry(level, snapshot) == ARX_OK);
     REQUIRE(snapshot.vertices.size() == 3);
     REQUIRE(snapshot.faces.size() == 1);
     snapshot.vertices[0].position.x = 10.0f;
     snapshot.corner_colors = {{0.1f, 0.2f, 0.3f}, {0.4f, 0.5f, 0.6f}, {0.7f, 0.8f, 0.9f}};
 
-    CHECK(test::replaceMesh(level, snapshot) == ARX_OK);
+    CHECK(test::replaceGeometry(level, snapshot) == ARX_OK);
     CHECK(test::vertex(level, 0).position.x == doctest::Approx(10.0f));
     CHECK(level.faceCount() == 1);
     REQUIRE(test::cornerColors(level).size() == 3);
     CHECK(test::cornerColor(level, 0, 1).g == doctest::Approx(0.5f));
     REQUIRE(level.textureCount() == 1);
     CHECK(test::face(level, 0).texture == 0);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->min.x == doctest::Approx(0.0f));
     CHECK(level.bounds()->max.x == doctest::Approx(10.0f));
@@ -543,45 +544,47 @@ TEST_SUITE("Level edit API") {
     CHECK(level.referencedBounds()->max.x == doctest::Approx(10.0f));
   }
 
-  TEST_CASE("Rejects incoherent mesh replacement without changing current mesh") {
+  TEST_CASE("Rejects malformed raw geometry arrays without changing their collection") {
     Level level = makeLevelWithRoomAndTriangle();
 
-    ArxLevelMeshInput oversized{};
-    oversized.vertex_count = std::numeric_limits<std::size_t>::max();
-    if constexpr (std::numeric_limits<std::size_t>::max() > static_cast<std::size_t>(pistoris::kInvalidVertexIndex))
-      CHECK(level.replaceMesh(oversized).code() == ARX_LEVEL_TOO_MANY_VERTICES);
+    CHECK(level.replaceVertices(std::array<float, 2>{0.0f, 0.0f}).code() == ARX_LEVEL_BAD_VERTEX_COUNT);
+    CHECK(level.vertexCount() == 3);
+    CHECK(level.faceCount() == 1);
 
-    ArxLevelMeshInput maximum_count{};
-    maximum_count.vertex_count = pistoris::kInvalidVertexIndex;
-    CHECK(level.replaceMesh(maximum_count).code() == ARX_INVALID_DATA_POINTER);
-
-    test::MeshSnapshot snapshot;
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
-    snapshot.faces[0].corners[0].vertex = 99;
-
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_BAD_FACE_VERTEX);
+    std::array<std::uint32_t, 3> indices = {99, 1, 2};
+    const std::array<float, 6> uvs = {0, 0, 1, 0, 0, 1};
+    std::array<float, 9> normals = {0, -1, 0, 0, -1, 0, 0, -1, 0};
+    const std::array<TextureIndex, 1> textures = {kNoTexture};
+    const std::array<float, 1> transvals = {0};
+    std::array<float, 9> colors = {0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f};
+    CHECK(level.replaceFaces(indices, uvs, normals, textures, transvals, colors).code() == ARX_LEVEL_BAD_FACE_VERTEX);
     CHECK(test::face(level, 0).corners[0].vertex == 0);
 
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_BAD_FACE_VERTEX);
-    REQUIRE(snapshot.faces.size() == 1);
-    CHECK(snapshot.faces[0].corners[0].vertex == 99);
+    indices[0] = 0;
+    CHECK(level.replaceFaces(indices, std::span<const float>(uvs).first(5), normals, textures, transvals, colors)
+              .code() == ARX_LEVEL_BAD_FACE_COUNT);
+    colors[0] = 0.5f;
+    normals[0] = normals[1] = normals[2] = 0.0f;
+    CHECK(level.replaceFaces(indices, uvs, normals, textures, transvals, colors).code() == ARX_LEVEL_BAD_CORNER_NORMAL);
+    normals[0] = 0.0f;
+    normals[1] = -1.0f;
+    colors[0] = 1.1f;
+    CHECK(level.replaceFaces(indices, uvs, normals, textures, transvals, colors).code() == ARX_LEVEL_BAD_CORNER_COLOR);
     CHECK(test::face(level, 0).corners[0].vertex == 0);
 
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
-    snapshot.faces.clear();
-    snapshot.face_rooms.clear();
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_NO_GEOMETRY);
+    const std::array<float, 3> invalid_face_normal = {0.0f, 0.0f, 0.0f};
+    CHECK(level.replaceFaces(indices, uvs, normals, textures, transvals, colors, invalid_face_normal).code() ==
+          ARX_LEVEL_BAD_FACE_NORMAL);
+    CHECK(test::face(level, 0).corners[0].vertex == 0);
+    const std::array<RoomIndex, 1> invalid_room = {1};
+    CHECK(level.replaceFaceRooms(invalid_room).code() == ARX_LEVEL_BAD_FACE_ROOM_INDEX);
+    CHECK(test::faceRoom(level, 0) == 0);
 
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
-    snapshot.corner_colors = {{1.1f, 0.0f, 0.0f}, {0.5f, 0.5f, 0.5f}, {0.5f, 0.5f, 0.5f}};
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_BAD_CORNER_COLOR);
-
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
-    snapshot.vertices[0].position.x = std::numeric_limits<float>::infinity();
-    snapshot.faces.clear();
-    snapshot.face_rooms.clear();
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_BAD_VERTEX_POSITION);
+    std::array<float, 9> invalid_positions = {0, 0, 0, 1, 0, 0, 0, 1, 0};
+    invalid_positions[0] = std::numeric_limits<float>::infinity();
+    CHECK(level.replaceVertices(invalid_positions).code() == ARX_LEVEL_BAD_VERTEX_POSITION);
     CHECK(test::vertex(level, 0).position.x == doctest::Approx(0.0f));
+    CHECK(level.faceCount() == 1);
   }
 
   TEST_CASE("Level enforces native XZ bounds while Geometry remains reusable") {
@@ -597,10 +600,10 @@ TEST_SUITE("Level edit API") {
     CHECK_FALSE(level.bounds().has_value());
     CHECK(level.validateVertices().code() == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
 
-    test::MeshSnapshot snapshot;
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
+    test::GeometrySnapshot snapshot;
+    REQUIRE(test::copyGeometry(level, snapshot) == ARX_OK);
     snapshot.vertices[0].position = {kLevelMaxXZ + 0.01f, 0.0f, 0.0f};
-    CHECK(test::replaceMesh(level, snapshot) == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
+    CHECK(test::replaceGeometry(level, snapshot) == ARX_LEVEL_VERTEX_OUT_OF_BOUNDS);
   }
 
   TEST_CASE("Face edits update room and corner-color collections atomically") {
@@ -629,7 +632,7 @@ TEST_SUITE("Level edit API") {
     invalid_normal.corners[0].normal = {};
     CHECK(test::addFace(level, invalid_normal, 1) == kInvalidFaceIndex);
     CHECK(test::setFace(level, 0, invalid_normal) == ARX_LEVEL_BAD_CORNER_NORMAL);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
 
     Face invalid_uv = added;
     invalid_uv.corners[0].u = std::numeric_limits<float>::infinity();
@@ -640,7 +643,7 @@ TEST_SUITE("Level edit API") {
     Face repeated_vertex = added;
     repeated_vertex.corners[1].vertex = repeated_vertex.corners[0].vertex;
     CHECK(test::setFace(level, 0, repeated_vertex) == ARX_LEVEL_BAD_FACE_VERTEX);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
 
     REQUIRE(test::addFace(level, added, 1) == 1);
     REQUIRE(level.faceCount() == 2);
@@ -648,7 +651,7 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::cornerColors(level).size() == 6);
     CHECK(test::cornerColor(level, 1, 0).r == doctest::Approx(0.5f));
     CHECK(level.roomDistanceCount() == 1);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
 
     REQUIRE(level.removeFace(0));
     REQUIRE(level.faceCount() == 1);
@@ -657,17 +660,41 @@ TEST_SUITE("Level edit API") {
     CHECK(test::cornerColor(level, 0, 0).r == doctest::Approx(0.5f));
     CHECK(level.roomDistanceCount() == 1);
     CHECK(level.removeFace(1).code() == ARX_INDEX_OUT_OF_RANGE);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
   }
 
-  TEST_CASE("Level mesh replacement strips flags reserved for native quad encoding") {
+  TEST_CASE("Raw Level face replacement rejects flags reserved for native quad encoding") {
     Level level = makeLevelWithRoomAndTriangle();
-    test::MeshSnapshot snapshot;
-    REQUIRE(test::copyMesh(level, snapshot) == ARX_OK);
-    snapshot.faces[0].flags = kFaceBitQuad;
+    test::GeometrySnapshot snapshot;
+    REQUIRE(test::copyGeometry(level, snapshot) == ARX_OK);
+    const Face& face = snapshot.faces[0];
+    std::array<VertexIndex, 3> indices{};
+    std::array<float, 6> uvs{};
+    std::array<float, 9> corner_normals{};
+    std::array<TextureIndex, 1> textures = {face.texture};
+    std::array<float, 1> transvals = {face.transval};
+    std::array<float, 9> colors{};
+    std::array<float, 3> face_normals{};
+    const std::array<FaceType, 1> flags = {kFaceBitQuad};
+    for (std::size_t corner = 0; corner < 3; ++corner) {
+      indices[corner] = face.corners[corner].vertex;
+      uvs[corner * 2] = face.corners[corner].u;
+      uvs[corner * 2 + 1] = face.corners[corner].v;
+      corner_normals[corner * 3] = face.corners[corner].normal.x;
+      corner_normals[corner * 3 + 1] = face.corners[corner].normal.y;
+      corner_normals[corner * 3 + 2] = face.corners[corner].normal.z;
+      const ArxColor3 color = snapshot.corner_colors[corner];
+      colors[corner * 3] = color.r;
+      colors[corner * 3 + 1] = color.g;
+      colors[corner * 3 + 2] = color.b;
+    }
+    face_normals = {face.normal.x, face.normal.y, face.normal.z};
 
-    CHECK(test::replaceMesh(level, snapshot) == ARX_OK);
+    CHECK(level.replaceFaces(indices, uvs, corner_normals, textures, transvals, colors, face_normals, flags).code() ==
+          ARX_LEVEL_BAD_FACE_TYPE);
+    CHECK(level.faceCount() == 1);
     CHECK(test::face(level, 0).flags == 0);
+    CHECK(test::faceRoom(level, 0) == 0);
   }
 
   TEST_CASE("Compaction removes unreferenced vertices and refreshes bounds") {
@@ -683,7 +710,7 @@ TEST_SUITE("Level edit API") {
     CHECK(level.vertexCount() == 3);
     REQUIRE(level.bounds().has_value());
     CHECK(level.bounds()->max.x == doctest::Approx(1.0f));
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
   }
 
   TEST_CASE("Texture compaction removes unused textures and preserves referenced images") {
@@ -715,7 +742,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::face(level, 0).texture == 0);
     CHECK(test::texture(level, 0).path == "graph/obj3d/textures/retained.bmp");
     CHECK(test::texture(level, 0).encoded_image == second_image);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
   }
 
   TEST_CASE("Welding discarded faces remaps rooms and corner colors") {
@@ -723,7 +750,7 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::addRoom(level, {"first"}) == 0);
     REQUIRE(test::addRoom(level, {"second"}) == 1);
 
-    test::MeshSnapshot mesh;
+    test::GeometrySnapshot mesh;
     mesh.vertices = {
         vertex(0.0f, 0.0f, 0.0f), vertex(0.1f, 0.0f, 0.1f), vertex(1.0f, 0.0f, 0.0f), vertex(0.0f, 0.0f, 1.0f)};
     Face first = triangle();
@@ -742,7 +769,7 @@ TEST_SUITE("Level edit API") {
                           {0.4f, 0.4f, 0.4f},
                           {0.5f, 0.5f, 0.5f},
                           {0.6f, 0.6f, 0.6f}};
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
     const std::vector<std::uint8_t> image = makeTestBmp();
     REQUIRE(level.setTextureImage(0, {image.data(), image.size()}));
     Portal distance_portal = portal(0, 1);
@@ -768,7 +795,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::roomDistances(level)[0].distance == doctest::Approx(10.0f));
     CHECK(test::texture(level, 0).path == "graph/obj3d/textures/weld.bmp");
     CHECK(test::texture(level, 0).encoded_image == makeTestBmp());
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
   }
 
   TEST_CASE("Face edits replace corner normals directly") {
@@ -785,7 +812,7 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::addRoom(level, {"first"}) == 0);
     REQUIRE(test::addRoom(level, {"second"}) == 1);
 
-    test::MeshSnapshot mesh;
+    test::GeometrySnapshot mesh;
     mesh.vertices = {vertex(1.0f, 0.0f, 1.0f),
                      vertex(1.05f, 0.0f, 1.0f),
                      vertex(2.0f, 0.0f, 1.0f),
@@ -806,7 +833,7 @@ TEST_SUITE("Level edit API") {
     other_room.corners[2].vertex = 4;
     mesh.faces = {first, nearby, other_room};
     mesh.face_rooms = {0, 0, 1};
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
     Level::VertexWeldOptions options;
     options.radius = 0.1f;
@@ -817,7 +844,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::face(level, 2).corners[0].vertex == shared);
     CHECK(test::vertex(level, shared).position.x == doctest::Approx(1.0f));
     CHECK(level.vertexCount() == 5);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
   }
 
   TEST_CASE("Portal snapping preserves room distances and rejects invalid options atomically") {
@@ -825,11 +852,11 @@ TEST_SUITE("Level edit API") {
     REQUIRE(test::addRoom(level, {"first"}) == 0);
     REQUIRE(test::addRoom(level, {"second"}) == 1);
 
-    test::MeshSnapshot mesh;
+    test::GeometrySnapshot mesh;
     mesh.vertices = {vertex(0.25f, 0.5f, 0.5f), vertex(2.0f, 0.0f, 0.0f), vertex(2.0f, 1.0f, 0.0f)};
     mesh.faces = {triangle()};
     mesh.face_rooms = {0};
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
     Portal snap_portal;
     snap_portal.name = "portal";
@@ -888,11 +915,11 @@ TEST_SUITE("Level edit API") {
     Level level;
     REQUIRE(test::addRoom(level, {"room"}) == 0);
 
-    test::MeshSnapshot mesh;
+    test::GeometrySnapshot mesh;
     mesh.vertices = {vertex(0.0f, 0.0f, 0.0f), vertex(0.05f, 0.0f, 0.0f), vertex(0.0f, 0.0f, 1.0f)};
     mesh.faces = {triangle()};
     mesh.face_rooms = {0};
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
 
     Level::VertexWeldOptions options;
     options.radius = 0.1f;
@@ -901,7 +928,7 @@ TEST_SUITE("Level edit API") {
     REQUIRE(level.faceCount() == 1);
     CHECK(level.vertexCount() == 3);
     CHECK(test::face(level, 0).corners[0].vertex != test::face(level, 0).corners[1].vertex);
-    CHECK(level.validateMesh().code() == ARX_OK);
+    CHECK(level.validateGeometry().code() == ARX_OK);
   }
 
   TEST_CASE("Vertex edits eagerly invalidate cached face validity") {
@@ -927,7 +954,7 @@ TEST_SUITE("Level edit API") {
     Vertex moved = test::vertex(level, 2);
     moved.position = test::vertex(level, 1).position;
     REQUIRE(test::setVertex(level, 2, moved) == ARX_OK);
-    const ArxReturnCode mesh_error = level.validateMesh().code();
+    const ArxReturnCode mesh_error = level.validateGeometry().code();
     REQUIRE(mesh_error != ARX_OK);
 
     const auto expect_one_source_trace = [&](auto&& operation) {
@@ -963,11 +990,11 @@ TEST_SUITE("Level edit API") {
 
   TEST_CASE("Locally complete item edits repair identifiers before mutation") {
     Level level = makeLevelWithRoomAndTriangle();
-    test::MeshSnapshot mesh;
-    REQUIRE(test::copyMesh(level, mesh) == ARX_OK);
+    test::GeometrySnapshot mesh;
+    REQUIRE(test::copyGeometry(level, mesh) == ARX_OK);
     mesh.textures.push_back({"graph/tex.bmp"});
     mesh.faces[0].texture = 0;
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
     REQUIRE(level.validate());
 
     CHECK(test::setTexture(level, 0, {""}) == ARX_LEVEL_BAD_TEXTURE_PATH);
@@ -1082,7 +1109,7 @@ TEST_SUITE("Level edit API") {
   TEST_CASE("Strict interior vertex updates expand cached full bounds") {
     Level level;
     REQUIRE(test::addRoom(level, {"room"}) == 0);
-    test::MeshSnapshot mesh;
+    test::GeometrySnapshot mesh;
     mesh.vertices = {vertex(0.0f, 0.0f, 0.0f),
                      vertex(10.0f, 0.0f, 0.0f),
                      vertex(0.0f, 0.0f, 10.0f),
@@ -1091,7 +1118,7 @@ TEST_SUITE("Level edit API") {
                      vertex(5.0f, 5.0f, 5.0f)};
     mesh.faces = {triangle()};
     mesh.face_rooms = {0};
-    REQUIRE(test::replaceMesh(level, mesh) == ARX_OK);
+    REQUIRE(test::replaceGeometry(level, mesh) == ARX_OK);
     REQUIRE(level.bounds().has_value());
 
     Vertex moved = test::vertex(level, 5);
@@ -1113,7 +1140,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::addAnchorConnection(level, {0, 1}) == 0);
     REQUIRE(level.bounds().has_value());
 
-    level.clearMesh();
+    level.clearVertices();
 
     CHECK(level.vertexCount() == 0);
     CHECK(level.faceCount() == 0);
@@ -1123,12 +1150,12 @@ TEST_SUITE("Level edit API") {
     CHECK(level.anchorCount() == 0);
     CHECK(level.anchorConnectionCount() == 0);
     CHECK(level.roomDistanceCount() == 1);
-    CHECK(level.validateMesh().code() == ARX_LEVEL_NO_GEOMETRY);
+    CHECK(level.validateGeometry().code() == ARX_LEVEL_NO_GEOMETRY);
     CHECK_FALSE(level.bounds().has_value());
     CHECK_FALSE(level.referencedBounds().has_value());
   }
 
-  TEST_CASE("Room removal rejects referenced rooms and remaps portals") {
+  TEST_CASE("Room removal detaches faces and remaps surviving portals") {
     Level level = makeLevelWithRoomAndTriangle();
     CHECK(test::addRoom(level, {"middle"}) == 1);
     CHECK(test::addRoom(level, {"last"}) == 2);
@@ -1150,18 +1177,21 @@ TEST_SUITE("Level edit API") {
                                               {.distance = -1.0f, .low_room_portal = 1, .high_room_portal = 1}}};
     CHECK(test::replaceRoomDistances(level, distances) == ARX_OK);
 
-    CHECK(level.removeRoom(0).code() == ARX_LEVEL_BAD_FACE_ROOM_INDEX);
-    REQUIRE(level.roomCount() == 3);
-
-    CHECK(level.removeRoom(1).code() == ARX_OK);
+    CHECK(level.removeRoom(0).code() == ARX_OK);
     REQUIRE(level.roomCount() == 2);
     REQUIRE(level.portalCount() == 1);
     CHECK(test::portal(level, 0).room_1 == 0);
     CHECK(test::portal(level, 0).room_2 == 1);
+    CHECK(test::faceRoom(level, 0) == kNoRoom);
     CHECK(level.roomDistanceCount() == 1);
     REQUIRE(test::roomDistance(level, 0, 1).has_value());
     CHECK(test::roomDistance(level, 0, 1)->portal_a == kInvalidPortalIndex);
     CHECK(test::roomDistance(level, 0, 1)->portal_b == kInvalidPortalIndex);
+
+    CHECK(level.removeRoom(1).code() == ARX_OK);
+    REQUIRE(level.roomCount() == 1);
+    CHECK(level.portalCount() == 0);
+    CHECK(test::faceRoom(level, 0) == kNoRoom);
   }
 
   TEST_CASE("Room distances follow room and portal topology") {
@@ -1214,12 +1244,9 @@ TEST_SUITE("Level edit API") {
     CHECK_FALSE(test::roomDistance(level, 0, 0).has_value());
     CHECK_FALSE(test::roomDistance(level, 0, 3).has_value());
 
-    const std::array<ArxLevelRoomDistance, 3> reversed = {{
-        {1, 0, 10.0f, 2, 1},
-        {2, 0, 20.0f, 2, 0},
-        {2, 1, 30.0f, 1, 0},
-    }};
-    CHECK(level.replaceRoomDistances(reversed).code() == ARX_OK);
+    const std::array<float, 3> raw_distances = {10.0f, 20.0f, 30.0f};
+    const std::array<PortalIndex, 6> endpoints = {1, 2, 0, 2, 0, 1};
+    CHECK(level.replaceRoomDistances(raw_distances, endpoints).code() == ARX_OK);
     REQUIRE(test::roomDistance(level, 0, 1).has_value());
     CHECK(test::roomDistance(level, 0, 1)->portal_a == 1);
     CHECK(test::roomDistance(level, 0, 1)->portal_b == 2);
@@ -1286,7 +1313,7 @@ TEST_SUITE("Level edit API") {
     CHECK(test::addAnchor(level, named) == 5);
   }
 
-  TEST_CASE("Bulk anchor replacement rejects broken connection packages") {
+  TEST_CASE("Bulk anchors and connections replace independently and canonicalize endpoint order") {
     Level level;
     test::AnchorsSnapshot snapshot;
     snapshot.anchors = {anchor(0.0f), anchor(1.0f), anchor(2.0f)};
@@ -1294,18 +1321,32 @@ TEST_SUITE("Level edit API") {
 
     CHECK(test::replaceAnchors(level, snapshot) == ARX_OK);
     CHECK(level.anchorCount() == 3);
+    CHECK(test::anchor(level, 0).name == "anchor_0");
+
+    const std::array<float, 9> positions = {0, 0, 0, 1, 0, 0, 2, 0, 0};
+    const std::array<float, 2> short_radii = {25, 25};
+    const std::array<float, 3> heights = {-80, -80, -80};
+    const std::array<std::uint32_t, 3> flags = {0, 0, 0};
+    CHECK(level.replaceAnchors(positions, short_radii, heights, flags).code() == ARX_LEVEL_BAD_ANCHOR_COUNT);
+    CHECK(level.anchorCount() == 3);
 
     REQUIRE(test::copyAnchors(level, snapshot) == ARX_OK);
 
-    snapshot.connections = {{1, 2}, {0, 2}};
-    CHECK(test::replaceAnchors(level, snapshot) == ARX_LEVEL_BAD_ANCHOR_CONNECTION_ORDER);
-    CHECK(snapshot.connections.size() == 2);
+    const std::array<AnchorIndex, 4> unsorted_endpoints = {2, 1, 2, 0};
+    CHECK(level.replaceAnchorConnections(unsorted_endpoints).code() == ARX_OK);
     CHECK(test::anchorConnection(level, 0).first == 0);
 
-    snapshot.connections = {{0, 3}};
-    CHECK(test::replaceAnchors(level, snapshot) == ARX_LEVEL_BAD_ANCHOR_CONNECTION_INDEX);
+    const std::array<AnchorIndex, 4> duplicate_endpoints = {0, 2, 0, 2};
+    CHECK(level.replaceAnchorConnections(duplicate_endpoints).code() == ARX_LEVEL_DUPLICATE_ANCHOR_CONNECTION);
+    CHECK(test::anchorConnection(level, 0).first == 0);
 
-    snapshot.connections = {{0, 2}, {1, 2}};
+    const std::array<AnchorIndex, 3> odd_endpoints = {0, 1, 2};
+    CHECK(level.replaceAnchorConnections(odd_endpoints).code() == ARX_LEVEL_BAD_ANCHOR_CONNECTION_COUNT);
+
+    const std::array<AnchorIndex, 2> out_of_range_endpoints = {0, 3};
+    CHECK(level.replaceAnchorConnections(out_of_range_endpoints).code() == ARX_LEVEL_BAD_ANCHOR_CONNECTION_INDEX);
+    CHECK(test::anchorConnection(level, 0).first == 0);
+
     snapshot.anchors[0].flags = kAnchorFlagsAll | 0x40;
     CHECK(test::replaceAnchors(level, snapshot) == ARX_LEVEL_BAD_ANCHOR_FLAGS);
     CHECK(level.anchorCount() == 3);
@@ -1550,8 +1591,8 @@ TEST_SUITE("Level edit API") {
 
     ArxLevelPortal projected_portal{};
     projected_portal.name = {"portal", 6};
-    projected_portal.room_1 = 0;
-    projected_portal.room_2 = 1;
+    projected_portal.room_front = 0;
+    projected_portal.room_back = 1;
     projected_portal.shape = ARX_PORTAL_QUAD;
     projected_portal.vertices[0] = {0.0f, 0.0f, 0.0f};
     projected_portal.vertices[1] = {1.0f, 0.0f, 0.0f};
